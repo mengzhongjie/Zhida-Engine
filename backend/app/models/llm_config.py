@@ -56,6 +56,17 @@ class LLMConfig(Base):
     # 额外配置（JSON 格式，用于存储 temperature、max_tokens 等参数）
     extra_config = Column(Text, nullable=True, comment="额外配置（JSON 格式）")
 
+    # API 限流配置（控制 LLM 调用频率和 token 消耗）
+    max_tokens_per_request = Column(Integer, default=4096, comment="单次请求最大 Token 数")
+    max_requests_per_minute = Column(Integer, default=30, comment="每分钟最大请求数")
+    max_tokens_per_minute = Column(Integer, default=100000, comment="每分钟最大 Token 数")
+    max_tokens_per_day = Column(Integer, default=1000000, comment="每日最大 Token 数")
+
+    # 使用统计（运行时更新）
+    tokens_used_today = Column(Integer, default=0, comment="今日已使用 Token 数")
+    requests_today = Column(Integer, default=0, comment="今日请求数")
+    last_request_at = Column(DateTime, nullable=True, comment="最后一次请求时间")
+
     # 状态
     is_active = Column(Boolean, default=True, comment="是否启用")
     last_test_at = Column(DateTime, nullable=True, comment="最后一次测试连接时间")

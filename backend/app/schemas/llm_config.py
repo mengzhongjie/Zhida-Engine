@@ -50,6 +50,11 @@ class LLMConfigCreate(BaseModel):
     is_primary: bool = Field(False, description="是否为主模型")
     is_fallback: bool = Field(False, description="是否为降级模型")
     extra_config: Optional[str] = Field(None, description="额外配置（JSON 格式）")
+    # API 限流配置
+    max_tokens_per_request: int = Field(4096, description="单次请求最大 Token 数")
+    max_requests_per_minute: int = Field(30, description="每分钟最大请求数")
+    max_tokens_per_minute: int = Field(100000, description="每分钟最大 Token 数")
+    max_tokens_per_day: int = Field(1000000, description="每日最大 Token 数")
 
 
 class LLMConfigUpdate(BaseModel):
@@ -62,6 +67,11 @@ class LLMConfigUpdate(BaseModel):
     is_fallback: Optional[bool] = Field(None, description="是否为降级模型")
     is_active: Optional[bool] = Field(None, description="是否启用")
     extra_config: Optional[str] = Field(None, description="额外配置（JSON 格式）")
+    # API 限流配置
+    max_tokens_per_request: Optional[int] = Field(None, description="单次请求最大 Token 数")
+    max_requests_per_minute: Optional[int] = Field(None, description="每分钟最大请求数")
+    max_tokens_per_minute: Optional[int] = Field(None, description="每分钟最大 Token 数")
+    max_tokens_per_day: Optional[int] = Field(None, description="每日最大 Token 数")
 
 
 class LLMConfigOut(BaseModel):
@@ -77,6 +87,14 @@ class LLMConfigOut(BaseModel):
     is_fallback: bool
     is_active: bool
     extra_config: Optional[str] = None
+    # API 限流配置
+    max_tokens_per_request: int = 4096
+    max_requests_per_minute: int = 30
+    max_tokens_per_minute: int = 100000
+    max_tokens_per_day: int = 1000000
+    # 使用统计
+    tokens_used_today: int = 0
+    requests_today: int = 0
     last_test_at: Optional[datetime] = None
     last_test_success: Optional[bool] = None
     created_at: datetime

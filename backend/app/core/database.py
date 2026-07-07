@@ -108,11 +108,12 @@ async def init_db():
     """
     async with engine.begin() as conn:
         # 导入所有模型，确保它们注册到 Base.metadata
-        import app.models.llm_config  # noqa: F401
-        import app.models.knowledge   # noqa: F401
-        import app.models.qa          # noqa: F401
-        import app.models.channel     # noqa: F401
-        import app.models.agent       # noqa: F401
+        import app.models.llm_config        # noqa: F401
+        import app.models.knowledge         # noqa: F401
+        import app.models.qa                # noqa: F401
+        import app.models.channel           # noqa: F401
+        import app.models.agent             # noqa: F401
+        import app.models.embedding_config  # noqa: F401
 
         # 创建所有表
         await conn.run_sync(Base.metadata.create_all)

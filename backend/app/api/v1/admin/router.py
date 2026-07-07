@@ -5,9 +5,11 @@
 """
 
 from datetime import datetime
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
+from loguru import logger
 
 from app.core.config import settings
 from app.core.database import get_db
@@ -16,6 +18,7 @@ from app.models.agent import Agent
 from app.models.channel import ChannelConfig
 from app.models.knowledge import KnowledgeBase, Document
 from app.models.qa import QAHistory
+from app.models.llm_config import LLMConfig
 from app.schemas.admin import (
     DashboardStatsOut,
     ModuleSwitchesOut,
@@ -23,9 +26,16 @@ from app.schemas.admin import (
     CacheStatsOut,
     RateLimitConfigOut,
     RateLimitConfigUpdate,
+    LLMUsageStatsOut,
+    MemoryItemOut,
+    MemorySearchIn,
+    MemoryAddIn,
+    MemoryUpdateIn,
+    MemoryStatsOut,
 )
 from app.services.cache.query_cache import query_cache
 from app.services.cache.rate_limiter import rate_limiter
+from app.services.memory.memory_service import memory_service
 
 router = APIRouter(prefix="/admin", tags=["管理后台"])
 
@@ -129,7 +139,13 @@ async def update_module_switches(
     """
     update_data = request.model_dump(exclude_unset=True)
     for key, value in update_data.items():
-        setattr(settings, key, value)
+        # 转换为 settings 中的全大写下划线格式（enable_single_flight -> ENABLE_SINGLE_FLIGHT）
+        attr_name = key.upper()
+        if hasattr(settings, attr_name):
+            setattr(settings, attr_name, value)
+            logger.info(f"更新模块开关: {attr_name} = {value}")
+        else:
+            logger.warning(f"未知的配置项: {key}")
 
     # 返回更新后的状态
     return await get_module_switches()
@@ -209,3 +225,237 @@ async def get_resource_profile():
     - LLM 超时配置
     """
     return resource_manager.get_recommended_settings()
+
+
+# ============================================================
+# LLM 使用统计（仪表盘监控用，30s 刷新）
+# ============================================================
+
+@router.get("/llm-usage", response_model=list[LLMUsageStatsOut])
+async def get_llm_usage_stats(
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    获取所有 LLM 配置的使用统计
+
+    仪表盘每 30 秒调用一次，展示各 LLM 配置的：
+    - 今日 Token 用量 / 限额
+    - 今日请求数 / 限额
+    - 连接状态
+    """
+    result = await db.execute(
+        select(LLMConfig).where(LLMConfig.is_active == True).order_by(LLMConfig.is_primary.desc())  # noqa: E712
+    )
+    configs = result.scalars().all()
+
+    return configs
+
+
+# ============================================================
+# 记忆层管理
+# ============================================================
+
+@router.get("/memory/stats", response_model=MemoryStatsOut)
+async def get_memory_stats():
+    """
+    获取记忆层统计信息
+
+    返回记忆层是否可用、记忆总数等统计数据。
+    """
+    if not memory_service.is_available:
+        # 尝试初始化
+        try:
+            await memory_service.initialize()
+        except Exception:
+            pass
+
+    total_count = 0
+    if memory_service.is_available:
+        try:
+            all_memories = await memory_service.get_all(limit=1000)
+            total_count = len(all_memories)
+        except Exception:
+            total_count = 0
+
+    return MemoryStatsOut(
+        is_available=memory_service.is_available,
+        total_count=total_count,
+    )
+
+
+@router.get("/memory/list", response_model=list[MemoryItemOut])
+async def list_memories(
+    user_id: Optional[str] = None,
+    agent_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+    limit: int = 50,
+):
+    """
+    获取记忆列表
+
+    可按 user_id / agent_id / run_id 过滤。
+    """
+    if not memory_service.is_available:
+        raise HTTPException(status_code=503, detail="记忆层未初始化")
+
+    try:
+        memories = await memory_service.get_all(
+            user_id=user_id,
+            agent_id=agent_id,
+            run_id=run_id,
+            limit=limit,
+        )
+        return memories
+    except Exception as e:
+        logger.error(f"获取记忆列表失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取记忆列表失败: {str(e)}")
+
+
+@router.post("/memory/search", response_model=list[MemoryItemOut])
+async def search_memories(request: MemorySearchIn):
+    """
+    搜索记忆
+
+    按语义相似度搜索相关记忆。
+    """
+    if not memory_service.is_available:
+        raise HTTPException(status_code=503, detail="记忆层未初始化")
+
+    try:
+        memories = await memory_service.search(
+            query=request.query,
+            user_id=request.user_id,
+            agent_id=request.agent_id,
+            run_id=request.run_id,
+            limit=request.limit,
+            rerank=request.rerank,
+        )
+        return memories
+    except Exception as e:
+        logger.error(f"搜索记忆失败: {e}")
+        raise HTTPException(status_code=500, detail=f"搜索记忆失败: {str(e)}")
+
+
+@router.get("/memory/{memory_id}", response_model=MemoryItemOut)
+async def get_memory(memory_id: str):
+    """
+    获取单条记忆详情
+    """
+    if not memory_service.is_available:
+        raise HTTPException(status_code=503, detail="记忆层未初始化")
+
+    try:
+        memory = await memory_service.get(memory_id)
+        if not memory:
+            raise HTTPException(status_code=404, detail="记忆不存在")
+        return memory
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取记忆失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取记忆失败: {str(e)}")
+
+
+@router.post("/memory", response_model=dict)
+async def add_memory(request: MemoryAddIn):
+    """
+    手动添加记忆
+
+    直接添加一段文本作为记忆（不经过 LLM 抽取）。
+    """
+    if not memory_service.is_available:
+        raise HTTPException(status_code=503, detail="记忆层未初始化")
+
+    try:
+        result = await memory_service.add_text(
+            text=request.content,
+            user_id=request.user_id,
+            agent_id=request.agent_id,
+            metadata=request.metadata,
+        )
+        return result
+    except Exception as e:
+        logger.error(f"添加记忆失败: {e}")
+        raise HTTPException(status_code=500, detail=f"添加记忆失败: {str(e)}")
+
+
+@router.put("/memory/{memory_id}", response_model=dict)
+async def update_memory(memory_id: str, request: MemoryUpdateIn):
+    """
+    更新记忆内容
+    """
+    if not memory_service.is_available:
+        raise HTTPException(status_code=503, detail="记忆层未初始化")
+
+    try:
+        success = await memory_service.update(memory_id, request.content)
+        if not success:
+            raise HTTPException(status_code=404, detail="记忆不存在")
+        return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"更新记忆失败: {e}")
+        raise HTTPException(status_code=500, detail=f"更新记忆失败: {str(e)}")
+
+
+@router.delete("/memory/{memory_id}", response_model=dict)
+async def delete_memory(memory_id: str):
+    """
+    删除单条记忆
+    """
+    if not memory_service.is_available:
+        raise HTTPException(status_code=503, detail="记忆层未初始化")
+
+    try:
+        success = await memory_service.delete(memory_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="记忆不存在")
+        return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"删除记忆失败: {e}")
+        raise HTTPException(status_code=500, detail=f"删除记忆失败: {str(e)}")
+
+
+@router.delete("/memory", response_model=dict)
+async def clear_memories(
+    user_id: Optional[str] = None,
+    agent_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+):
+    """
+    清空记忆
+
+    可按 user_id / agent_id / run_id 过滤，不传参数则清空所有记忆。
+    """
+    if not memory_service.is_available:
+        raise HTTPException(status_code=503, detail="记忆层未初始化")
+
+    try:
+        success = await memory_service.delete_all(
+            user_id=user_id,
+            agent_id=agent_id,
+            run_id=run_id,
+        )
+        return {"success": success}
+    except Exception as e:
+        logger.error(f"清空记忆失败: {e}")
+        raise HTTPException(status_code=500, detail=f"清空记忆失败: {str(e)}")
+
+
+@router.get("/memory/history/{memory_id}", response_model=list[dict])
+async def get_memory_history(memory_id: str, limit: int = 50):
+    """
+    获取单条记忆的历史变更记录
+    """
+    if not memory_service.is_available:
+        raise HTTPException(status_code=503, detail="记忆层未初始化")
+
+    try:
+        history = await memory_service.history(memory_id=memory_id, limit=limit)
+        return history
+    except Exception as e:
+        logger.error(f"获取记忆历史失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取记忆历史失败: {str(e)}")

@@ -8,8 +8,10 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from loguru import logger
 
 from app.core.database import get_db
+from app.core.security import encrypt_api_key, decrypt_api_key
 from app.models.llm_config import LLMConfig
 from app.schemas.llm_config import (
     ProviderTemplateOut,
@@ -75,6 +77,12 @@ def _config_to_out(config: LLMConfig) -> LLMConfigOut:
         is_fallback=config.is_fallback,
         is_active=config.is_active,
         extra_config=config.extra_config,
+        max_tokens_per_request=config.max_tokens_per_request,
+        max_requests_per_minute=config.max_requests_per_minute,
+        max_tokens_per_minute=config.max_tokens_per_minute,
+        max_tokens_per_day=config.max_tokens_per_day,
+        tokens_used_today=config.tokens_used_today,
+        requests_today=config.requests_today,
         last_test_at=config.last_test_at,
         last_test_success=config.last_test_success,
         created_at=config.created_at,
@@ -179,10 +187,14 @@ async def create_config(
         provider_name=provider_name,
         base_url=base_url,
         model_name=request.model_name,
-        api_key=request.api_key or "",
+        api_key=encrypt_api_key(request.api_key or ""),  # 加密存储
         is_primary=request.is_primary,
         is_fallback=request.is_fallback,
         extra_config=request.extra_config,
+        max_tokens_per_request=request.max_tokens_per_request,
+        max_requests_per_minute=request.max_requests_per_minute,
+        max_tokens_per_minute=request.max_tokens_per_minute,
+        max_tokens_per_day=request.max_tokens_per_day,
     )
 
     db.add(config)
@@ -217,8 +229,19 @@ async def update_config(
 
     # 更新字段
     update_data = request.model_dump(exclude_unset=True)
+    logger.info(f"更新配置 {config_id}: 字段={list(update_data.keys())}")
     for key, value in update_data.items():
-        setattr(config, key, value)
+        # API Key 特殊处理：空字符串表示不修改，有值时加密存储
+        if key == "api_key":
+            logger.info(f"  api_key: 收到值长度={len(value) if value else 0}, is_none={value is None}, is_empty={value == ''}")
+            if value is not None and value != "":
+                encrypted = encrypt_api_key(value)
+                logger.info(f"  api_key: 加密后长度={len(encrypted)}, 前4位={encrypted[:4]}")
+                setattr(config, key, encrypted)
+            else:
+                logger.info(f"  api_key: 跳过（空值不修改）")
+        else:
+            setattr(config, key, value)
 
     await db.flush()
     await db.refresh(config)
@@ -283,9 +306,12 @@ async def test_configured_model(
     if config is None:
         raise HTTPException(status_code=404, detail="LLM 配置不存在")
 
+    decrypted_key = decrypt_api_key(config.api_key)
+    logger.info(f"测试配置 {config_id}: api_key原始长度={len(config.api_key)}, 解密后长度={len(decrypted_key)}, 解密后最后4位={decrypted_key[-4:] if decrypted_key and len(decrypted_key)>=4 else decrypted_key}")
+
     test_result = await llm_gateway.test_connection(
         base_url=config.base_url,
-        api_key=config.api_key,
+        api_key=decrypted_key,  # 解密后使用
         model_name=config.model_name,
     )
 

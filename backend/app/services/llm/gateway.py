@@ -17,6 +17,7 @@ from loguru import logger
 from openai import AsyncOpenAI
 
 from app.core.config import settings
+from app.core.security import decrypt_api_key
 from app.models.llm_config import LLMConfig
 from app.services.llm.provider_templates import (
     ProviderTemplate,
@@ -115,7 +116,8 @@ class LLMGateway:
     def _build_client(self, config: LLMConfig) -> ModelClient:
         """根据配置构建 OpenAI 兼容客户端"""
         base_url = config.base_url
-        api_key = config.api_key or "not-needed"  # Ollama 不需要真实 key
+        # 解密 API Key 后使用（加密存储，运行时解密）
+        api_key = decrypt_api_key(config.api_key) or "not-needed"  # Ollama 不需要真实 key
 
         client = AsyncOpenAI(
             base_url=base_url,

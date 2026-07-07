@@ -5,7 +5,8 @@
 """
 
 from typing import Optional
-from pydantic import BaseModel, Field
+from datetime import datetime
+from pydantic import BaseModel, Field, ConfigDict
 
 
 # ============================================================
@@ -93,3 +94,72 @@ class RateLimitConfigUpdate(BaseModel):
     question_cooldown_seconds: Optional[int] = Field(None, description="问题冷却时间")
     silent_period_enabled: Optional[bool] = Field(None, description="是否启用静默时段")
     private_chat_relaxed: Optional[bool] = Field(None, description="私聊是否放宽限制")
+
+
+# ============================================================
+# LLM 使用统计 Schema（仪表盘监控用）
+# ============================================================
+
+class LLMUsageStatsOut(BaseModel):
+    """LLM 使用统计输出"""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int = Field(..., description="LLM 配置 ID")
+    provider_name: str = Field(..., description="厂商名称")
+    model_name: str = Field(..., description="模型名称")
+    is_primary: bool = Field(False, description="是否主模型")
+    is_active: bool = Field(True, description="是否启用")
+    tokens_used_today: int = Field(0, description="今日已使用 Token 数")
+    max_tokens_per_day: int = Field(1000000, description="每日 Token 限额")
+    requests_today: int = Field(0, description="今日请求数")
+    max_requests_per_minute: int = Field(30, description="每分钟请求限额")
+    max_tokens_per_request: int = Field(4096, description="单次请求 Token 限额")
+    last_test_success: Optional[bool] = Field(None, description="最近连接测试结果")
+    last_test_at: Optional[datetime] = Field(None, description="最近连接测试时间")
+
+
+# ============================================================
+# 记忆层 Schema
+# ============================================================
+
+class MemoryItemOut(BaseModel):
+    """记忆条目输出"""
+    id: str = Field(..., description="记忆 ID")
+    memory: str = Field(..., description="记忆内容")
+    user_id: Optional[str] = Field(None, description="用户 ID")
+    agent_id: Optional[str] = Field(None, description="Agent ID")
+    run_id: Optional[str] = Field(None, description="运行 ID")
+    metadata: Optional[dict] = Field(None, description="元数据")
+    score: Optional[float] = Field(None, description="匹配得分（搜索时返回）")
+    created_at: Optional[datetime] = Field(None, description="创建时间")
+    updated_at: Optional[datetime] = Field(None, description="更新时间")
+
+
+class MemorySearchIn(BaseModel):
+    """记忆搜索请求"""
+    query: str = Field(..., description="搜索查询")
+    user_id: Optional[str] = Field(None, description="用户 ID 过滤")
+    agent_id: Optional[str] = Field(None, description="Agent ID 过滤")
+    run_id: Optional[str] = Field(None, description="运行 ID 过滤")
+    limit: int = Field(20, ge=1, le=100, description="返回数量")
+    rerank: bool = Field(False, description="是否重排序")
+
+
+class MemoryAddIn(BaseModel):
+    """添加记忆请求"""
+    content: str = Field(..., description="记忆内容")
+    user_id: Optional[str] = Field(None, description="用户 ID")
+    agent_id: Optional[str] = Field(None, description="Agent ID")
+    run_id: Optional[str] = Field(None, description="运行 ID")
+    metadata: Optional[dict] = Field(None, description="元数据")
+
+
+class MemoryUpdateIn(BaseModel):
+    """更新记忆请求"""
+    content: str = Field(..., description="新的记忆内容")
+
+
+class MemoryStatsOut(BaseModel):
+    """记忆统计输出"""
+    is_available: bool = Field(False, description="记忆层是否可用")
+    total_count: int = Field(0, description="记忆总数")
