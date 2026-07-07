@@ -6,29 +6,36 @@
 """
 
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, DateTime, Text, Float, ForeignKey, Enum as SAEnum
+from sqlalchemy import Column, Integer, String, DateTime, Text, Float, ForeignKey, Boolean, Enum as SAEnum
 from sqlalchemy.orm import relationship
 
 from app.core.database import Base
 
 
 class KnowledgeBase(Base):
-    """知识库表 —— 每个 Agent 可关联多个知识库"""
+    """知识库表 —— 每个 Agent 可关联多个知识库，也支持独立知识库
+
+    知识库可以独立创建和管理，Agent 创建时可选择挂载已有的知识库。
+    独立知识库 agent_id 为 NULL，不归属于任何 Agent。
+    """
 
     __tablename__ = "knowledge_bases"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    agent_id = Column(Integer, ForeignKey("agents.id", ondelete="CASCADE"), nullable=False)
+    agent_id = Column(Integer, ForeignKey("agents.id", ondelete="CASCADE"), nullable=True, comment="所属 Agent ID（可空，表示独立知识库）")
     name = Column(String(200), nullable=False, comment="知识库名称")
     description = Column(Text, nullable=True, comment="知识库描述")
+    is_active = Column(Boolean, default=True, comment="是否启用")
 
     # 统计
     document_count = Column(Integer, default=0, comment="文档数量")
-    chunk_count = Column(Integer, default=0, comment="切片数量")
+    chunk_count = Column(Integer, default=0, comment="子切片数量（用于索引）")
+    parent_chunk_count = Column(Integer, default=0, comment="父块数量")
+    total_size_bytes = Column(Integer, default=0, comment="总大小（字节）")
     qa_pair_count = Column(Integer, default=0, comment="Q&A 对数量")
 
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow, comment="创建时间")
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, comment="更新时间")
 
 
 class Document(Base):
@@ -48,7 +55,43 @@ class Document(Base):
     error_message = Column(Text, nullable=True, comment="错误信息")
 
     # 统计
-    chunk_count = Column(Integer, default=0, comment="切片数量")
+    chunk_count = Column(Integer, default=0, comment="子切片数量（用于索引）")
+    parent_chunk_count = Column(Integer, default=0, comment="父块数量")
+    parse_time_ms = Column(Float, default=0.0, comment="解析耗时（毫秒）")
 
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow, comment="创建时间")
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, comment="更新时间")
+
+
+class DocumentChunk(Base):
+    """文档父块表 —— 存储父子块切分中的父块内容
+
+    父子块切分策略：
+    - 子块（Child）: 200字符，重叠50字符 → 向量化后存入 ChromaDB 用于检索
+    - 父块（Parent）: 800字符（子块4倍） → 存入此表，通过子块的 parent_id 关联
+    - 检索时：找到子块 → 通过 parent_id 找到父块 → 返回父块作为完整上下文
+    """
+
+    __tablename__ = "document_chunks"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    document_id = Column(Integer, ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True)
+    knowledge_base_id = Column(Integer, ForeignKey("knowledge_bases.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    # 父块标识（与 ChromaDB 中子块 metadata 中的 parent_id 对应）
+    parent_id = Column(String(100), nullable=False, index=True, comment="父块唯一标识")
+
+    # 内容
+    content = Column(Text, nullable=False, comment="父块文本内容")
+    content_type = Column(String(20), default="text", comment="内容类型: text/code")
+    code_lang = Column(String(50), nullable=True, comment="代码语言（content_type=code 时）")
+
+    # 位置信息
+    chunk_index = Column(Integer, default=0, comment="父块在文档中的索引")
+    child_start_index = Column(Integer, default=0, comment="对应的第一个子块索引")
+    child_end_index = Column(Integer, default=0, comment="对应的最后一个子块索引")
+
+    # 元数据（JSON 字符串）
+    metadata_json = Column(Text, nullable=True, comment="元数据 JSON")
+
+    created_at = Column(DateTime, default=datetime.utcnow, comment="创建时间")

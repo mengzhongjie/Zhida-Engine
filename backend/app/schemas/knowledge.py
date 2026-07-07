@@ -15,25 +15,39 @@ from pydantic import BaseModel, Field
 
 class KnowledgeBaseCreate(BaseModel):
     """创建知识库请求"""
-    agent_id: int = Field(..., description="所属 Agent ID")
+    agent_id: Optional[int] = Field(None, description="所属 Agent ID（可空，表示独立知识库）")
     name: str = Field(..., min_length=1, max_length=200, description="知识库名称")
     description: Optional[str] = Field(None, description="知识库描述")
+
+
+class KnowledgeBaseUpdate(BaseModel):
+    """更新知识库请求"""
+    name: Optional[str] = Field(None, min_length=1, max_length=200, description="知识库名称")
+    description: Optional[str] = Field(None, description="知识库描述")
+    is_active: Optional[bool] = Field(None, description="是否启用")
 
 
 class KnowledgeBaseOut(BaseModel):
     """知识库输出"""
     id: int
-    agent_id: int
+    agent_id: Optional[int] = None
     name: str
     description: Optional[str] = None
     document_count: int = 0
-    total_chunks: int = 0
+    chunk_count: int = 0
     total_size_bytes: int = 0
     is_active: bool = True
     created_at: datetime
     updated_at: datetime
 
-    model_config = {"from_attributes": True}
+    class Config:
+        from_attributes = True
+
+
+class KnowledgeBaseListOut(BaseModel):
+    """知识库列表输出"""
+    total: int = Field(..., description="总数")
+    items: list[KnowledgeBaseOut] = Field(default_factory=list, description="知识库列表")
 
 
 # ============================================================
