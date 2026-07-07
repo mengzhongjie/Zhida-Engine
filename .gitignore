@@ -35,6 +35,10 @@ Desktop.ini
 # ---- 日志 ----
 *.log
 
+# ---- 数据目录 ----
+backend/data/
+bots/
+
 # ---- 数据库 ----
 *.db
 *.sqlite
