@@ -69,6 +69,12 @@ def create_app():
         await init_db()
         logger.info("数据库初始化完成")
 
+        # 初始化向量化配置（从数据库加载）
+        from app.core.database import async_session_factory
+        from app.api.v1.embedding.router import init_embedding_config
+        async with async_session_factory() as db:
+            await init_embedding_config(db)
+
         # 后台异步加载重模块（不阻塞启动）
         import asyncio
         asyncio.create_task(_lazy_load_heavy_modules())
@@ -133,6 +139,10 @@ def create_app():
     # 管理后台
     from app.api.v1.admin.router import router as admin_router
     app.include_router(admin_router, prefix="/api/v1")
+
+    # 向量化配置
+    from app.api.v1.embedding.router import router as embedding_router
+    app.include_router(embedding_router, prefix="/api/v1")
 
     # ================================================================
     # 前端静态文件服务（生产环境：前端构建产物嵌入 .exe）
