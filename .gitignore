@@ -1,0 +1,70 @@
+# 智答引擎（ZhiDa Engine）Git 忽略规则
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+*.manifest
+*.spec
+
+# ---- 虚拟环境 ----
+venv/
+.venv/
+env/
+.env
+*.env.local
+
+# ---- IDE ----
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ---- 操作系统 ----
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# ---- 日志 ----
+*.log
+
+# ---- 数据库 ----
+*.db
+*.sqlite
+*.sqlite3
+
+# ---- 缓存 ----
+.cache/
+*.cache
+
+# ---- 向量数据库 ----
+chroma_db/
+
+# ---- 打包产物 ----
+output/
+installer/
+
+# ---- Node.js（前端） ----
+node_modules/
+frontend-admin/dist/
+frontend-admin/build/
+.yarn/
+.pnpm/
+
+# ---- 测试 ----
+.coverage
+htmlcov/
+.pytest_cache/
+.tox/
+
+# ---- 临时文件 ----
+tmp/
+temp/
+*.tmp
