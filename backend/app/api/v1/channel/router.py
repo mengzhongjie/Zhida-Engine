@@ -225,3 +225,129 @@ async def get_channel_stats(
         today_learned=0,
         last_message_at=channel.last_message_at,
     )
+
+
+# ============================================================
+# 扫码登录
+# ============================================================
+
+@router.post("/{channel_type}/login/qrcode")
+async def generate_login_qrcode(
+    channel_type: str,
+):
+    """
+    生成登录二维码
+
+    支持渠道: qq / wechat
+
+    返回二维码内容和登录会话ID，前端使用二维码内容生成二维码图片。
+    然后轮询 /login/status/{login_id} 检查登录状态。
+    """
+    from app.services.channel.base import adapter_factory
+
+    adapter = adapter_factory.create(channel_type)
+    if adapter is None:
+        raise HTTPException(status_code=400, detail=f"不支持的渠道类型: {channel_type}")
+
+    result = await adapter.generate_qrcode()
+    if not result:
+        raise HTTPException(status_code=500, detail="生成二维码失败")
+
+    return result
+
+
+@router.get("/{channel_type}/login/status/{login_id}")
+async def check_login_status(
+    channel_type: str,
+    login_id: str,
+):
+    """
+    查询登录状态
+
+    状态说明:
+    - waiting: 等待扫码
+    - scanned: 已扫码，等待确认
+    - confirmed: 已确认登录
+    - success: 登录成功（返回用户信息）
+    - expired: 二维码已过期
+    """
+    from app.services.channel.base import adapter_factory
+
+    adapter = adapter_factory.create(channel_type)
+    if adapter is None:
+        raise HTTPException(status_code=400, detail=f"不支持的渠道类型: {channel_type}")
+
+    result = await adapter.check_login_status(login_id)
+    return result
+
+
+# ============================================================
+# 联系人列表
+# ============================================================
+
+@router.get("/{channel_type}/contacts")
+async def get_contact_list(
+    channel_type: str,
+):
+    """
+    获取联系人列表（群聊 + 好友）
+
+    需要先通过扫码登录渠道账号。
+    """
+    from app.services.channel.base import adapter_factory
+
+    adapter = adapter_factory.create(channel_type)
+    if adapter is None:
+        raise HTTPException(status_code=400, detail=f"不支持的渠道类型: {channel_type}")
+
+    result = await adapter.get_contact_list()
+    return result
+
+
+@router.get("/{channel_type}/groups/{group_id}/members")
+async def get_group_members(
+    channel_type: str,
+    group_id: str,
+):
+    """
+    获取群成员列表
+
+    需要先通过扫码登录渠道账号。
+    """
+    from app.services.channel.base import adapter_factory
+
+    adapter = adapter_factory.create(channel_type)
+    if adapter is None:
+        raise HTTPException(status_code=400, detail=f"不支持的渠道类型: {channel_type}")
+
+    members = await adapter.get_group_member_list(group_id)
+    return {
+        "total": len(members),
+        "members": members,
+    }
+
+
+# ============================================================
+# 支持的渠道列表
+# ============================================================
+
+@router.get("/supported/list")
+async def get_supported_channels():
+    """获取支持的渠道类型列表"""
+    from app.services.channel.base import adapter_factory
+
+    channels = adapter_factory.get_supported_channels()
+    channel_info = []
+    for ch in channels:
+        adapter = adapter_factory.create(ch)
+        info = await adapter.get_channel_info() if adapter else {}
+        channel_info.append({
+            "type": ch,
+            "name": adapter.channel_name if adapter else ch,
+            **info,
+        })
+
+    return {
+        "total": len(channel_info),
+        "items": channel_info,
+    }

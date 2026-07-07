@@ -254,6 +254,81 @@ class ChannelAdapter(ABC):
         logger.warning(f"{self.channel_name} 不支持获取群成员列表")
         return []
 
+    async def generate_qrcode(self) -> dict:
+        """
+        生成登录二维码（可选实现）
+
+        Returns:
+            {
+                "login_id": "登录会话ID",
+                "qrcode_url": "二维码图片URL或base64",
+                "qrcode_content": "二维码内容",
+                "expires_at": 过期时间戳
+            }
+        """
+        logger.warning(f"{self.channel_name} 不支持扫码登录")
+        return {}
+
+    async def check_login_status(self, login_id: str) -> dict:
+        """
+        查询登录状态（可选实现）
+
+        Args:
+            login_id: 登录会话ID
+
+        Returns:
+            {
+                "status": "waiting" | "scanned" | "confirmed" | "expired" | "success",
+                "user_info": {
+                    "id": "用户ID",
+                    "nickname": "昵称",
+                    "avatar": "头像URL"
+                },
+                "message": "状态说明"
+            }
+        """
+        logger.warning(f"{self.channel_name} 不支持查询登录状态")
+        return {"status": "unsupported", "message": "渠道不支持登录状态查询"}
+
+    async def get_contact_list(self) -> dict:
+        """
+        获取联系人列表（群聊 + 好友）（可选实现）
+
+        Returns:
+            {
+                "groups": [
+                    {"id": "群ID", "name": "群名称", "member_count": 成员数, "avatar": "头像"}
+                ],
+                "friends": [
+                    {"id": "好友ID", "nickname": "昵称", "remark": "备注", "avatar": "头像"}
+                ]
+            }
+        """
+        logger.warning(f"{self.channel_name} 不支持获取联系人列表")
+        return {"groups": [], "friends": []}
+
+    async def get_group_member_list(self, group_id: str) -> list[dict]:
+        """
+        获取群成员列表（可选实现，比 get_group_members 更详细）
+
+        Args:
+            group_id: 群ID
+
+        Returns:
+            [
+                {
+                    "user_id": "用户ID",
+                    "nickname": "昵称",
+                    "card": "群名片",
+                    "role": "角色(owner/admin/member)",
+                    "avatar": "头像",
+                    "join_time": 加入时间
+                }
+            ]
+        """
+        logger.warning(f"{self.channel_name} 不支持获取群成员列表")
+        return []
+
 
 # ============================================================
 # 适配器工厂
@@ -261,39 +336,50 @@ class ChannelAdapter(ABC):
 
 class ChannelAdapterFactory:
     """
-    渠道适配器工厂 —— 根据渠道类型创建适配器
+    渠道适配器工厂 —— 根据渠道类型创建适配器（单例模式）
 
     Usage:
         factory = ChannelAdapterFactory()
 
         # 注册适配器
-        factory.register("wechat", WeChatAdapter())
+        factory.register("wechat", WeChatAdapter)
 
-        # 创建适配器
+        # 获取适配器（单例）
         adapter = factory.create("wechat")
     """
 
     def __init__(self):
-        self._adapters: dict[str, type[ChannelAdapter]] = {}
+        self._adapter_classes: dict[str, type[ChannelAdapter]] = {}
+        self._instances: dict[str, ChannelAdapter] = {}
 
     def register(self, channel_type: str, adapter_class: type[ChannelAdapter]):
         """注册适配器类"""
-        self._adapters[channel_type] = adapter_class
+        self._adapter_classes[channel_type] = adapter_class
         logger.info(f"注册渠道适配器: {channel_type}")
 
     def create(self, channel_type: str) -> Optional[ChannelAdapter]:
-        """创建适配器实例"""
-        adapter_class = self._adapters.get(channel_type)
+        """获取适配器实例（单例模式）"""
+        if channel_type in self._instances:
+            return self._instances[channel_type]
+
+        adapter_class = self._adapter_classes.get(channel_type)
         if adapter_class is None:
             logger.error(f"未找到渠道适配器: {channel_type}")
             return None
 
-        return adapter_class()
+        instance = adapter_class()
+        self._instances[channel_type] = instance
+        logger.info(f"创建渠道适配器实例: {channel_type}")
+        return instance
 
     def get_supported_channels(self) -> list[str]:
         """获取支持的渠道列表"""
-        return list(self._adapters.keys())
+        return list(self._adapter_classes.keys())
 
 
 # 全局适配器工厂
 adapter_factory = ChannelAdapterFactory()
+
+# 导入内置适配器，触发自动注册
+from app.services.channel.wechat import WeChatAdapter
+from app.services.channel.qq_group import QQAdapter
