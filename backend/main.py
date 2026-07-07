@@ -44,6 +44,17 @@ def create_app():
     """创建 FastAPI 应用实例"""
     from fastapi import FastAPI
     from fastapi.middleware.cors import CORSMiddleware
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        """应用生命周期 —— 启动时初始化数据库"""
+        logger.info("正在初始化数据库...")
+        from app.core.database import init_db
+        await init_db()
+        logger.info("数据库初始化完成")
+        yield  # 应用运行中
+        logger.info("应用关闭")
 
     app = FastAPI(
         title=settings.APP_NAME,
@@ -51,6 +62,7 @@ def create_app():
         description="基于 RAG 架构的个人 AI 知识助手",
         docs_url="/api/docs" if settings.DEBUG else None,  # 生产环境关闭文档
         redoc_url=None,
+        lifespan=lifespan,
     )
 
     # CORS 中间件 —— 允许前端跨域请求
@@ -62,9 +74,9 @@ def create_app():
         allow_headers=["*"],
     )
 
-    # 注册路由
-    # from app.api.v1 import api_router
-    # app.include_router(api_router, prefix="/api/v1")
+    # 注册 API 路由
+    from app.api.v1.config.router import router as llm_config_router
+    app.include_router(llm_config_router, prefix="/api/v1")
 
     # 健康检查端点
     @app.get("/health")
