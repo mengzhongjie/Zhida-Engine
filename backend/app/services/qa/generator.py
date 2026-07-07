@@ -26,6 +26,7 @@ from app.services.cache.query_cache import query_cache
 from app.services.cache.idempotency import single_flight
 from app.services.cache.degradation import degradation_manager
 from app.services.knowledge.indexer import IndexResult
+from app.services.memory.memory_service import memory_service
 
 
 @dataclass
@@ -73,17 +74,22 @@ class AnswerGenerator:
         include_sources: bool = True,
         auto_mention_users: Optional[str] = None,
         temperature: float = 0.7,
+        user_id: Optional[str] = None,
+        agent_id: Optional[int] = None,
+        enable_memory: bool = True,
     ) -> AnswerResult:
         """
         生成回答 —— 端到端流程
 
         流程：
         1. 查询缓存
-        2. 混合检索
-        3. 重排序
-        4. 构建 Prompt
-        5. LLM 生成
-        6. 写入缓存
+        2. 检索相关记忆（记忆层）
+        3. 混合检索
+        4. 重排序
+        5. 构建 Prompt（含记忆上下文）
+        6. LLM 生成
+        7. 写入缓存
+        8. 写入记忆（对话记忆）
         """
         total_start = time.time()
 
@@ -95,6 +101,23 @@ class AnswerGenerator:
                 retrieval_time_ms=0,
                 generation_time_ms=0,
             )
+
+        # 2. 检索相关记忆
+        memory_context = ""
+        if enable_memory and memory_service.is_available:
+            try:
+                agent_str = str(agent_id) if agent_id else None
+                memory_text = await memory_service.get_relevant_memories(
+                    query=question,
+                    user_id=user_id,
+                    agent_id=agent_str,
+                    limit=5,
+                )
+                if memory_text:
+                    memory_context = f"\n\n【用户相关记忆】\n{memory_text}"
+                    logger.debug(f"[Memory] 检索到 {len(memory_text.splitlines())} 条相关记忆")
+            except Exception as e:
+                logger.debug(f"[Memory] 记忆检索失败: {e}")
 
         retrieval_start = time.time()
 
@@ -135,13 +158,15 @@ class AnswerGenerator:
         else:
             context = "知识库中暂无相关内容"
 
-        # 5. 构建 Prompt
+        # 5. 构建 Prompt（注入记忆上下文）
+        full_context = context + memory_context if memory_context else context
+
         if system_prompt:
-            prompt = system_prompt.format(context=context, question=question)
+            prompt = system_prompt.format(context=full_context, question=question)
         else:
             prompt = prompt_template.build_qa_prompt(
                 question=question,
-                context=context,
+                context=full_context,
                 source_info=source_info,
                 include_sources=include_sources and settings.ENABLE_SOURCE_CITATION,
             )
@@ -179,6 +204,26 @@ class AnswerGenerator:
         # 7. 写入缓存
         if not degraded:
             await query_cache.set(question, answer)
+
+        # 8. 写入记忆（异步，不阻塞返回）
+        if enable_memory and memory_service.is_available and not degraded:
+            try:
+                import asyncio
+                agent_str = str(agent_id) if agent_id else None
+                messages = [
+                    {"role": "user", "content": question},
+                    {"role": "assistant", "content": answer},
+                ]
+                # 后台任务写入记忆，不阻塞主流程
+                asyncio.create_task(
+                    memory_service.add(
+                        messages,
+                        user_id=user_id,
+                        agent_id=agent_str,
+                    )
+                )
+            except Exception as e:
+                logger.debug(f"[Memory] 异步写入记忆失败: {e}")
 
         total_time = (time.time() - total_start) * 1000
         logger.info(

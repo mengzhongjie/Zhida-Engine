@@ -7,9 +7,15 @@
 3. 图检索（知识图谱）—— 实体关系检索（可选，模块开关控制）
 
 混合检索 = 向量检索 + 关键词检索，去重合并后交给重排序。
+
+父子块模式：
+- 子块（Child）: 200字符，用于向量化索引
+- 父块（Parent）: 800字符，存入数据库
+- 检索时：找到子块 → 通过 parent_id 获取父块 → 返回父块作为完整上下文
 """
 
 import re
+import json
 from typing import Optional
 from collections import Counter
 
@@ -144,6 +150,7 @@ class HybridRetriever:
 
     def __init__(self):
         self._keyword_retriever = KeywordRetriever()
+        self._parent_chunk_cache: dict[str, str] = {}  # parent_id → parent_text 缓存
 
     async def retrieve(
         self,
@@ -164,7 +171,7 @@ class HybridRetriever:
             keyword_weight: 关键词检索权重（0-1）
 
         Returns:
-            融合后的检索结果
+            融合后的检索结果（包含父块内容）
         """
         # 1. 向量检索
         vector_results = await index_manager.search_multi(
@@ -190,7 +197,117 @@ class HybridRetriever:
         )
 
         # 4. 截取 top_k
-        return merged[:top_k]
+        top_results = merged[:top_k]
+
+        # 5. 父子块模式：通过子块获取父块内容（去重，相同父块只保留一个）
+        final_results = await self._expand_to_parent_chunks(
+            results=top_results,
+            knowledge_base_ids=knowledge_base_ids,
+        )
+
+        return final_results[:top_k]
+
+    async def _expand_to_parent_chunks(
+        self,
+        results: list[IndexResult],
+        knowledge_base_ids: list[str],
+    ) -> list[IndexResult]:
+        """
+        将子块检索结果扩展为父块内容
+
+        策略：
+        - 如果子块有 parent_id，从数据库获取对应的父块
+        - 相同 parent_id 的多个子块合并为一个父块结果（取最高分）
+        - 没有 parent_id 的结果保持原样（兼容旧数据）
+        """
+        if not results:
+            return []
+
+        # 收集所有 parent_id
+        parent_ids = []
+        for r in results:
+            pid = r.metadata.get("parent_id") if r.metadata else None
+            if pid and pid not in parent_ids:
+                parent_ids.append(pid)
+
+        # 没有父子块数据，直接返回
+        if not parent_ids:
+            return results
+
+        # 从数据库批量获取父块
+        parent_texts = await self._fetch_parent_chunks(parent_ids, knowledge_base_ids)
+
+        # 构建去重的父块结果列表
+        seen_parents = set()
+        final_results = []
+
+        for r in results:
+            pid = r.metadata.get("parent_id") if r.metadata else None
+
+            if pid and pid in parent_texts:
+                # 有父块，且未重复
+                if pid not in seen_parents:
+                    seen_parents.add(pid)
+                    # 返回父块文本，保留子块的分数
+                    parent_result = IndexResult(
+                        chunk_id=f"parent_{pid}",
+                        text=parent_texts[pid],
+                        metadata={
+                            **(r.metadata or {}),
+                            "is_parent": True,
+                            "child_chunk_id": r.chunk_id,
+                            "child_score": r.score,
+                        },
+                        score=r.score,
+                    )
+                    final_results.append(parent_result)
+            else:
+                # 没有父块的旧数据，保留原样
+                final_results.append(r)
+
+        return final_results
+
+    async def _fetch_parent_chunks(
+        self,
+        parent_ids: list[str],
+        knowledge_base_ids: list[str],
+    ) -> dict[str, str]:
+        """
+        从数据库批量获取父块内容
+
+        Returns:
+            {parent_id: parent_text}
+        """
+        if not parent_ids:
+            return {}
+
+        # 先查缓存
+        cached = {pid: self._parent_chunk_cache[pid] for pid in parent_ids if pid in self._parent_chunk_cache}
+        missing = [pid for pid in parent_ids if pid not in self._parent_chunk_cache]
+
+        if not missing:
+            return cached
+
+        # 从数据库查询
+        try:
+            from app.core.database import async_session_factory
+            from app.models.knowledge import DocumentChunk
+            from sqlalchemy import select
+
+            async with async_session_factory() as db:
+                result = await db.execute(
+                    select(DocumentChunk).where(DocumentChunk.parent_id.in_(missing))
+                )
+                chunks = result.scalars().all()
+
+                for chunk in chunks:
+                    cached[chunk.parent_id] = chunk.content
+                    self._parent_chunk_cache[chunk.parent_id] = chunk.content
+
+        except Exception as e:
+            logger.warning(f"获取父块失败: {e}")
+
+        return cached
 
     def _merge_results(
         self,

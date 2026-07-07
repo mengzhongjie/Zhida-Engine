@@ -68,8 +68,18 @@ class IndexManager:
             ChromaDB Collection
         """
         if knowledge_base_id not in self._collections:
-            # Collection 名称需要合法化
-            safe_name = knowledge_base_id.replace("-", "_").replace(" ", "_")
+            # Collection 名称需要合法化：
+            # 1. 加前缀 kb_（确保至少3个字符，ChromaDB 要求）
+            # 2. 替换非法字符为下划线
+            safe_name = f"kb_{knowledge_base_id}"
+            safe_name = safe_name.replace("-", "_").replace(" ", "_")
+            # 确保只包含合法字符
+            import re
+            safe_name = re.sub(r'[^a-zA-Z0-9._-]', '_', safe_name)
+            # 确保开头和结尾是字母或数字
+            safe_name = safe_name.strip('._-')
+            if len(safe_name) < 3:
+                safe_name = safe_name.ljust(3, '0')
 
             try:
                 collection = self._client.get_collection(name=safe_name)
@@ -172,7 +182,8 @@ class IndexManager:
     async def clear_knowledge_base(self, knowledge_base_id: str):
         """清空知识库的所有索引"""
         try:
-            self._client.delete_collection(name=knowledge_base_id.replace("-", "_"))
+            collection = self._get_collection(knowledge_base_id)
+            self._client.delete_collection(name=collection.name)
             self._collections.pop(knowledge_base_id, None)
             logger.info(f"已清空知识库索引: {knowledge_base_id}")
         except Exception as e:
