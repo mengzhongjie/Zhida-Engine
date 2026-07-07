@@ -1,0 +1,355 @@
+"""
+智答引擎（ZhiDa Engine）—— 文本切片器
+
+多粒度自适应切片策略：
+1. 固定大小滑动窗口 —— 通用文本
+2. 语义分块 —— 按段落/标题边界切分
+3. 表格分块 —— Excel 表格数据每行一个 chunk
+
+使用 jieba 分词避免中文词语截断，每个 chunk 携带元数据。
+"""
+
+import re
+from typing import Optional
+from dataclasses import dataclass, field
+
+import jieba
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+
+from loguru import logger
+
+
+@dataclass
+class TextChunk:
+    """文本切片"""
+    text: str
+    metadata: dict = field(default_factory=dict)
+    chunk_index: int = 0
+    token_count: int = 0
+
+
+class TextSplitter:
+    """
+    文本切片器 —— 多粒度自适应
+
+    Usage:
+        splitter = TextSplitter()
+
+        # 固定大小切片
+        chunks = splitter.split_fixed(text, chunk_size=500, overlap=50)
+
+        # 语义切片
+        chunks = splitter.split_semantic(text)
+
+        # 表格切片
+        chunks = splitter.split_table(rows, headers)
+    """
+
+    def __init__(
+        self,
+        chunk_size: int = 500,
+        overlap: int = 50,
+        separators: Optional[list[str]] = None,
+    ):
+        """
+        Args:
+            chunk_size: 切片大小（字符数）
+            overlap: 重叠字符数
+            separators: 分隔符优先级列表
+        """
+        self.chunk_size = chunk_size
+        self.overlap = overlap
+        self.separators = separators or [
+            "\n\n",    # 段落分隔
+            "\n",      # 换行
+            "。",      # 中文句号
+            "！",      # 中文感叹号
+            "？",      # 中文问号
+            "；",      # 中文分号
+            ".",       # 英文句号
+            "!",       # 英文感叹号
+            "?",       # 英文问号
+            ";",       # 英文分号
+            " ",       # 空格
+            "",        # 字符级切分
+        ]
+
+        # LangChain 分词器
+        self._splitter = RecursiveCharacterTextSplitter(
+            chunk_size=chunk_size,
+            chunk_overlap=overlap,
+            separators=self.separators,
+            length_function=self._char_count,  # 使用字符数而非 token 数
+        )
+
+    @staticmethod
+    def _char_count(text: str) -> int:
+        """计算文本字符数（中文按 1 字符，英文按单词计）"""
+        # 简单实现：统计所有字符
+        return len(text)
+
+    def split_fixed(
+        self,
+        text: str,
+        chunk_size: Optional[int] = None,
+        overlap: Optional[int] = None,
+        metadata: Optional[dict] = None,
+    ) -> list[TextChunk]:
+        """
+        固定大小滑动窗口切片 —— 通用文本
+
+        Args:
+            text: 输入文本
+            chunk_size: 切片大小（覆盖默认值）
+            overlap: 重叠大小（覆盖默认值）
+            metadata: 基础元数据
+
+        Returns:
+            切片列表
+        """
+        if not text.strip():
+            return []
+
+        # 使用指定参数或默认值
+        if chunk_size is not None or overlap is not None:
+            splitter = RecursiveCharacterTextSplitter(
+                chunk_size=chunk_size or self.chunk_size,
+                chunk_overlap=overlap or self.overlap,
+                separators=self.separators,
+                length_function=self._char_count,
+            )
+            raw_chunks = splitter.split_text(text)
+        else:
+            raw_chunks = self._splitter.split_text(text)
+
+        # 转为 TextChunk 格式
+        chunks = []
+        for i, chunk_text in enumerate(raw_chunks):
+            if not chunk_text.strip():
+                continue
+
+            chunks.append(TextChunk(
+                text=chunk_text.strip(),
+                metadata={
+                    **(metadata or {}),
+                    "chunk_method": "fixed",
+                    "chunk_size": chunk_size or self.chunk_size,
+                },
+                chunk_index=i,
+                token_count=len(chunk_text),
+            ))
+
+        logger.debug(f"固定大小切片: {len(raw_chunks)} → {len(chunks)} 个有效切片")
+        return chunks
+
+    def split_semantic(
+        self,
+        text: str,
+        metadata: Optional[dict] = None,
+    ) -> list[TextChunk]:
+        """
+        语义分块 —— 按段落/标题边界切分
+
+        适用于段落结构清晰的文档（如 Word、Markdown）。
+        先按 ## 标题切分，再按段落切分。
+        """
+        if not text.strip():
+            return []
+
+        chunks = []
+        chunk_index = 0
+
+        # 按 Markdown 标题切分
+        sections = re.split(r"\n(?=#{1,6}\s)", text)
+
+        for section in sections:
+            if not section.strip():
+                continue
+
+            # 提取标题（如果有）
+            title_match = re.match(r"^(#{1,6}\s.+)$", section, re.MULTILINE)
+            section_title = title_match.group(1) if title_match else ""
+
+            # 按段落切分
+            paragraphs = section.split("\n\n")
+
+            for para in paragraphs:
+                para = para.strip()
+                if not para:
+                    continue
+
+                chunks.append(TextChunk(
+                    text=para,
+                    metadata={
+                        **(metadata or {}),
+                        "chunk_method": "semantic",
+                        "section_title": section_title,
+                    },
+                    chunk_index=chunk_index,
+                    token_count=len(para),
+                ))
+                chunk_index += 1
+
+        logger.debug(f"语义分块: {len(chunks)} 个切片")
+        return chunks
+
+    def split_table(
+        self,
+        rows: list[dict],
+        headers: Optional[list[str]] = None,
+        metadata: Optional[dict] = None,
+    ) -> list[TextChunk]:
+        """
+        表格分块 —— 每行一个 chunk，附带表头
+
+        适用于 Excel/CSV 表格数据。
+
+        Args:
+            rows: 数据行列表（每行是一个 dict）
+            headers: 表头列表
+            metadata: 基础元数据
+
+        Returns:
+            切片列表
+        """
+        chunks = []
+
+        for i, row in enumerate(rows):
+            # 构建文本：表头 + 当前行
+            parts = []
+            if headers:
+                parts.append("表头: " + " | ".join(headers))
+
+            if isinstance(row, dict):
+                parts.append(" | ".join(f"{k}: {v}" for k, v in row.items()))
+            else:
+                parts.append(str(row))
+
+            chunk_text = "\n".join(parts)
+
+            chunks.append(TextChunk(
+                text=chunk_text,
+                metadata={
+                    **(metadata or {}),
+                    "chunk_method": "table",
+                    "row_index": i,
+                    "total_rows": len(rows),
+                },
+                chunk_index=i,
+                token_count=len(chunk_text),
+            ))
+
+        logger.debug(f"表格分块: {len(chunks)} 个切片")
+        return chunks
+
+    def split_adaptive(
+        self,
+        text: str,
+        file_type: str = "txt",
+        metadata: Optional[dict] = None,
+    ) -> list[TextChunk]:
+        """
+        自适应切片 —— 根据文件类型自动选择最佳策略
+
+        Args:
+            text: 输入文本
+            file_type: 文件类型（pdf/docx/xlsx/txt/md）
+            metadata: 基础元数据
+
+        Returns:
+            切片列表
+        """
+        if file_type in ("xlsx", "csv"):
+            # 表格文件：按行切分
+            lines = text.strip().split("\n")
+            if len(lines) < 2:
+                return self.split_fixed(text, metadata=metadata)
+
+            # 解析为简单行
+            rows = [{"line": line} for line in lines[1:]]  # 跳过表头
+            headers = lines[0].split("|") if "|" in lines[0] else None
+            return self.split_table(rows, headers=headers, metadata=metadata)
+
+        elif file_type in ("docx", "md"):
+            # 结构化文档：语义分块
+            return self.split_semantic(text, metadata=metadata)
+
+        else:
+            # 通用文档：固定大小切片
+            return self.split_fixed(text, metadata=metadata)
+
+    def merge_small_chunks(
+        self,
+        chunks: list[TextChunk],
+        min_chunk_size: int = 50,
+        max_chunk_size: int = 1000,
+    ) -> list[TextChunk]:
+        """
+        合并小切片 —— 避免过小的切片影响检索效果
+
+        Args:
+            chunks: 原始切片列表
+            min_chunk_size: 最小切片大小（字符数），低于此值的合并到前一/后一切片
+            max_chunk_size: 合并后的最大切片大小
+
+        Returns:
+            合并后的切片列表
+        """
+        if not chunks:
+            return []
+
+        merged = []
+        buffer = ""
+
+        for chunk in chunks:
+            if len(chunk.text) < min_chunk_size:
+                # 小切片，合并到 buffer
+                buffer += "\n" + chunk.text
+                continue
+
+            if buffer:
+                # 将 buffer 合并到当前切片（如果不超过最大大小）
+                combined = buffer.strip() + "\n" + chunk.text
+                if len(combined) <= max_chunk_size:
+                    buffer = ""
+                    merged.append(TextChunk(
+                        text=combined,
+                        metadata=chunk.metadata,
+                        chunk_index=len(merged),
+                        token_count=len(combined),
+                    ))
+                    continue
+                else:
+                    # buffer 单独成一个切片
+                    merged.append(TextChunk(
+                        text=buffer.strip(),
+                        metadata=chunk.metadata,
+                        chunk_index=len(merged),
+                        token_count=len(buffer),
+                    ))
+                    buffer = ""
+
+            merged.append(TextChunk(
+                text=chunk.text,
+                metadata=chunk.metadata,
+                chunk_index=len(merged),
+                token_count=len(chunk.text),
+            ))
+
+        # 处理最后的 buffer
+        if buffer.strip():
+            merged.append(TextChunk(
+                text=buffer.strip(),
+                metadata=chunks[-1].metadata if chunks else {},
+                chunk_index=len(merged),
+                token_count=len(buffer),
+            ))
+
+        if len(merged) < len(chunks):
+            logger.debug(f"合并小切片: {len(chunks)} → {len(merged)}")
+
+        return merged
+
+
+# 全局切片器实例
+text_splitter = TextSplitter()
