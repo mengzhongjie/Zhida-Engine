@@ -55,10 +55,12 @@ class UnifiedMessage:
 
     # 会话信息
     chat_id: str                             # 群聊/私聊 ID
-    chat_name: str = ""                      # 群聊/私聊名称
 
     # 发送者信息
-    sender_id: str                           # 发送者 ID
+    sender_id: str                           # 发送者 ID（必须在有默认值字段之前）
+
+    # 以下是有默认值的字段
+    chat_name: str = ""                      # 群聊/私聊名称
     sender_name: str = ""                    # 发送者名称
     sender_avatar: str = ""                  # 发送者头像
 

@@ -82,23 +82,21 @@ class SingleFlight:
         # 检查是否有正在进行的相同请求
         with self._lock:
             if request_key in self._pending:
+                # 已有相同请求在进行中，记录等待的 future
                 pending = self._pending[request_key]
                 logger.debug(f"Single-Flight 合并请求: {key}")
-                # 等待第一个请求完成
-                future = pending.future
+                wait_future = pending.future  # 等待第一个请求的 future
+                is_first = False
             else:
-                # 创建新的 pending 请求
+                # 创建新的 pending 请求，自己是第一个
+                wait_future = None
+                is_first = True
                 future = asyncio.Future()
                 self._pending[request_key] = PendingRequest(future=future)
 
-        # 如果 future 已存在（被合并的请求），等待结果
-        if request_key in self._pending and self._pending[request_key].future is not future:
-            # 等待第一个请求的结果
-            try:
-                return await future
-            except Exception:
-                # 如果第一个请求失败，自己也尝试执行
-                pass
+        # 非首个请求：等待第一个请求的结果
+        if not is_first:
+            return await wait_future
 
         # 第一个请求：执行实际逻辑
         try:

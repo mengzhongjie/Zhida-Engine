@@ -21,8 +21,6 @@ from enum import Enum
 from loguru import logger
 
 from app.core.config import settings
-from app.services.qa.prompt import prompt_template
-from app.services.llm.gateway import llm_gateway
 
 
 class QuestionType(str, Enum):
@@ -145,6 +143,9 @@ class QuestionDetector:
             (is_question, confidence)
         """
         try:
+            # 延迟导入，避免未安装 openai 时模块加载失败
+            from app.services.llm.gateway import llm_gateway
+
             prompt = f"""判断以下消息是否是一个"问题"（包含疑问、请教、求助等意图）。
 
 消息内容：{message.content}

@@ -9,6 +9,7 @@
 缓存键 = 归一化问题文本的哈希，相同/相似问题命中缓存，不重复消耗 Token。
 """
 
+import re
 import hashlib
 import time
 import threading
@@ -70,8 +71,10 @@ class QueryCache:
         3. 截取前 200 字符（避免超长文本）
         4. SHA256 哈希
         """
-        # 去除多余空白
+        # 去除多余空白（包括中文之间的空格）
         normalized = " ".join(query.strip().split())
+        # 去除中文字符之间的空格（如 "这是  一个  测试" → "这是一个测试"）
+        normalized = re.sub(r'(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])', '', normalized)
 
         # 统一中文标点
         replacements = {

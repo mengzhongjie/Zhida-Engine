@@ -14,7 +14,6 @@ from typing import Optional
 from dataclasses import dataclass, field
 
 import jieba
-from langchain.text_splitter import RecursiveCharacterTextSplitter
 
 from loguru import logger
 
@@ -74,19 +73,30 @@ class TextSplitter:
             "",        # 字符级切分
         ]
 
-        # LangChain 分词器
-        self._splitter = RecursiveCharacterTextSplitter(
-            chunk_size=chunk_size,
-            chunk_overlap=overlap,
-            separators=self.separators,
-            length_function=self._char_count,  # 使用字符数而非 token 数
-        )
+        # LangChain 分词器（延迟导入，避免未安装时模块加载失败）
+        self._splitter = None  # 懒加载，首次使用时创建
+        self._splitter_chunk_size = chunk_size
+        self._splitter_overlap = overlap
 
     @staticmethod
     def _char_count(text: str) -> int:
         """计算文本字符数（中文按 1 字符，英文按单词计）"""
         # 简单实现：统计所有字符
         return len(text)
+
+    def _get_splitter(self, chunk_size: int = None, overlap: int = None):
+        """懒加载 LangChain 分词器（延迟导入，避免未安装时模块加载失败）"""
+        from langchain.text_splitter import RecursiveCharacterTextSplitter
+
+        cs = chunk_size or self._splitter_chunk_size
+        ov = overlap or self._splitter_overlap
+
+        return RecursiveCharacterTextSplitter(
+            chunk_size=cs,
+            chunk_overlap=ov,
+            separators=self.separators,
+            length_function=self._char_count,
+        )
 
     def split_fixed(
         self,
@@ -112,15 +122,11 @@ class TextSplitter:
 
         # 使用指定参数或默认值
         if chunk_size is not None or overlap is not None:
-            splitter = RecursiveCharacterTextSplitter(
-                chunk_size=chunk_size or self.chunk_size,
-                chunk_overlap=overlap or self.overlap,
-                separators=self.separators,
-                length_function=self._char_count,
-            )
+            splitter = self._get_splitter(chunk_size=chunk_size, overlap=overlap)
             raw_chunks = splitter.split_text(text)
         else:
-            raw_chunks = self._splitter.split_text(text)
+            splitter = self._get_splitter()
+            raw_chunks = splitter.split_text(text)
 
         # 转为 TextChunk 格式
         chunks = []
