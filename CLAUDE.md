@@ -10,7 +10,7 @@
 
 - **后端框架**: Python 3.11+ / FastAPI / SQLAlchemy (async) / SQLite
 - **向量数据库**: ChromaDB（嵌入式）
-- **嵌入模型**: sentence-transformers（BAAI/bge-large-zh-v1.5）
+- **嵌入模型**: sentence-transformers（BAAI/bge-large-zh-v1.5）+ 云端 API（OpenAI 兼容，7 个内置厂商模板）
 - **LLM 网关**: litellm + OpenAI 兼容客户端（8 个内置厂商模板 + 自定义）
 - **缓存**: diskcache（基于 SQLite，无需 Redis）
 - **文档解析**: pdfplumber, python-docx, openpyxl, pandas
@@ -58,45 +58,87 @@ backend/
 ├── app/
 │   ├── core/
 │   │   ├── config.py            # Pydantic Settings（环境变量 + .env + 默认值）
-│   │   └── database.py          # SQLAlchemy 异步引擎 + 会话工厂
+│   │   ├── database.py          # SQLAlchemy 异步引擎 + 会话工厂
+│   │   ├── security.py          # 加密解密、进程锁、沙箱
+│   │   ├── sandbox.py           # 沙箱管理器
+│   │   └── resource_manager.py  # 资源管理器
 │   ├── models/                  # SQLAlchemy ORM 模型
 │   │   ├── agent.py             # Agent 实例（核心实体）
-│   │   ├── knowledge.py         # KnowledgeBase + Document
+│   │   ├── knowledge.py         # KnowledgeBase（agent_id 可空） + Document + DocumentChunk（父块）
 │   │   ├── qa.py                # QAHistory + QAPair
 │   │   ├── channel.py           # ChannelConfig
 │   │   └── llm_config.py        # LLMConfig + ProviderConfig
-│   ├── schemas/
-│   │   └── llm_config.py        # Pydantic Schema（LLM 配置 API）
+│   ├── schemas/                 # Pydantic Schema
+│   │   ├── llm_config.py        # LLM 配置 API
+│   │   ├── embedding.py         # 向量化配置 API
+│   │   ├── knowledge.py         # 知识库 API
+│   │   ├── agent.py             # Agent API
+│   │   ├── channel.py           # 渠道 API
+│   │   ├── admin.py             # 系统管理 API
+│   │   └── qa.py                # 问答 API
 │   ├── api/v1/
-│   │   ├── config/router.py     # 唯一已实现的 API：LLM 厂商/配置 CRUD + 测试连接
-│   │   ├── knowledge/           # 空文件夹，待实现
-│   │   ├── qa/                  # 空文件夹，待实现
-│   │   └── channel/             # 空文件夹，待实现
+│   │   ├── config/router.py     # LLM 厂商/配置 CRUD + 测试连接 + 使用统计
+│   │   ├── embedding/router.py  # 向量化配置 CRUD + 测试连接 + 厂商模板
+│   │   ├── knowledge/router.py  # 知识库 CRUD + 文档上传/删除 + 统计
+│   │   ├── admin/router.py      # 模块开关 + 系统设置
+│   │   ├── agent/router.py      # Agent CRUD + 启动/停止
+│   │   ├── channel/router.py    # 渠道 CRUD + 监听控制
+│   │   └── qa/router.py         # 问答 + 历史
 │   └── services/
 │       ├── qa/                  # HybridRetriever, Reranker, AnswerGenerator, PromptTemplate
-│       ├── knowledge/           # DocumentParser, TextSplitter, Embedder, IndexManager
+│       ├── knowledge/           # DocumentParser, TextSplitter, Embedder, IndexManager, EmbeddingProviders
 │       ├── llm/                 # LLMGateway, ProviderTemplate（8 个内置 + 自定义）
 │       ├── learning/            # QAExtractor, MessageListener, LearningScheduler
 │       ├── channel/             # ChannelAdapter 基类 + WeChat + QQ 适配器
+│       ├── memory/              # MemoryService（基于 Mem0 的长期记忆层）
 │       └── cache/               # QueryCache, SingleFlight, DegradationManager, RateLimiter
 ├── bots/                        # 空文件夹，预留机器人启动脚本
-└── tests/                       # 仅含空 __init__.py，尚未编写测试
+└── tests/                       # 测试用例
 ```
 
 ## 架构说明
 
 ### RAG 流水线
 
-1. **文档 → 知识库**: `DocumentParser.parse()` → `TextSplitter.split_adaptive()` → `IndexManager.index_chunks()` → ChromaDB
-2. **问题 → 回答**: `HybridRetriever.retrieve()` → `Reranker.rerank()` → `AnswerGenerator.generate()` → `LLMGateway.chat()`
+1. **文档 → 知识库（父子块切分 / Small-to-Big）**:
+   - `DocumentParser.parse()` → `TextSplitter.split_parent_child()`
+   - 基于 **LangChain RecursiveCharacterTextSplitter** 实现
+   - 父块（800 字符）→ 存入 `document_chunks` 表（SQLite）
+   - 子块（200 字符，重叠 50）→ `Embedder.embed()` → `IndexManager.index_chunks()` → ChromaDB
+   - 代码块保护：切分前用占位符替换代码块，切分后恢复，确保代码完整性
+2. **问题 → 回答**: `HybridRetriever.retrieve()`（子块检索 → 父块扩展）→ `Reranker.rerank()` → `AnswerGenerator.generate()` → `LLMGateway.chat()`
 
 ### Agent 中心模型
 
 `Agent` 是核心实体。每个 Agent 拥有独立的：
-- 知识库（上传文档 + 聊天提取的问答对）
+- 知识库（可挂载多个独立知识库，支持先创建知识库再挂载）
 - LLM 配置（主模型 + 降级模型）
 - 渠道配置（监听的微信群/QQ 群）
 - 学习策略
+
+### 知识库模型
+
+知识库支持独立创建和管理，不归属任何 Agent（`agent_id = NULL`）。
+创建 Agent 时可选择挂载已有的独立知识库，也可在 Agent 详情页动态挂载/解绑。
+每个知识库包含独立的文档集合、向量化索引和统计信息。
+
+### 向量化模式
+
+支持两种向量化模式，可在设置页面切换：
+- **本地模式**：使用 sentence-transformers 加载本地模型（如 BAAI/bge-large-zh-v1.5）
+- **云端模式**：使用 OpenAI 兼容 API，内置 7 个主流厂商模板（OpenAI、阿里云百炼、智谱、月之暗面、字节豆包、DeepSeek、硅基流动）
+
+### 记忆层（Mem0）
+
+基于 Mem0 的长期记忆层，为 AI 提供跨会话的个性化记忆能力：
+
+- **自动提取**：从对话中自动提取用户偏好、事实、关系
+- **语义检索**：通过向量相似度检索相关记忆，注入到回答上下文
+- **自动维护**：自动更新、合并、删除矛盾记忆
+- **多级隔离**：支持 user_id / agent_id / run_id 三级隔离
+- **本地部署**：使用 ChromaDB + sentence-transformers，数据完全本地存储
+
+核心文件：`app/services/memory/memory_service.py`（全局单例 `memory_service`）
 
 ### 模块开关（config.py）
 
@@ -119,11 +161,21 @@ backend/
 ## 当前状态
 
 - **Service 层已全部完成**：所有服务定义了全局单例实例
-- **API 层部分实现**：只有 `/api/v1/llm/` 的 LLM 配置 CRUD 有路由；知识库、问答、渠道 API 均为空桩
-- **尚未编写测试**（`backend/tests/__init__.py` 为空）
-- **尚无前端代码**（`frontend-admin/` 为空）
+- **API 层大部分已实现**：
+  - ✅ LLM 配置 CRUD + 测试连接 + 使用统计
+  - ✅ 向量化配置 CRUD + 测试连接 + 厂商模板
+  - ✅ 知识库 CRUD + 文档上传/删除 + 统计
+  - ✅ 模块开关 + 系统设置
+  - ✅ Agent CRUD + 启动/停止
+  - ✅ 渠道管理 API
+  - ⏳ 问答 API
+- **前端管理台已实现**：
+  - ✅ 仪表盘概览
+  - ✅ 知识库管理（多知识库切换、文档上传、列表）
+  - ✅ Agent 创建（3 步向导）+ 详情页（6 个 Tab）
+  - ✅ 系统设置（4 个 Tab：LLM 配置、向量化配置、功能开关、系统信息）
+- **已有测试用例**（`backend/tests/test_core.py`）
 - **尚无机器人启动脚本**（`bots/qq_bot/` 和 `bots/wechat_bot/` 为空）
-- Git 历史包含 5 个按顺序构建 Service 层的功能提交
 
 ## 全局单例实例
 
@@ -141,6 +193,7 @@ backend/
 - `qa_extractor`（services/learning/qa_extractor.py）
 - `listener_manager`（services/learning/live_listener.py）
 - `learning_scheduler`（services/learning/scheduler.py）
+- `memory_service`（services/memory/memory_service.py）—— Mem0 记忆层
 - `query_cache`（services/cache/query_cache.py）
 - `single_flight`（services/cache/idempotency.py）
 - `degradation_manager`（services/cache/degradation.py）
