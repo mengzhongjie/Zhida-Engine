@@ -114,6 +114,22 @@ class Settings(BaseSettings):
     ENABLE_AUDIO_PARSE: bool = False  # 音频解析（实验性，默认关闭）
     ENABLE_IMAGE_PARSE: bool = False  # 图片解析（实验性，默认关闭）
 
+    # ---- 安全配置 ----
+    ENABLE_RATE_LIMIT: bool = True  # 限流总开关
+    ENABLE_LOCAL_ONLY: bool = True  # 仅允许本地请求
+    MAX_UPLOAD_SIZE_MB: int = 100  # 最大上传文件大小
+    MAX_REQUEST_SIZE_MB: int = 10  # 最大请求体大小
+    API_KEY_ENCRYPT_ENABLED: bool = True  # API Key 加密存储
+
+    # ---- 限流配置 ----
+    RATE_LIMIT_TOKEN_RATE: float = 10.0  # 令牌桶速率（令牌/秒）
+    RATE_LIMIT_TOKEN_CAPACITY: int = 3  # 令牌桶容量
+    RATE_LIMIT_WINDOW_SIZE: int = 60  # 滑动窗口大小（秒）
+    RATE_LIMIT_WINDOW_MAX: int = 5  # 窗口内最大请求数
+    RATE_LIMIT_COOLDOWN: int = 300  # 问题冷却时间（秒）
+    RATE_LIMIT_SILENT_ENABLED: bool = True  # 是否启用静默时段
+    RATE_LIMIT_PRIVATE_RELAXED: bool = True  # 私聊是否放宽限制
+
     model_config = {
         "env_prefix": "ZHIDA_",
         "env_file": ".env",
