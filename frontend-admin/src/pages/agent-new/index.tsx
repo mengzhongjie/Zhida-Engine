@@ -1,26 +1,34 @@
 /**
  * 智答引擎（ZhiDa Engine）—— 新建 Agent 向导
  *
- * 5 步流程：基本信息 → 选择平台 → 知识库 → 监听目标 → 确认创建
+ * 3 步流程：基本信息 → 知识库选择 → 确认创建
  */
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  Card, Steps, Form, Input, Select, Button, Radio, Space, Typography, message,
+  Card, Steps, Form, Input, Radio, Space, Typography, message,
+  Table, Button, Segmented, Descriptions,
 } from 'antd'
 import {
-  ArrowLeftOutlined, RobotOutlined, WechatOutlined, QqOutlined,
-  BookOutlined, AimOutlined, CheckOutlined,
+  ArrowLeftOutlined, RobotOutlined, BookOutlined, CheckOutlined,
 } from '@ant-design/icons'
 import { api } from '../../services/api'
 
 const { Title, Text } = Typography
 
+interface KnowledgeBase {
+  id: number
+  name: string
+  description: string
+  doc_count: number
+  chunk_count: number
+  agent_id: number | null
+  is_active: boolean
+}
+
 const steps = [
   { title: '基本信息', icon: <RobotOutlined /> },
-  { title: '选择平台', icon: <WechatOutlined /> },
   { title: '知识库', icon: <BookOutlined /> },
-  { title: '监听目标', icon: <AimOutlined /> },
   { title: '确认创建', icon: <CheckOutlined /> },
 ]
 
@@ -28,18 +36,34 @@ export default function AgentNew() {
   const navigate = useNavigate()
   const [current, setCurrent] = useState(0)
   const [loading, setLoading] = useState(false)
-  const [form] = Form.useForm()
+  const [kbLoading, setKbLoading] = useState(false)
 
-  // 表单数据
+  const [kbList, setKbList] = useState<KnowledgeBase[]>([])
+  const [kbFilter, setKbFilter] = useState<'all' | 'independent'>('all')
+
   const [formData, setFormData] = useState({
     name: '',
     description: '',
     reply_mode: 'auto',
-    platform: 'wechat',
-    enable_knowledge: true,
-    enable_learning: true,
-    chat_ids: '',
+    selected_kb_ids: [] as number[],
   })
+
+  useEffect(() => {
+    loadKnowledgeBases()
+  }, [])
+
+  const loadKnowledgeBases = async () => {
+    setKbLoading(true)
+    try {
+      const data = await api.get<{ items: KnowledgeBase[] }>('/knowledge/bases')
+      setKbList(data.items || [])
+    } catch (err) {
+      console.error('加载知识库失败:', err)
+      message.error('加载知识库失败')
+    } finally {
+      setKbLoading(false)
+    }
+  }
 
   const updateField = (field: string, value: any) => {
     setFormData((prev) => ({ ...prev, [field]: value }))
@@ -48,7 +72,6 @@ export default function AgentNew() {
   const next = () => setCurrent((prev) => Math.min(prev + 1, steps.length - 1))
   const prev = () => setCurrent((prev) => Math.max(prev - 1, 0))
 
-  // 创建 Agent
   const handleCreate = async () => {
     if (!formData.name.trim()) {
       message.warning('请输入 Agent 名称')
@@ -56,23 +79,71 @@ export default function AgentNew() {
     }
     setLoading(true)
     try {
-      // 创建 Agent
       const agent = await api.post<any>('/agents', {
         name: formData.name,
         description: formData.description,
         reply_mode: formData.reply_mode,
       })
 
+      if (formData.selected_kb_ids.length > 0) {
+        for (const kbId of formData.selected_kb_ids) {
+          try {
+            await api.put(`/knowledge/bases/${kbId}`, { agent_id: agent.id })
+          } catch (e) {
+            console.error(`挂载知识库 ${kbId} 失败:`, e)
+          }
+        }
+      }
+
       message.success(`Agent "${formData.name}" 创建成功！`)
       navigate(`/agents/${agent.id}`)
-    } catch (err) {
+    } catch {
       message.error('创建失败，请重试')
     } finally {
       setLoading(false)
     }
   }
 
-  // 渲染步骤内容
+  const filteredKbList = kbFilter === 'independent'
+    ? kbList.filter((kb) => !kb.agent_id)
+    : kbList
+
+  const kbColumns = [
+    { title: '名称', dataIndex: 'name', key: 'name' },
+    { title: '文档数', dataIndex: 'doc_count', key: 'doc_count', width: 100 },
+    {
+      title: '描述',
+      dataIndex: 'description',
+      key: 'description',
+      ellipsis: true,
+      render: (v: string) => v || '-',
+    },
+    {
+      title: '状态',
+      dataIndex: 'agent_id',
+      key: 'agent_id',
+      width: 100,
+      render: (v: number | null) => (
+        <span style={{ color: v ? '#faad14' : '#52c41a' }}>
+          {v ? '已挂载' : '可挂载'}
+        </span>
+      ),
+    },
+  ]
+
+  const rowSelection = {
+    selectedRowKeys: formData.selected_kb_ids,
+    onChange: (selectedRowKeys: React.Key[]) => {
+      setFormData((prev) => ({
+        ...prev,
+        selected_kb_ids: selectedRowKeys.map((k) => Number(k)),
+      }))
+    },
+    getCheckboxProps: (record: KnowledgeBase) => ({
+      disabled: !!record.agent_id,
+    }),
+  }
+
   const renderStep = () => {
     switch (current) {
       case 0:
@@ -111,90 +182,38 @@ export default function AgentNew() {
         )
       case 1:
         return (
-          <div style={{ maxWidth: 500, margin: '0 auto', textAlign: 'center' }}>
-            <Title level={4}>选择消息平台</Title>
-            <Space direction="vertical" size="large" style={{ width: '100%' }}>
-              <Card
-                hoverable
-                style={{
-                  border: formData.platform === 'wechat' ? '2px solid #1677ff' : '1px solid #333',
-                  textAlign: 'center',
-                }}
-                onClick={() => updateField('platform', 'wechat')}
-              >
-                <WechatOutlined style={{ fontSize: 48, color: '#07c160' }} />
-                <Title level={5}>微信</Title>
-                <Text type="secondary">接入微信群，监听群聊消息</Text>
-              </Card>
-              <Card
-                hoverable
-                style={{
-                  border: formData.platform === 'qq' ? '2px solid #1677ff' : '1px solid #333',
-                  textAlign: 'center',
-                }}
-                onClick={() => updateField('platform', 'qq')}
-              >
-                <QqOutlined style={{ fontSize: 48, color: '#12b7f5' }} />
-                <Title level={5}>QQ</Title>
-                <Text type="secondary">接入 QQ 群，监听群聊消息</Text>
-              </Card>
-            </Space>
+          <div style={{ maxWidth: 800, margin: '0 auto' }}>
+            <Title level={4} style={{ textAlign: 'center', marginBottom: 24 }}>
+              选择挂载知识库
+            </Title>
+            <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <Segmented
+                value={kbFilter}
+                onChange={(v) => setKbFilter(v as 'all' | 'independent')}
+                options={[
+                  { label: '全部知识库', value: 'all' },
+                  { label: '仅独立知识库', value: 'independent' },
+                ]}
+              />
+              <Text type="secondary">
+                已选择 {formData.selected_kb_ids.length} 个知识库
+              </Text>
+            </div>
+            <Table
+              rowKey="id"
+              loading={kbLoading}
+              dataSource={filteredKbList}
+              columns={kbColumns}
+              rowSelection={rowSelection}
+              pagination={{ pageSize: 8 }}
+              size="middle"
+            />
+            <Text type="secondary" style={{ display: 'block', marginTop: 12, textAlign: 'center' }}>
+              创建后可在 Agent 详情页管理知识库
+            </Text>
           </div>
         )
       case 2:
-        return (
-          <div style={{ maxWidth: 500, margin: '0 auto' }}>
-            <Title level={4} style={{ textAlign: 'center' }}>知识库配置</Title>
-            <Card style={{ marginBottom: 16 }}>
-              <Form.Item label="启用知识库">
-                <Radio.Group
-                  value={formData.enable_knowledge}
-                  onChange={(e) => updateField('enable_knowledge', e.target.value)}
-                >
-                  <Radio.Button value={true}>启用</Radio.Button>
-                  <Radio.Button value={false}>暂不启用</Radio.Button>
-                </Radio.Group>
-              </Form.Item>
-              <Text type="secondary">
-                知识库用于上传文档（PDF/Word/Excel/TXT），Agent 将基于知识库内容回答问题。
-              </Text>
-            </Card>
-            <Card>
-              <Form.Item label="自动学习聊天知识">
-                <Radio.Group
-                  value={formData.enable_learning}
-                  onChange={(e) => updateField('enable_learning', e.target.value)}
-                >
-                  <Radio.Button value={true}>启用</Radio.Button>
-                  <Radio.Button value={false}>暂不启用</Radio.Button>
-                </Radio.Group>
-              </Form.Item>
-              <Text type="secondary">
-                自动从群聊中提取问答对，持续丰富知识库。
-              </Text>
-            </Card>
-          </div>
-        )
-      case 3:
-        return (
-          <div style={{ maxWidth: 500, margin: '0 auto' }}>
-            <Title level={4} style={{ textAlign: 'center' }}>监听目标</Title>
-            <Form layout="vertical">
-              <Form.Item label="群聊/联系人 ID">
-                <Input.TextArea
-                  placeholder="输入要监听的群聊 ID，每行一个&#10;例如：&#10;12345678@chatroom&#10;87654321@chatroom"
-                  value={formData.chat_ids}
-                  onChange={(e) => updateField('chat_ids', e.target.value)}
-                  rows={5}
-                />
-              </Form.Item>
-              <Text type="secondary">
-                创建完成后，可在 Agent 详情页添加更多监听目标。
-              </Text>
-            </Form>
-          </div>
-        )
-      case 4:
         return (
           <div style={{ maxWidth: 500, margin: '0 auto' }}>
             <Title level={4} style={{ textAlign: 'center' }}>确认创建</Title>
@@ -202,19 +221,12 @@ export default function AgentNew() {
               <Descriptions column={1} bordered size="small">
                 <Descriptions.Item label="名称">{formData.name || '未设置'}</Descriptions.Item>
                 <Descriptions.Item label="回复模式">
-                  {formData.reply_mode === 'auto' ? '自动' : formData.reply_mode === 'manual' ? '手动' : '混合'}
-                </Descriptions.Item>
-                <Descriptions.Item label="平台">
-                  {formData.platform === 'wechat' ? '微信' : 'QQ'}
+                  {formData.reply_mode === 'auto' ? '自动回复' : formData.reply_mode === 'manual' ? '手动回复' : '混合模式'}
                 </Descriptions.Item>
                 <Descriptions.Item label="知识库">
-                  {formData.enable_knowledge ? '启用' : '未启用'}
-                </Descriptions.Item>
-                <Descriptions.Item label="自动学习">
-                  {formData.enable_learning ? '启用' : '未启用'}
-                </Descriptions.Item>
-                <Descriptions.Item label="监听目标">
-                  {formData.chat_ids ? `${formData.chat_ids.split('\n').length} 个` : '未设置'}
+                  {formData.selected_kb_ids.length > 0
+                    ? `${formData.selected_kb_ids.length} 个知识库`
+                    : '暂不挂载'}
                 </Descriptions.Item>
               </Descriptions>
             </Card>

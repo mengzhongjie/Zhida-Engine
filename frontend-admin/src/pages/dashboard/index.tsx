@@ -3,15 +3,15 @@
  *
  * 首页：统计卡片 + Agent 列表管理。
  */
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  Row, Col, Card, Statistic, Button, Tag, Space, Modal, message, Typography,
+  Row, Col, Card, Statistic, Button, Tag, Space, Modal, message, Typography, Progress, Tooltip,
 } from 'antd'
 import {
   RobotOutlined, MessageOutlined, CheckCircleOutlined, PlusOutlined,
   PlayCircleOutlined, PauseCircleOutlined, DeleteOutlined, EyeOutlined,
-  DashboardOutlined,
+  DashboardOutlined, ApiOutlined, ReloadOutlined,
 } from '@ant-design/icons'
 import { api } from '../../services/api'
 
@@ -44,22 +44,42 @@ interface DashboardStats {
   cache_hit_rate: number
 }
 
+// LLM 使用统计
+interface LLMUsage {
+  id: number
+  provider_name: string
+  model_name: string
+  is_primary: boolean
+  is_active: boolean
+  tokens_used_today: number
+  max_tokens_per_day: number
+  requests_today: number
+  max_requests_per_minute: number
+  max_tokens_per_request: number
+  last_test_success: boolean | null
+  last_test_at: string | null
+}
+
 export default function Dashboard() {
   const navigate = useNavigate()
   const [stats, setStats] = useState<DashboardStats | null>(null)
   const [agents, setAgents] = useState<AgentItem[]>([])
+  const [llmUsages, setLlmUsages] = useState<LLMUsage[]>([])
   const [loading, setLoading] = useState(true)
+  const refreshTimer = useRef<ReturnType<typeof setInterval> | null>(null)
 
   // 加载仪表盘数据
   const loadData = useCallback(async () => {
     try {
       setLoading(true)
-      const [dashboardData, agentData] = await Promise.all([
+      const [dashboardData, agentData, llmData] = await Promise.all([
         api.get<DashboardStats>('/admin/dashboard'),
         api.get<{ items: AgentItem[] }>('/agents'),
+        api.get<LLMUsage[]>('/admin/llm-usage'),
       ])
       setStats(dashboardData)
       setAgents(agentData.items || [])
+      setLlmUsages(llmData as any)
     } catch (err) {
       console.error('加载仪表盘数据失败:', err)
     } finally {
@@ -69,6 +89,11 @@ export default function Dashboard() {
 
   useEffect(() => {
     loadData()
+    // 每 30 秒刷新 LLM 使用统计
+    refreshTimer.current = setInterval(loadData, 30000)
+    return () => {
+      if (refreshTimer.current) clearInterval(refreshTimer.current)
+    }
   }, [loadData])
 
   // 启动/停止 Agent
@@ -175,6 +200,78 @@ export default function Dashboard() {
           </Card>
         </Col>
       </Row>
+
+      {/* LLM 配置监控 —— 每 30s 自动刷新 */}
+      {llmUsages.length > 0 && (
+        <>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+            <Title level={4} style={{ margin: 0 }}>
+              <ApiOutlined style={{ marginRight: 8 }} />
+              LLM 配置监控
+            </Title>
+            <Tooltip title="每 30 秒自动刷新">
+              <Tag color="processing">自动刷新中</Tag>
+            </Tooltip>
+          </div>
+          <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
+            {llmUsages.map((usage) => (
+              <Col xs={24} sm={12} lg={8} key={usage.id}>
+                <Card
+                  size="small"
+                  title={
+                    <Space>
+                      {usage.is_primary && <Tag color="blue">主模型</Tag>}
+                      {usage.provider_name} / {usage.model_name}
+                      {usage.last_test_success === true
+                        ? <CheckCircleOutlined style={{ color: '#52c41a' }} />
+                        : usage.last_test_success === false
+                          ? <Tag color="error">离线</Tag>
+                          : null}
+                    </Space>
+                  }
+                >
+                  <Row gutter={[8, 12]}>
+                    <Col span={12}>
+                      <Statistic
+                        title="今日 Token"
+                        value={usage.tokens_used_today}
+                        suffix={`/ ${usage.max_tokens_per_day >= 1000000 ? (usage.max_tokens_per_day / 1000000).toFixed(1) + 'M' : usage.max_tokens_per_day}`}
+                        valueStyle={{ fontSize: 18 }}
+                      />
+                      <Progress
+                        percent={usage.max_tokens_per_day > 0
+                          ? Math.min(100, Math.round((usage.tokens_used_today / usage.max_tokens_per_day) * 100))
+                          : 0}
+                        size="small"
+                        status={usage.tokens_used_today > usage.max_tokens_per_day * 0.8 ? 'exception' : 'active'}
+                        showInfo={false}
+                      />
+                    </Col>
+                    <Col span={12}>
+                      <Statistic
+                        title="今日请求"
+                        value={usage.requests_today}
+                        suffix="次"
+                        valueStyle={{ fontSize: 18 }}
+                      />
+                    </Col>
+                    <Col span={12}>
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        单次上限: {usage.max_tokens_per_request} tokens
+                      </Text>
+                    </Col>
+                    <Col span={12}>
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        频率: {usage.max_requests_per_minute} 次/分
+                      </Text>
+                    </Col>
+                  </Row>
+                </Card>
+              </Col>
+            ))}
+          </Row>
+        </>
+      )}
 
       {/* Agent 列表 */}
       <Title level={4} style={{ marginBottom: 16 }}>Agent 列表</Title>
