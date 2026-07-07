@@ -27,7 +27,6 @@ from app.services.llm.provider_templates import (
     get_cloud_providers,
     get_local_providers,
 )
-from app.services.llm.gateway import llm_gateway
 
 router = APIRouter(prefix="/llm", tags=["LLM 配置"])
 
@@ -255,6 +254,8 @@ async def test_connection(request: TestConnectionRequest):
 
     用户填写配置后，点击"测试连接"按钮调用此接口。
     """
+    from app.services.llm.gateway import llm_gateway  # 延迟导入，避免启动时加载 openai
+
     result = await llm_gateway.test_connection(
         base_url=request.base_url,
         api_key=request.api_key,
@@ -275,6 +276,8 @@ async def test_configured_model(
     db: AsyncSession = Depends(get_db),
 ):
     """测试已保存的 LLM 配置连接"""
+    from app.services.llm.gateway import llm_gateway  # 延迟导入，避免启动时加载 openai
+
     result = await db.execute(select(LLMConfig).where(LLMConfig.id == config_id))
     config = result.scalar_one_or_none()
     if config is None:

@@ -22,8 +22,6 @@ from app.schemas.qa import (
     QAHistoryListOut,
     QAFeedbackRequest,
 )
-from app.services.qa.retriever import hybrid_retriever
-from app.services.qa.generator import answer_generator
 from app.services.cache.query_cache import query_cache
 from app.services.cache.idempotency import single_flight
 
@@ -88,6 +86,8 @@ async def ask_question(
 
     # 2. 混合检索
     try:
+        from app.services.qa.retriever import hybrid_retriever  # 延迟导入，避免启动时加载 chromadb
+
         retrieve_result = await hybrid_retriever.retrieve(
             query=request.question,
             top_k=5,
@@ -107,6 +107,8 @@ async def ask_question(
 
     # 3. 生成回答
     try:
+        from app.services.qa.generator import answer_generator  # 延迟导入，避免启动时加载 openai
+
         answer = await answer_generator.generate(
             question=request.question,
             contexts=[s.chunk_text for s in sources],

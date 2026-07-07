@@ -120,6 +120,20 @@ async def create_agent(
     return _agent_to_out(agent)
 
 
+# ============================================================
+# 沙箱管理（独立路由，必须在 /{agent_id} 之前，防止被 agent_id 捕获）
+# ============================================================
+
+@router.get("/sandboxes", response_model=dict)
+async def get_all_sandboxes():
+    """
+    获取所有 Agent 沙箱的总体统计
+
+    用于管理后台监控所有 Agent 的资源使用情况。
+    """
+    return sandbox_manager.get_total_stats()
+
+
 @router.get("/{agent_id}", response_model=AgentOut)
 async def get_agent(
     agent_id: int,
@@ -196,20 +210,6 @@ async def delete_agent(
     await db.flush()
 
     return {"message": "删除成功", "id": agent_id}
-
-
-# ============================================================
-# 沙箱管理（独立路由，必须在 /{agent_id} 之前）
-# ============================================================
-
-@router.get("/sandboxes", response_model=dict)
-async def get_all_sandboxes():
-    """
-    获取所有 Agent 沙箱的总体统计
-
-    用于管理后台监控所有 Agent 的资源使用情况。
-    """
-    return sandbox_manager.get_total_stats()
 
 
 # ============================================================
