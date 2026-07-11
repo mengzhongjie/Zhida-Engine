@@ -32,6 +32,8 @@ class FileType(str, Enum):
     TXT = "txt"
     MD = "md"
     CSV = "csv"
+    JSON = "json"
+    XML = "xml"
 
 
 class ParseStatus(str, Enum):
@@ -81,7 +83,14 @@ class DocumentParser:
     MAX_FILE_SIZE_MB = 100  # 超过 100MB 触发分页解析
     PARSE_TIMEOUT_SEC = 300  # 解析超时（秒）
 
-    def __init__(self):
+    # MinerU 专有格式（现有 FileType 枚举未覆盖的格式）
+    # 这些格式必须启用 MinerU 才能解析
+    MINERU_ONLY_FORMATS = {
+        "pptx", "ppt", "epub", "html", "htm",
+        "png", "jpg", "jpeg", "bmp", "tiff", "webp",
+    }
+
+    def __init__(self, mineru_parser: Optional["MinerUParser"] = None):
         self._supported_formats = {
             FileType.PDF: self._parse_pdf,
             FileType.DOCX: self._parse_docx,
@@ -89,19 +98,58 @@ class DocumentParser:
             FileType.TXT: self._parse_txt,
             FileType.MD: self._parse_txt,  # Markdown 使用文本解析
             FileType.CSV: self._parse_csv,
+            FileType.JSON: self._parse_txt,  # JSON 使用文本解析
+            FileType.XML: self._parse_txt,   # XML 使用文本解析
         }
 
-    def get_file_type(self, file_path: str) -> FileType:
-        """根据文件扩展名获取文件类型"""
+        # MinerU 解析器（可选注入，支持依赖注入便于测试）
+        if mineru_parser is not None:
+            self._mineru = mineru_parser
+        else:
+            self._mineru = self._create_mineru_if_enabled()
+
+    @staticmethod
+    def _create_mineru_if_enabled():
+        """延迟创建 MinerU 实例，避免导入错误阻塞应用启动
+
+        仅当 ENABLE_MINERU=True 时尝试加载 MinerU 模块。
+        """
+        try:
+            from app.services.knowledge.mineru.parser import create_mineru_parser
+            return create_mineru_parser()
+        except ImportError:
+            return None
+        except Exception as e:
+            logger.warning(f"无法加载 MinerU，将使用本地解析器: {e}")
+            return None
+
+    def get_file_type(self, file_path: str) -> Optional[FileType]:
+        """根据文件扩展名获取文件类型
+
+        Returns:
+            FileType 枚举，如果扩展名不在支持列表中则返回 None
+            （None 可能是 MinerU 专有格式，需由 MinerU 处理）
+        """
         ext = Path(file_path).suffix.lower().lstrip(".")
         try:
             return FileType(ext)
         except ValueError:
-            raise ValueError(f"不支持的文件类型: .{ext}，支持: {[f.value for f in FileType]}")
+            return None
+
+    def is_mineru_only_format(self, file_path: str) -> bool:
+        """判断是否仅 MinerU 支持的格式"""
+        ext = Path(file_path).suffix.lower().lstrip(".")
+        return ext in self.MINERU_ONLY_FORMATS
 
     async def parse(self, file_path: str) -> ParseResult:
         """
         解析文档 —— 自动选择解析策略，含降级
+
+        解析优先级：
+        1. MinerU 解析（若启用且文件格式匹配）
+        2. 现有解析器（pdfplumber/python-docx/openpyxl 等）
+        3. 纯文本降级（内存不足时）
+        4. 分页解析（超时或文件过大时）
 
         Args:
             file_path: 文件路径
@@ -110,10 +158,71 @@ class DocumentParser:
             ParseResult 包含解析后的文本、元数据等
         """
         start_time = time.time()
-        file_type = self.get_file_type(file_path)
         file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+        file_ext = Path(file_path).suffix.lower().lstrip(".")
+        file_type = self.get_file_type(file_path)
 
-        logger.info(f"开始解析文档: {file_path} (类型={file_type.value}, 大小={file_size_mb:.1f}MB)")
+        # ================================================================
+        # 策略 1: MinerU 优先（若启用）
+        # ================================================================
+        if self._mineru and self._mineru.can_handle(file_ext):
+            file_name = Path(file_path).name
+
+            # 检查文件大小是否超过 MinerU 阈值
+            if file_size_mb > self._mineru.config.max_file_size_mb:
+                logger.info(f"MinerU 跳过（文件过大 {file_size_mb:.0f}MB > {self._mineru.config.max_file_size_mb}MB）, 使用本地解析器: {file_name}")
+            elif not await self._mineru.is_available():
+                logger.info(f"MinerU 不可用，使用本地解析器: {file_name}")
+            else:
+                try:
+                    result = await asyncio.wait_for(
+                        self._mineru.parse(file_path),
+                        timeout=self.PARSE_TIMEOUT_SEC,
+                    )
+                    result.parse_time_ms = (time.time() - start_time) * 1000
+
+                    if result.status != ParseStatus.FAILED and result.text.strip():
+                        logger.info(f"MinerU 解析成功: {file_name}, 耗时={result.parse_time_ms:.0f}ms")
+                        return result
+
+                    logger.warning(f"MinerU 返回空或失败结果，降级到本地解析器: {file_name}")
+                except asyncio.TimeoutError:
+                    logger.warning(f"MinerU 解析超时 ({self.PARSE_TIMEOUT_SEC}s)，降级到本地解析器: {file_name}")
+                except Exception as e:
+                    logger.warning(f"MinerU 解析失败，降级到本地解析器: {file_name}: {e}")
+
+                if self._mineru.config.fallback_on_failure:
+                    # 继续到策略 2
+                    pass
+                else:
+                    # 不降级，直接报错
+                    logger.error(f"MinerU 解析失败且 fallback_on_failure=False: {file_name}")
+                    return ParseResult(
+                        status=ParseStatus.FAILED,
+                        error_message=f"MinerU 解析失败: 等待重试",
+                    )
+
+        # ================================================================
+        # 策略 2: 现有解析器（或 MinerU 专有格式检查）
+        # ================================================================
+        # MinerU 专有格式必须启用 MinerU
+        if file_type is None:
+            if self.is_mineru_only_format(file_path):
+                error_msg = (
+                    f"格式 .{file_ext} 需要启用 MinerU 才能解析。"
+                    f"请设置环境变量 ZHIDA_ENABLE_MINERU=true 并安装 magic-pdf"
+                )
+                logger.error(error_msg)
+                return ParseResult(
+                    status=ParseStatus.FAILED,
+                    error_message=error_msg,
+                )
+            return ParseResult(
+                status=ParseStatus.FAILED,
+                error_message=f"不支持的文件类型: .{file_ext}",
+            )
+
+        logger.info(f"开始本地解析: {Path(file_path).name} (类型={file_type.value}, 大小={file_size_mb:.1f}MB)")
 
         try:
             # 大文件使用分页解析
@@ -144,7 +253,7 @@ class DocumentParser:
             )
 
         result.parse_time_ms = (time.time() - start_time) * 1000
-        logger.info(f"解析完成: {file_path}, 状态={result.status.value}, 耗时={result.parse_time_ms:.0f}ms, 文本长度={len(result.text)}")
+        logger.info(f"解析完成: {Path(file_path).name}, 状态={result.status.value}, 耗时={result.parse_time_ms:.0f}ms, 文本长度={len(result.text)}")
 
         return result
 
@@ -155,11 +264,26 @@ class DocumentParser:
     ) -> AsyncIterator[ParseChunk]:
         """
         分页解析文档 —— 用于大文件，每批处理 N 页
+        优先使用 MinerU 分页（若启用），否则使用现有解析器。
 
         Usage:
             async for chunk in parser.parse_paginated("large.pdf"):
                 await process_chunk(chunk)
         """
+        file_ext = Path(file_path).suffix.lower().lstrip(".")
+
+        # MinerU 分页（若启用且支持该格式）
+        if self._mineru and self._mineru.can_handle(file_ext):
+            try:
+                async for chunk in self._mineru.parse_paginated(file_path, page_size):
+                    yield chunk
+                return
+            except Exception as e:
+                logger.warning(f"MinerU 分页解析失败，降级: {e}")
+                if self._mineru and not self._mineru.config.fallback_on_failure:
+                    raise
+
+        # 现有解析器分页
         result = await self.parse(file_path)
 
         if result.status == ParseStatus.FAILED:

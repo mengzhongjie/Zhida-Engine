@@ -31,6 +31,8 @@ from app.schemas.knowledge import (
 from app.services.knowledge.parser import document_parser
 from app.services.knowledge.splitter import text_splitter
 from app.services.knowledge.indexer import index_manager
+from app.services.validation.precheck import upload_prechecker
+from app.services.validation.quality_checker import parse_quality_checker
 
 router = APIRouter(prefix="/knowledge", tags=["知识库管理"])
 
@@ -64,12 +66,29 @@ def _kb_to_out(kb: KnowledgeBase) -> KnowledgeBaseOut:
         name=kb.name,
         description=kb.description,
         document_count=kb.document_count,
-        total_chunks=kb.chunk_count,
+        chunk_count=kb.chunk_count,
         total_size_bytes=kb.total_size_bytes,
         is_active=kb.is_active,
         created_at=kb.created_at,
         updated_at=kb.updated_at,
     )
+
+
+async def _sync_kb_statistics(db: AsyncSession, kb: KnowledgeBase) -> None:
+    """根据文档表重建知识库统计，避免上传中断造成累计值漂移。"""
+    result = await db.execute(
+        select(
+            func.count(Document.id),
+            func.coalesce(func.sum(Document.chunk_count), 0),
+            func.coalesce(func.sum(Document.parent_chunk_count), 0),
+            func.coalesce(func.sum(Document.file_size), 0),
+        ).where(Document.knowledge_base_id == kb.id)
+    )
+    document_count, chunk_count, parent_chunk_count, total_size_bytes = result.one()
+    kb.document_count = document_count
+    kb.chunk_count = chunk_count
+    kb.parent_chunk_count = parent_chunk_count
+    kb.total_size_bytes = total_size_bytes
 
 
 # ============================================================
@@ -92,6 +111,8 @@ async def list_knowledge_bases(
 
     result = await db.execute(query)
     bases = result.scalars().all()
+    for kb in bases:
+        await _sync_kb_statistics(db, kb)
 
     return KnowledgeBaseListOut(
         total=len(bases),
@@ -132,6 +153,7 @@ async def get_knowledge_base(
     if kb is None:
         raise HTTPException(status_code=404, detail="知识库不存在")
 
+    await _sync_kb_statistics(db, kb)
     return _kb_to_out(kb)
 
 
@@ -326,33 +348,55 @@ async def upload_document_to_kb(
         raise HTTPException(status_code=404, detail="知识库不存在")
 
     # 文件类型校验
-    allowed_types = {".pdf", ".docx", ".doc", ".xlsx", ".xls", ".txt", ".md", ".csv"}
+    allowed_types = {".pdf", ".docx", ".doc", ".xlsx", ".xls", ".txt", ".md", ".csv", ".json", ".xml"}
+
+    # MinerU 启用时支持更多格式
+    if settings.ENABLE_MINERU:
+        allowed_types.update({
+            ".pptx", ".ppt", ".epub", ".html", ".htm",
+            ".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".webp",
+        })
+
     file_ext = os.path.splitext(file.filename or "")[1].lower()
     if file_ext not in allowed_types:
         raise HTTPException(
             status_code=400,
-            detail=f"不支持的文件类型: {file_ext}，支持: {', '.join(allowed_types)}",
+            detail=f"不支持的文件类型: {file_ext}，支持: {', '.join(sorted(allowed_types))}",
         )
 
-    # 文件大小校验
+    # 读入文件内容
     content = await file.read()
+
+    # 文件大小校验
     if len(content) > settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024:
         raise HTTPException(
             status_code=400,
             detail=f"文件大小超过限制（{settings.MAX_UPLOAD_SIZE_MB}MB）",
         )
 
+    # ---- 上传前预检（格式验证 + 文件名清洗 + 损坏检测）----
+    if settings.ENABLE_FORMAT_CHECK:
+        precheck = upload_prechecker.check(content, file.filename or "")
+        if not precheck.passed:
+            error_detail = "; ".join(precheck.errors)
+            logger.warning(f"上传预检拒绝: {file.filename} — {error_detail}")
+            raise HTTPException(status_code=400, detail=error_detail)
+        # 使用清洗后的文件名
+        safe_filename = precheck.safe_filename
+    else:
+        safe_filename = upload_prechecker.sanitize_filename(file.filename or "untitled")
+
     # 保存文件到本地
     upload_dir = os.path.join(settings.DATA_DIR, "uploads", f"kb_{kb_id}")
     os.makedirs(upload_dir, exist_ok=True)
-    file_path = os.path.join(upload_dir, file.filename)
+    file_path = os.path.join(upload_dir, safe_filename)
     with open(file_path, "wb") as f:
         f.write(content)
 
     # 创建文档记录
     doc = Document(
         knowledge_base_id=kb.id,
-        filename=file.filename,
+        filename=safe_filename,
         file_type=file_ext.replace(".", ""),
         file_path=file_path,
         file_size=len(content),
@@ -370,10 +414,33 @@ async def upload_document_to_kb(
         parse_result = await document_parser.parse(file_path)
         elapsed_ms = (time.time() - start_time) * 1000
 
-        if parse_result.status.value != "success":
+        # ---- 解析结果质量检查 ----
+        if settings.ENABLE_FORMAT_CHECK:
+            quality = parse_quality_checker.check(parse_result)
+            # 质量评分过低且自动拒绝启用→标记失败
+            if not quality.passed:
+                logger.warning(
+                    f"文档 {file.filename} 质量检查未通过: "
+                    f"score={quality.score}, errors={quality.errors}"
+                )
+                doc.status = "error"
+                doc.error_message = (
+                    parse_result.error_message
+                    or f"文档质量检查未通过 (评分 {quality.score}/100): "
+                    + "; ".join(quality.errors or quality.warnings)
+                )
+                doc.parse_time_ms = elapsed_ms
+                await _sync_kb_statistics(db, kb)
+                await db.flush()
+                await db.refresh(doc)
+                return _document_to_out(doc)
+
+        # 降级和部分解析仍可能得到可用于知识库的正文；仅在没有正文或明确失败时中止。
+        if parse_result.status.value == "failed" or not parse_result.text.strip():
             doc.status = "error"
             doc.error_message = parse_result.error_message or "解析失败"
             doc.parse_time_ms = elapsed_ms
+            await _sync_kb_statistics(db, kb)
             await db.flush()
             await db.refresh(doc)
             return _document_to_out(doc)
@@ -412,30 +479,21 @@ async def upload_document_to_kb(
             db.add(chunk)
 
         # ---- 子块向量化索引到 ChromaDB ----
-        indexing_failed = False
         if child_chunks:
             try:
                 indexed = await index_manager.index_chunks(str(kb.id), child_chunks)
                 logger.info(f"文档 {doc.id} 索引完成: {indexed} 个子块")
             except Exception as index_err:
-                indexing_failed = True
-                index_error_msg = str(index_err)
-                logger.warning(f"文档 {doc.id} 向量化索引失败: {index_error_msg}")
+                logger.warning(f"文档 {doc.id} 向量化索引失败: {index_err}")
                 # 索引失败不影响文档状态，在 error_message 中提示
-                doc.error_message = f"文档解析成功，但向量化索引失败：{index_error_msg[:200]}"
-
-        # 更新知识库统计（只有索引成功才更新 chunk_count）
-        kb.document_count = kb.document_count + 1
-        if not indexing_failed:
-            kb.chunk_count = kb.chunk_count + doc.chunk_count
-            kb.parent_chunk_count = kb.parent_chunk_count + doc.parent_chunk_count
-        kb.total_size_bytes = kb.total_size_bytes + len(content)
+                doc.error_message = f"文档解析成功，但向量化索引失败：{str(index_err)[:200]}"
 
     except Exception as e:
         doc.status = "error"
         doc.error_message = str(e)
         logger.exception(f"文档处理失败: {e}")
 
+    await _sync_kb_statistics(db, kb)
     await db.flush()
     await db.refresh(doc)
 
@@ -454,10 +512,6 @@ async def delete_document(
         raise HTTPException(status_code=404, detail="文档不存在")
 
     kb_id = doc.knowledge_base_id
-    doc_size = doc.file_size
-    doc_chunks = doc.chunk_count
-    doc_parent_chunks = doc.parent_chunk_count
-
     # 删除父块记录
     await db.execute(
         DocumentChunk.__table__.delete().where(DocumentChunk.document_id == document_id)
@@ -470,10 +524,7 @@ async def delete_document(
     kb_result = await db.execute(select(KnowledgeBase).where(KnowledgeBase.id == kb_id))
     kb = kb_result.scalar_one_or_none()
     if kb:
-        kb.document_count = max(0, kb.document_count - 1)
-        kb.chunk_count = max(0, kb.chunk_count - doc_chunks)
-        kb.parent_chunk_count = max(0, kb.parent_chunk_count - doc_parent_chunks)
-        kb.total_size_bytes = max(0, kb.total_size_bytes - doc_size)
+        await _sync_kb_statistics(db, kb)
         kb.updated_at = datetime.utcnow()
         await db.flush()
 

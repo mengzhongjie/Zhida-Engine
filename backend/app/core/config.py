@@ -119,6 +119,7 @@ class Settings(BaseSettings):
     ENABLE_AUTO_MENTION: bool = True  # 回答不了时自动 @ 指定用户
     ENABLE_AUDIO_PARSE: bool = False  # 音频解析（实验性，默认关闭）
     ENABLE_IMAGE_PARSE: bool = False  # 图片解析（实验性，默认关闭）
+    ENABLE_MINERU: bool = False  # MinerU 文档解析（可选，需安装 magic-pdf）
 
     # ---- 安全配置 ----
     ENABLE_RATE_LIMIT: bool = True  # 限流总开关
@@ -143,6 +144,47 @@ class Settings(BaseSettings):
     RATE_LIMIT_COOLDOWN: int = 300  # 问题冷却时间（秒）
     RATE_LIMIT_SILENT_ENABLED: bool = True  # 是否启用静默时段
     RATE_LIMIT_PRIVATE_RELAXED: bool = True  # 私聊是否放宽限制
+
+    # ---- MinerU 文档解析（可选，默认关闭）----
+    # MinerU 是上海 AI Lab 开源的一站式文档解析引擎，支持 PDF/DOCX/PPTX/EPUB/图片等格式
+    # 两种部署模式：embedded（直接调用 Python API，需安装 magic-pdf）| service（通过 HTTP 调用独立 MinerU 服务）
+    MINERU_MODE: str = "embedded"
+    """MinerU 部署模式: embedded | service"""
+    MINERU_BACKEND: str = "pipeline"
+    """MinerU 计算后端: pipeline(CPU可用) | vlm-engine(GPU高精度) | hybrid-engine(GPU)"""
+    MINERU_DEVICE: str = "cpu"
+    """MinerU 推理设备: cpu | cuda"""
+    MINERU_LANGUAGES: str = "zh,en"
+    """MinerU OCR/解析语言列表，逗号分隔"""
+    MINERU_SERVICE_URL: str = "http://127.0.0.1:18901"
+    """MinerU 独立服务地址（仅 service 模式生效）"""
+    MINERU_SERVICE_TIMEOUT: int = 600
+    """MinerU 服务请求超时（秒）"""
+    # PDF 是 MinerU 最稳定的输入；DOCX/XLSX 默认仍使用现有专用解析器。
+    # 需要将某一格式交给 MinerU 时，可在环境变量中显式追加。
+    MINERU_FORMATS: str = "pdf"
+    """使用 MinerU 处理的文件格式，逗号分隔"""
+    MINERU_FALLBACK_ON_FAILURE: bool = True
+    """MinerU 失败时自动降级到本地解析器"""
+    MINERU_MAX_FILE_SIZE_MB: int = 50
+    """MinerU 处理的最大文件大小（MB），超过此值使用本地解析器"""
+
+    # ---- 文档格式校验 ----
+    # 基于 magic bytes + 解析结果多维评分
+    ENABLE_FORMAT_CHECK: bool = True
+    """格式校验总开关"""
+    FORMAT_CHECK_STRICT: bool = True
+    """严格模式：文件类型不匹配直接拒绝上传"""
+    FORMAT_MAX_FILE_SIZE_MB: int = 100
+    """上传文件大小上限（MB）"""
+    FORMAT_MIN_TEXT_LENGTH: int = 10
+    """解析后最小文本长度（字符），低于此值标记为空"""
+    FORMAT_GARBAGE_THRESHOLD: float = 0.5
+    """乱码比例阈值（0-1），超过则标记警告"""
+    FORMAT_AUTO_REJECT_EMPTY: bool = True
+    """解析结果为空时自动标记失败"""
+    FORMAT_MIN_QUALITY_SCORE: int = 10
+    """综合质量评分最低通过线（0-100）"""
 
     model_config = {
         "env_prefix": "ZHIDA_",

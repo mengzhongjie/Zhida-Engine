@@ -20,12 +20,9 @@ from app.core.config import settings
 
 # SQLite 性能优化参数
 # WAL 模式 + 合理缓存 + 同步策略
+# 注意：aiosqlite 使用 NullPool，不支持 pool_size/max_overflow 参数
 _SQLITE_ENGINE_KWARGS = {
     "echo": settings.DEBUG,  # DEBUG 模式下打印 SQL 日志
-    "pool_size": 5,           # 连接池大小（本地应用够用）
-    "max_overflow": 5,        # 最大溢出连接数
-    "pool_recycle": 3600,     # 连接回收时间（秒）
-    "pool_pre_ping": True,    # 连接前检查可用性
 }
 
 # SQLite 连接参数
@@ -111,7 +108,6 @@ async def init_db():
         import app.models.llm_config        # noqa: F401
         import app.models.knowledge         # noqa: F401
         import app.models.qa                # noqa: F401
-        import app.models.channel           # noqa: F401
         import app.models.agent             # noqa: F401
         import app.models.embedding_config  # noqa: F401
         import app.models.miniapp           # noqa: F401
@@ -147,7 +143,6 @@ async def _create_indexes(conn):
     - LLM 配置查询（按 agent_id + is_primary）
     - 知识库查询（按 agent_id）
     - 问答历史查询（按 agent_id + created_at）
-    - 渠道配置查询（按 agent_id + is_active）
     """
     indexes = [
         # Agent 索引
@@ -169,9 +164,6 @@ async def _create_indexes(conn):
         "CREATE INDEX IF NOT EXISTS idx_qa_history_agent_time ON qa_history(agent_id, created_at)",
         "CREATE INDEX IF NOT EXISTS idx_qa_pairs_agent ON qa_pairs(agent_id)",
 
-        # 渠道配置索引
-        "CREATE INDEX IF NOT EXISTS idx_channel_configs_agent_active ON channel_configs(agent_id, is_active)",
-        "CREATE INDEX IF NOT EXISTS idx_channel_configs_type ON channel_configs(channel_type)",
         "CREATE INDEX IF NOT EXISTS idx_miniapp_users_openid ON miniapp_users(openid)",
         "CREATE INDEX IF NOT EXISTS idx_invitations_status_expires ON invitations(status, expires_at)",
         "CREATE INDEX IF NOT EXISTS idx_miniapp_sessions_user_time ON miniapp_sessions(user_id, updated_at)",

@@ -213,7 +213,25 @@ Content-Type: multipart/form-data
 ```
 
 **请求参数：**
-- `file`: 文档文件（支持 PDF、Word、Excel、TXT、Markdown、CSV、JSON）
+- `file`: 文档文件
+
+**支持的格式：**
+- 基础格式：`.pdf` `.docx` `.doc` `.xlsx` `.xls` `.txt` `.md` `.csv` `.json` `.xml`
+- 启用 MinerU 额外支持：`.pptx` `.ppt` `.epub` `.html` `.htm` `.png` `.jpg` `.jpeg` `.bmp` `.tiff` `.webp`
+
+**上传前预检（格式校验）：**
+上传文件会经过多层校验：
+1. **Magic bytes 检测** — 基于文件头字节验证真实类型，防止扩展名伪装
+2. **扩展名匹配** — 真实类型与扩展名不一致时，严格模式直接拒绝上传
+3. **文件名清洗** — 移除路径穿越字符和危险字符
+4. **文件完整性** — PDF %%EOF 标记、ZIP 校验和检查
+
+校验失败返回格式：
+```json
+{
+  "detail": "文件类型不匹配: 扩展名声称 .pdf，实际检测为 binary"
+}
+```
 
 **响应示例：**
 ```json
@@ -230,17 +248,19 @@ Content-Type: multipart/form-data
 ```
 
 **文档处理流程：**
-1. 文件保存到本地
-2. DocumentParser 解析文档内容
-3. TextSplitter 父子块切分（子块 200 字符 / 重叠 50 / 父块 4 倍）
-4. 父块存入 SQLite (document_chunks 表)
-5. 子块向量化后存入 ChromaDB
+1. 文件上传到服务器
+2. 上传前预检（格式校验 + 文件名清洗 + 损坏检测）
+3. DocumentParser 解析文档内容
+4. 解析结果质量检查（空内容/乱码/完整度/语言/结构评分）
+5. TextSplitter 父子块切分（子块 200 字符 / 重叠 50 / 父块 4 倍）
+6. 父块存入 SQLite (document_chunks 表)
+7. 子块向量化后存入 ChromaDB
 
 **文档状态说明：**
 - `pending`: 等待处理
 - `processing`: 处理中
 - `completed`: 处理完成（解析和切分成功，向量化可能成功或失败）
-- `error`: 处理失败（解析失败）
+- `error`: 处理失败（格式校验拒绝、解析失败或质量检查不通过）
 
 **注意：** 向量化索引失败不会导致文档状态变为 error，会在 `error_message` 字段中提示。文档的 `chunk_count` 字段表示切分后的子块数量，无论是否索引成功都会返回。
 
@@ -502,19 +522,16 @@ POST /channels/{channel_type}/login/qrcode
 {
   "login_id": "uuid-string",
   "qrcode_url": "https://.../qrcode.png",
-  "qrcode_content": "napcat://login?...",
+  "qrcode_content": "...",
   "expires_at": 1234567890,
   "message": "提示信息"
 }
 ```
 
-**模拟模式说明：**
-当渠道 SDK（NapCat / Wechaty）未配置或不可用时，自动进入模拟模式：
-- 返回演示用的二维码内容
-- 登录状态自动推进：waiting → scanned → confirmed → success（约6次轮询）
-- 登录成功后返回预设的模拟用户信息
-- 联系人列表返回预设的模拟数据
-- 用于演示和前端开发调试
+**前置条件：**
+- QQ 渠道：需要 NapCat QQ 服务正在运行（默认 http://localhost:3000）
+- 微信渠道：需要 Wechaty SDK 已安装且有 Puppet Token
+- 渠道 SDK 未就绪时，API 会返回 `500 Internal Server Error` 和明确的错误描述
 
 ---
 
@@ -532,7 +549,6 @@ GET /channels/{channel_type}/login/status/{login_id}
 - `confirmed`: 已确认登录
 - `success`: 登录成功（返回用户信息）
 - `expired`: 二维码已过期
-- `unsupported`: 渠道不支持
 
 **响应示例：**
 ```json
@@ -695,14 +711,28 @@ GET /admin/llm-usage
 
 ---
 
-## 附录：错误码
+## 附录 A：配置项参考
+
+| 环境变量 | 默认值 | 说明 |
+|---------|--------|------|
+| `ZHIDA_ENABLE_FORMAT_CHECK` | `true` | 格式校验总开关 |
+| `ZHIDA_FORMAT_CHECK_STRICT` | `true` | 严格模式：类型不匹配直接拒绝 |
+| `ZHIDA_FORMAT_MIN_TEXT_LENGTH` | `10` | 解析后最小文本长度 |
+| `ZHIDA_FORMAT_GARBAGE_THRESHOLD` | `0.5` | 乱码比例阈值 |
+| `ZHIDA_FORMAT_AUTO_REJECT_EMPTY` | `true` | 空结果自动标记失败 |
+| `ZHIDA_ENABLE_MINERU` | `false` | MinerU 解析开关（需安装） |
+| `ZHIDA_MINERU_MODE` | `embedded` | MinerU 模式（embedded/service） |
+| `ZHIDA_MINERU_FORMATS` | `pdf` | MinerU 处理的文件格式 |
+
+## 附录 B：错误码
 
 | HTTP 状态码 | 说明 |
 |------------|------|
 | 200 | 成功 |
-| 400 | 请求参数错误 |
+| 400 | 请求参数错误（含格式校验拒绝） |
 | 401 | 未授权 |
 | 404 | 资源不存在 |
+| 409 | 冲突（如知识库已挂载） |
 | 429 | 请求过于频繁（限流） |
 | 500 | 服务器内部错误 |
 | 503 | 服务暂不可用（降级） |
@@ -712,4 +742,12 @@ GET /admin/llm-usage
 {
   "detail": "错误描述信息"
 }
+```
+
+**常见格式校验错误：**
+```json
+{"detail": "文件类型不匹配: 扩展名声称 .pdf，实际检测为 binary"}
+{"detail": "文件内容为空"}
+{"detail": "不支持的文件类型: .json（未启用 MinerU 等情况）"}
+{"detail": "文档质量检查未通过 (评分 0/100): 文本内容为空"}
 ```
