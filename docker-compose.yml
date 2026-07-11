@@ -1,0 +1,17 @@
+services:
+  zhida-engine:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:18900:18900"
+    environment:
+      ZHIDA_API_HOST: "0.0.0.0"
+      ZHIDA_API_PORT: "18900"
+      ZHIDA_DATA_DIR: "/data"
+      ZHIDA_ENABLE_LOCAL_ONLY: "false"
+      ZHIDA_ADMIN_AUTH_REQUIRED: "true"
+      ZHIDA_MINIPROGRAM_GATEWAY_SECRET: "${ZHIDA_MINIPROGRAM_GATEWAY_SECRET:?set in .env}"
+      ZHIDA_ADMIN_OPENIDS: "${ZHIDA_ADMIN_OPENIDS:?set in .env}"
+      ZHIDA_EMBEDDING_MODE: "cloud"
+    volumes:
+      - ./data:/data
