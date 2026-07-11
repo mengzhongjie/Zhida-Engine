@@ -114,12 +114,28 @@ async def init_db():
         import app.models.channel           # noqa: F401
         import app.models.agent             # noqa: F401
         import app.models.embedding_config  # noqa: F401
+        import app.models.miniapp           # noqa: F401
 
         # 创建所有表
         await conn.run_sync(Base.metadata.create_all)
 
+        # create_all 不会为既有 SQLite 表添加新列；此处保持桌面版向后兼容。
+        await _run_compatible_migrations(conn)
+
         # 创建性能优化索引（如果不存在）
         await _create_indexes(conn)
+
+
+async def _run_compatible_migrations(conn):
+    migrations = [
+        "ALTER TABLE agents ADD COLUMN is_public BOOLEAN NOT NULL DEFAULT 0",
+    ]
+    for sql in migrations:
+        try:
+            await conn.execute(text(sql))
+        except Exception:
+            # 新库已由 create_all 建列；旧库重复执行会报错，均可安全忽略。
+            pass
 
 
 async def _create_indexes(conn):
@@ -137,6 +153,7 @@ async def _create_indexes(conn):
         # Agent 索引
         "CREATE INDEX IF NOT EXISTS idx_agents_status ON agents(status)",
         "CREATE INDEX IF NOT EXISTS idx_agents_is_active ON agents(is_active)",
+        "CREATE INDEX IF NOT EXISTS idx_agents_public_active ON agents(is_public, is_active)",
         "CREATE INDEX IF NOT EXISTS idx_agents_created_at ON agents(created_at)",
 
         # LLM 配置索引
@@ -155,6 +172,10 @@ async def _create_indexes(conn):
         # 渠道配置索引
         "CREATE INDEX IF NOT EXISTS idx_channel_configs_agent_active ON channel_configs(agent_id, is_active)",
         "CREATE INDEX IF NOT EXISTS idx_channel_configs_type ON channel_configs(channel_type)",
+        "CREATE INDEX IF NOT EXISTS idx_miniapp_users_openid ON miniapp_users(openid)",
+        "CREATE INDEX IF NOT EXISTS idx_invitations_status_expires ON invitations(status, expires_at)",
+        "CREATE INDEX IF NOT EXISTS idx_miniapp_sessions_user_time ON miniapp_sessions(user_id, updated_at)",
+        "CREATE INDEX IF NOT EXISTS idx_admin_sessions_expires ON admin_sessions(expires_at)",
     ]
 
     for idx_sql in indexes:

@@ -12,6 +12,7 @@
 """
 
 import time
+import asyncio
 from typing import Optional, AsyncIterator
 from dataclasses import dataclass, field
 
@@ -63,7 +64,9 @@ class AnswerGenerator:
     """
 
     def __init__(self):
-        pass
+        # LLMGateway 当前维护可变的 Agent 配置。低成本单机部署下串行化模型调用，
+        # 能避免两个不同 Agent 的并发请求串用模型或 API Key。
+        self._llm_lock = asyncio.Lock()
 
     async def generate(
         self,
@@ -93,8 +96,9 @@ class AnswerGenerator:
         """
         total_start = time.time()
 
-        # 1. 查询缓存
-        if cached := await query_cache.get(question):
+        # 缓存必须按 Agent 和用户隔离，避免不同知识库或记忆上下文互相泄漏。
+        cache_query = f"agent:{agent_id if agent_id is not None else 'global'}:user:{user_id or 'shared'}:{question}"
+        if cached := await query_cache.get(cache_query):
             return AnswerResult(
                 answer=cached,
                 is_cache_hit=True,
@@ -175,12 +179,14 @@ class AnswerGenerator:
 
         # 6. LLM 生成（含降级）
         try:
-            answer = await llm_gateway.chat(
-                prompt=prompt,
-                temperature=temperature,
-                max_tokens=2048,
-            )
-            model_used = llm_gateway.primary_model_name or "unknown"
+            async with self._llm_lock:
+                await llm_gateway.initialize(agent_id)
+                answer = await llm_gateway.chat(
+                    prompt=prompt,
+                    temperature=temperature,
+                    max_tokens=2048,
+                )
+                model_used = llm_gateway.primary_model_name or "unknown"
             degraded = False
         except Exception as e:
             logger.warning(f"LLM 生成失败: {e}")
@@ -203,7 +209,7 @@ class AnswerGenerator:
 
         # 7. 写入缓存
         if not degraded:
-            await query_cache.set(question, answer)
+            await query_cache.set(cache_query, answer)
 
         # 8. 写入记忆（异步，不阻塞返回）
         if enable_memory and memory_service.is_available and not degraded:

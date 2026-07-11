@@ -127,6 +127,14 @@ class Settings(BaseSettings):
     MAX_REQUEST_SIZE_MB: int = 10  # 最大请求体大小
     API_KEY_ENCRYPT_ENABLED: bool = True  # API Key 加密存储
 
+    # ---- 小程序网关 ----
+    # CloudBase 云函数使用此密钥对 OpenID 和时间戳签名；生产环境必须设置。
+    MINIPROGRAM_GATEWAY_SECRET: str = ""
+    MINIPROGRAM_SIGNATURE_TTL_SECONDS: int = 300
+    ADMIN_OPENIDS: str = ""  # 逗号分隔的管理员微信 OpenID 白名单
+    ADMIN_SESSION_TTL_SECONDS: int = 28800
+    ADMIN_AUTH_REQUIRED: bool = False  # 云端部署时设为 true
+
     # ---- 限流配置 ----
     RATE_LIMIT_TOKEN_RATE: float = 10.0  # 令牌桶速率（令牌/秒）
     RATE_LIMIT_TOKEN_CAPACITY: int = 3  # 令牌桶容量

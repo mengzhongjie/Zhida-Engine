@@ -112,6 +112,10 @@ def create_app():
     from app.api.middleware.rate_limit import RateLimitMiddleware
     app.add_middleware(RateLimitMiddleware)
 
+    # 云端部署可开启二维码管理员认证；桌面版默认保持本地免登录体验。
+    from app.api.middleware.admin_auth import AdminAuthMiddleware
+    app.add_middleware(AdminAuthMiddleware)
+
     # ================================================================
     # 注册 API 路由
     # ================================================================
@@ -143,6 +147,10 @@ def create_app():
     # 向量化配置
     from app.api.v1.embedding.router import router as embedding_router
     app.include_router(embedding_router, prefix="/api/v1")
+
+    # 小程序邀请制问答接口（仅接受 CloudBase 网关签名请求）
+    from app.api.v1.miniapp.router import router as miniapp_router
+    app.include_router(miniapp_router, prefix="/api/v1")
 
     # ================================================================
     # 前端静态文件服务（生产环境：前端构建产物嵌入 .exe）

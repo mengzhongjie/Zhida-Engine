@@ -14,6 +14,8 @@ from sqlalchemy import select, func
 from app.core.config import settings
 from app.core.database import get_db
 from app.models.qa import QAHistory, QAPair
+from app.models.agent import Agent
+from app.models.knowledge import KnowledgeBase
 from app.schemas.qa import (
     QAAskRequest,
     QAAnswerOut,
@@ -73,71 +75,47 @@ async def ask_question(
     """
     start_time = time.time()
 
-    # 1. 检查缓存
-    if settings.ENABLE_SINGLE_FLIGHT:
-        cached = await query_cache.get(request.question)
-        if cached:
-            return QAAnswerOut(
-                question=request.question,
-                answer=cached,
-                from_cache=True,
-                response_time_ms=(time.time() - start_time) * 1000,
-            )
+    # Agent 和知识库均按请求显式解析，避免使用全局默认知识库。
+    agent = await db.get(Agent, request.agent_id)
+    if agent is None or not agent.is_active:
+        raise HTTPException(status_code=404, detail="Agent 不存在或未启用")
+    kb_result = await db.execute(
+        select(KnowledgeBase.id).where(KnowledgeBase.agent_id == request.agent_id, KnowledgeBase.is_active == True)  # noqa: E712
+    )
+    knowledge_base_ids = [str(kb_id) for kb_id in kb_result.scalars()]
+    if not knowledge_base_ids:
+        raise HTTPException(status_code=409, detail="Agent 尚未挂载可用知识库")
 
-    # 2. 混合检索
-    try:
-        from app.services.qa.retriever import hybrid_retriever  # 延迟导入，避免启动时加载 chromadb
-
-        retrieve_result = await hybrid_retriever.retrieve(
-            query=request.question,
-            top_k=5,
+    answer = await answer_generator.generate(
+        knowledge_base_ids=knowledge_base_ids,
+        question=request.question,
+        user_id=request.user_id,
+        agent_id=request.agent_id,
+    )
+    sources = [
+        QASource(
+            document_name=item.get("metadata", {}).get("filename", "未知"),
+            chunk_text=item.get("text", ""),
+            score=item.get("score", 0.0),
+            source_type=item.get("metadata", {}).get("source_type", "document"),
         )
-        sources = [
-            QASource(
-                document_name=r.get("document_name", "未知"),
-                chunk_text=r.get("text", ""),
-                score=r.get("score", 0.0),
-                source_type=r.get("source_type", "document"),
-            )
-            for r in retrieve_result
-        ]
-    except Exception as e:
-        # 检索失败降级：返回空来源
-        sources = []
-
-    # 3. 生成回答
-    try:
-        from app.services.qa.generator import answer_generator  # 延迟导入，避免启动时加载 openai
-
-        answer = await answer_generator.generate(
-            question=request.question,
-            contexts=[s.chunk_text for s in sources],
-            stream=request.stream,
-        )
-    except Exception as e:
-        # 生成失败降级：返回离线兜底
-        from app.services.cache.degradation import DegradationManager
-        answer = DegradationManager.get_llm_offline_response()
+        for item in answer.sources
+    ]
 
     elapsed_ms = (time.time() - start_time) * 1000
 
     # 4. 缓存结果
-    if settings.ENABLE_SINGLE_FLIGHT and answer:
-        await query_cache.set(request.question, answer)
-
-    # 5. 记录问答历史
+    # 记录问答历史
     try:
         qa_record = QAHistory(
             agent_id=request.agent_id,
             question=request.question,
-            answer=answer,
+            answer=answer.answer,
             sources=str(sources),
-            confidence=0.8,
-            response_time_ms=elapsed_ms,
-            model_used="deepseek-v4-pro",
-            from_cache=False,
+            total_time_ms=elapsed_ms,
+            is_cache_hit=answer.is_cache_hit,
+            channel="web",
             chat_id=request.chat_id,
-            chat_type=request.chat_type,
             user_id=request.user_id,
         )
         db.add(qa_record)
@@ -147,11 +125,12 @@ async def ask_question(
 
     return QAAnswerOut(
         question=request.question,
-        answer=answer,
+        answer=answer.answer,
         sources=sources,
         confidence=0.8,
         response_time_ms=elapsed_ms,
-        model_used="deepseek-v4-pro",
+        model_used=answer.model_used,
+        from_cache=answer.is_cache_hit,
     )
 
 

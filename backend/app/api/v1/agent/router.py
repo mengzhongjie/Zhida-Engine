@@ -43,6 +43,7 @@ def _agent_to_out(agent: Agent) -> AgentOut:
         description=agent.description,
         avatar=agent.avatar,
         is_active=agent.is_active,
+        is_public=agent.is_public,
         status=agent.status,
         reply_mode=agent.reply_mode,
         created_at=agent.created_at,
@@ -111,6 +112,7 @@ async def create_agent(
         description=request.description or "",
         avatar=request.avatar or "🤖",
         reply_mode=request.reply_mode,
+        is_public=request.is_public,
         status="stopped",
     )
     db.add(agent)

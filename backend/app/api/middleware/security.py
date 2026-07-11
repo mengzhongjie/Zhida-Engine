@@ -8,6 +8,10 @@
 - 文件上传校验
 """
 
+import hashlib
+import hmac
+import time
+
 from fastapi import Request, HTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
@@ -38,11 +42,43 @@ class SecurityMiddleware(BaseHTTPMiddleware):
         "Server": "",                                   # 隐藏服务器信息
     }
 
+    @staticmethod
+    def _is_valid_miniapp_gateway_request(request: Request) -> bool:
+        """允许通过签名校验的小程序网关穿过本地模式限制。
+
+        路由层会再次校验签名并验证邀请码；中间件只用于避免公网请求在
+        到达路由前被本地桌面策略误拦截。
+        """
+        if not (
+            request.url.path.startswith("/api/v1/miniapp/")
+            or request.url.path == "/api/v1/admin/auth/confirm"
+        ):
+            return False
+        secret = settings.MINIPROGRAM_GATEWAY_SECRET
+        openid = request.headers.get("X-Miniapp-Openid", "")
+        timestamp = request.headers.get("X-Miniapp-Timestamp", "")
+        signature = request.headers.get("X-Miniapp-Signature", "")
+        if not secret or not openid or not timestamp or not signature:
+            return False
+        try:
+            timestamp_int = int(timestamp)
+        except ValueError:
+            return False
+        if abs(time.time() - timestamp_int) > settings.MINIPROGRAM_SIGNATURE_TTL_SECONDS:
+            return False
+        expected = hmac.new(
+            secret.encode("utf-8"),
+            f"{timestamp}.{openid}".encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        return hmac.compare_digest(expected, signature)
+
     async def dispatch(self, request: Request, call_next):
         # 1. 请求来源校验
         if settings.ENABLE_LOCAL_ONLY:
             client_host = request.client.host if request.client else ""
-            if not validate_local_request(client_host):
+            public_admin_auth = request.url.path.startswith("/api/v1/admin/auth/")
+            if not validate_local_request(client_host) and not public_admin_auth and not self._is_valid_miniapp_gateway_request(request):
                 logger.warning(f"拒绝非本地请求: {client_host} → {request.url.path}")
                 raise HTTPException(status_code=403, detail="仅允许本地访问")
 

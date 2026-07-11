@@ -4,9 +4,13 @@
 提供仪表盘统计、模块开关、缓存管理等接口。
 """
 
-from datetime import datetime
+from datetime import datetime, date, timedelta
+import hashlib
+import secrets
+import hmac
+import time
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from loguru import logger
@@ -19,6 +23,7 @@ from app.models.channel import ChannelConfig
 from app.models.knowledge import KnowledgeBase, Document
 from app.models.qa import QAHistory
 from app.models.llm_config import LLMConfig
+from app.models.miniapp import AdminLoginTicket, AdminSession, Invitation, MiniAppDailyUsage, MiniAppUser
 from app.schemas.admin import (
     DashboardStatsOut,
     ModuleSwitchesOut,
@@ -33,11 +38,193 @@ from app.schemas.admin import (
     MemoryUpdateIn,
     MemoryStatsOut,
 )
+from app.schemas.miniapp import (
+    AdminTicketConfirm,
+    AdminTicketOut,
+    AdminTicketPollOut,
+    InvitationCreate,
+    InvitationCreateOut,
+    InvitationOut,
+)
 from app.services.cache.query_cache import query_cache
 from app.services.cache.rate_limiter import rate_limiter
 from app.services.memory.memory_service import memory_service
 
 router = APIRouter(prefix="/admin", tags=["管理后台"])
+
+
+def _invite_code_hash(code: str) -> str:
+    return hashlib.sha256(code.strip().upper().encode("utf-8")).hexdigest()
+
+
+async def _invitation_out(db: AsyncSession, invitation: Invitation) -> InvitationOut:
+    if invitation.status == "active" and invitation.expires_at and invitation.expires_at < datetime.utcnow():
+        invitation.status = "expired"
+    usage_today = 0
+    if invitation.claimed_by_user_id:
+        usage_result = await db.execute(
+            select(MiniAppDailyUsage.question_count).where(
+                MiniAppDailyUsage.user_id == invitation.claimed_by_user_id,
+                MiniAppDailyUsage.usage_date == date.today(),
+            )
+        )
+        usage_today = usage_result.scalar() or 0
+    return InvitationOut(
+        id=invitation.id,
+        code_hint=invitation.code_hint,
+        daily_question_limit=invitation.daily_question_limit,
+        expires_at=invitation.expires_at,
+        note=invitation.note,
+        status=invitation.status,
+        claimed_at=invitation.claimed_at,
+        claimed_by_user_id=invitation.claimed_by_user_id,
+        created_at=invitation.created_at,
+        usage_today=usage_today,
+    )
+
+
+def _validate_miniapp_gateway(request: Request) -> str:
+    secret = settings.MINIPROGRAM_GATEWAY_SECRET
+    openid = request.headers.get("X-Miniapp-Openid", "").strip()
+    timestamp = request.headers.get("X-Miniapp-Timestamp", "")
+    signature = request.headers.get("X-Miniapp-Signature", "")
+    if not secret or not openid or not timestamp or not signature:
+        raise HTTPException(status_code=401, detail="缺少小程序网关签名")
+    try:
+        timestamp_int = int(timestamp)
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail="无效的小程序网关时间戳") from exc
+    if abs(time.time() - timestamp_int) > settings.MINIPROGRAM_SIGNATURE_TTL_SECONDS:
+        raise HTTPException(status_code=401, detail="小程序网关签名已过期")
+    expected = hmac.new(
+        secret.encode("utf-8"), f"{timestamp}.{openid}".encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+    if not hmac.compare_digest(expected, signature):
+        raise HTTPException(status_code=401, detail="无效的小程序网关签名")
+    return openid
+
+
+# ============================================================
+# 管理员小程序扫码登录
+# ============================================================
+
+@router.get("/auth/status")
+async def get_admin_auth_status():
+    """供网页前端判断当前部署是否需要管理员扫码登录。"""
+    return {"required": settings.ADMIN_AUTH_REQUIRED}
+
+@router.post("/auth/tickets", response_model=AdminTicketOut)
+async def create_admin_login_ticket(db: AsyncSession = Depends(get_db)):
+    """浏览器创建一次性二维码票据，小程序扫描后确认管理员身份。"""
+    ticket_id = secrets.token_urlsafe(24)
+    ticket = AdminLoginTicket(id=ticket_id, expires_at=datetime.utcnow() + timedelta(minutes=2))
+    db.add(ticket)
+    await db.flush()
+    return AdminTicketOut(ticket_id=ticket_id, qr_payload=f"zhida-admin:{ticket_id}", expires_at=ticket.expires_at)
+
+
+@router.post("/auth/confirm", response_model=AdminTicketPollOut)
+async def confirm_admin_login(
+    payload: AdminTicketConfirm,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """由 CloudBase 云函数调用，只有配置的管理员 OpenID 可以确认二维码。"""
+    openid = _validate_miniapp_gateway(request)
+    allowed_openids = {item.strip() for item in settings.ADMIN_OPENIDS.split(",") if item.strip()}
+    if openid not in allowed_openids:
+        raise HTTPException(status_code=403, detail="当前微信账号不是管理员")
+    ticket = await db.get(AdminLoginTicket, payload.ticket_id)
+    if ticket is None or ticket.status != "pending" or ticket.expires_at < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="登录二维码已失效")
+    ticket.status = "approved"
+    ticket.approved_openid = openid
+    await db.flush()
+    return AdminTicketPollOut(status="approved")
+
+
+@router.get("/auth/tickets/{ticket_id}", response_model=AdminTicketPollOut)
+async def poll_admin_login(ticket_id: str, db: AsyncSession = Depends(get_db)):
+    """浏览器轮询二维码状态；票据确认后只签发一次短期管理令牌。"""
+    ticket = await db.get(AdminLoginTicket, ticket_id)
+    if ticket is None:
+        raise HTTPException(status_code=404, detail="登录二维码不存在")
+    if ticket.status == "pending" and ticket.expires_at < datetime.utcnow():
+        ticket.status = "expired"
+        await db.flush()
+    if ticket.status != "approved":
+        return AdminTicketPollOut(status=ticket.status)
+
+    token = secrets.token_urlsafe(32)
+    session = AdminSession(
+        token_hash=hashlib.sha256(token.encode("utf-8")).hexdigest(),
+        openid=ticket.approved_openid,
+        expires_at=datetime.utcnow() + timedelta(seconds=settings.ADMIN_SESSION_TTL_SECONDS),
+    )
+    db.add(session)
+    ticket.status = "consumed"
+    await db.flush()
+    return AdminTicketPollOut(status="approved", access_token=token)
+
+
+# ============================================================
+# 邀请制小程序管理
+# ============================================================
+
+@router.post("/invitations", response_model=InvitationCreateOut)
+async def create_invitation(request: InvitationCreate, db: AsyncSession = Depends(get_db)):
+    """创建一次性邀请码。明文只在此响应返回，之后不可找回。"""
+    if request.expires_at and request.expires_at <= datetime.utcnow():
+        raise HTTPException(status_code=400, detail="失效时间必须晚于当前时间")
+
+    code = secrets.token_hex(8).upper()
+    invitation = Invitation(
+        code_hash=_invite_code_hash(code),
+        code_hint=code[-6:],
+        daily_question_limit=request.daily_question_limit,
+        expires_at=request.expires_at,
+        note=request.note,
+    )
+    db.add(invitation)
+    await db.flush()
+    output = await _invitation_out(db, invitation)
+    return InvitationCreateOut(**output.model_dump(), invite_code=code)
+
+
+@router.get("/invitations", response_model=list[InvitationOut])
+async def list_invitations(db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Invitation).order_by(Invitation.created_at.desc()))
+    return [await _invitation_out(db, invitation) for invitation in result.scalars()]
+
+
+@router.post("/invitations/{invitation_id}/revoke", response_model=InvitationOut)
+async def revoke_invitation(invitation_id: int, db: AsyncSession = Depends(get_db)):
+    """失效未领取的邀请码；已领取的邀请码请撤销其用户访问权限。"""
+    invitation = await db.get(Invitation, invitation_id)
+    if invitation is None:
+        raise HTTPException(status_code=404, detail="邀请码不存在")
+    if invitation.claimed_by_user_id:
+        raise HTTPException(status_code=409, detail="邀请码已领取，请撤销对应用户访问权限")
+    invitation.status = "revoked"
+    await db.flush()
+    return await _invitation_out(db, invitation)
+
+
+@router.post("/invitations/{invitation_id}/revoke-user", response_model=InvitationOut)
+async def revoke_invited_user(invitation_id: int, db: AsyncSession = Depends(get_db)):
+    """撤销已领取邀请码用户的小程序访问资格。"""
+    invitation = await db.get(Invitation, invitation_id)
+    if invitation is None:
+        raise HTTPException(status_code=404, detail="邀请码不存在")
+    if not invitation.claimed_by_user_id:
+        raise HTTPException(status_code=409, detail="邀请码尚未领取")
+    user = await db.get(MiniAppUser, invitation.claimed_by_user_id)
+    if user:
+        user.is_active = False
+        user.revoked_at = datetime.utcnow()
+    invitation.status = "revoked"
+    await db.flush()
+    return await _invitation_out(db, invitation)
 
 
 # ============================================================

@@ -37,6 +37,7 @@ class Agent(Base):
 
     # 状态
     is_active = Column(Boolean, default=True, comment="是否启用")
+    is_public = Column(Boolean, default=False, comment="是否在小程序公开")
     status = Column(String(20), default="stopped", comment="运行状态: running/stopped/error")
 
     # 配置
