@@ -22,7 +22,7 @@ from app.models.agent import Agent
 from app.models.knowledge import KnowledgeBase, Document
 from app.models.qa import QAHistory
 from app.models.llm_config import LLMConfig
-from app.models.miniapp import AdminLoginTicket, AdminSession, Invitation, MiniAppDailyUsage, MiniAppUser
+from app.models.miniapp import AdminLoginTicket, AdminSession, Invitation, InvitationClaim, MiniAppDailyUsage, MiniAppUser
 from app.schemas.admin import (
     DashboardStatsOut,
     ModuleSwitchesOut,
@@ -59,11 +59,15 @@ def _invite_code_hash(code: str) -> str:
 async def _invitation_out(db: AsyncSession, invitation: Invitation) -> InvitationOut:
     if invitation.status == "active" and invitation.expires_at and invitation.expires_at < datetime.utcnow():
         invitation.status = "expired"
+    claim_result = await db.execute(
+        select(InvitationClaim).where(InvitationClaim.invitation_id == invitation.id)
+    )
+    claim = claim_result.scalar_one_or_none()
     usage_today = 0
-    if invitation.claimed_by_user_id:
+    if claim:
         usage_result = await db.execute(
             select(MiniAppDailyUsage.question_count).where(
-                MiniAppDailyUsage.user_id == invitation.claimed_by_user_id,
+                MiniAppDailyUsage.user_id == claim.user_id,
                 MiniAppDailyUsage.usage_date == date.today(),
             )
         )
@@ -75,8 +79,8 @@ async def _invitation_out(db: AsyncSession, invitation: Invitation) -> Invitatio
         expires_at=invitation.expires_at,
         note=invitation.note,
         status=invitation.status,
-        claimed_at=invitation.claimed_at,
-        claimed_by_user_id=invitation.claimed_by_user_id,
+        claimed_at=claim.claimed_at if claim else None,
+        claimed_by_user_id=claim.user_id if claim else None,
         created_at=invitation.created_at,
         usage_today=usage_today,
     )
@@ -202,7 +206,8 @@ async def delete_invitation(invitation_id: int, db: AsyncSession = Depends(get_d
     invitation = await db.get(Invitation, invitation_id)
     if invitation is None:
         raise HTTPException(status_code=404, detail="邀请码不存在")
-    if invitation.claimed_by_user_id:
+    claim_result = await db.execute(select(InvitationClaim.id).where(InvitationClaim.invitation_id == invitation.id))
+    if claim_result.scalar_one_or_none() is not None:
         raise HTTPException(status_code=409, detail="邀请码已领取，不能删除；请撤销用户访问权限")
     await db.delete(invitation)
     await db.flush()
@@ -215,7 +220,8 @@ async def revoke_invitation(invitation_id: int, db: AsyncSession = Depends(get_d
     invitation = await db.get(Invitation, invitation_id)
     if invitation is None:
         raise HTTPException(status_code=404, detail="邀请码不存在")
-    if invitation.claimed_by_user_id:
+    claim_result = await db.execute(select(InvitationClaim.id).where(InvitationClaim.invitation_id == invitation.id))
+    if claim_result.scalar_one_or_none() is not None:
         raise HTTPException(status_code=409, detail="邀请码已领取，请撤销对应用户访问权限")
     invitation.status = "revoked"
     await db.flush()
@@ -228,9 +234,13 @@ async def revoke_invited_user(invitation_id: int, db: AsyncSession = Depends(get
     invitation = await db.get(Invitation, invitation_id)
     if invitation is None:
         raise HTTPException(status_code=404, detail="邀请码不存在")
-    if not invitation.claimed_by_user_id:
+    claim_result = await db.execute(
+        select(InvitationClaim).where(InvitationClaim.invitation_id == invitation.id)
+    )
+    claim = claim_result.scalar_one_or_none()
+    if claim is None:
         raise HTTPException(status_code=409, detail="邀请码尚未领取")
-    user = await db.get(MiniAppUser, invitation.claimed_by_user_id)
+    user = await db.get(MiniAppUser, claim.user_id)
     if user:
         user.is_active = False
         user.revoked_at = datetime.utcnow()
