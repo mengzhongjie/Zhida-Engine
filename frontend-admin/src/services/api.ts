@@ -36,6 +36,12 @@ apiClient.interceptors.response.use(
   }
 )
 
+apiClient.interceptors.request.use((config) => {
+  const token = localStorage.getItem('zhida_admin_token')
+  if (token) config.headers.Authorization = `Bearer ${token}`
+  return config
+})
+
 // 便捷方法
 export const api = {
   get: <T = any>(url: string, config?: AxiosRequestConfig) =>

@@ -1,0 +1,6 @@
+{
+  "pages": ["pages/login/index", "pages/agents/index", "pages/chat/index", "pages/admin/index"],
+  "window": { "navigationBarTitleText": "智答助手", "navigationBarBackgroundColor": "#ffffff", "backgroundColor": "#f5f7fb" },
+  "style": "v2",
+  "sitemapLocation": "sitemap.json"
+}

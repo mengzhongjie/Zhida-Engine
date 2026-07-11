@@ -1,0 +1,6 @@
+{
+  "miniprogramRoot": "./",
+  "cloudfunctionRoot": "../cloudfunctions/",
+  "compileType": "miniprogram",
+  "setting": { "es6": true, "minified": true, "urlCheck": true }
+}

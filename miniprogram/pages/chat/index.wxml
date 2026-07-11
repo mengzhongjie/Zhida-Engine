@@ -1,0 +1,12 @@
+<view class="page">
+  <block wx:for="{{messages}}" wx:key="index">
+    <view class="card" style="margin-left: {{item.role === 'user' ? '80rpx' : '0'}}; margin-right: {{item.role === 'assistant' ? '80rpx' : '0'}};">
+      <view class="muted">{{item.role === 'user' ? '我' : '助手'}}</view>
+      <view style="white-space: pre-wrap; margin-top: 10rpx;">{{item.content}}</view>
+    </view>
+  </block>
+  <view class="card" style="position: sticky; bottom: 16rpx;">
+    <textarea value="{{question}}" bindinput="onInput" placeholder="请输入问题" auto-height maxlength="1000" style="min-height: 80rpx;" />
+    <view class="primary" style="margin-top: 16rpx;" bindtap="ask">发送</view>
+  </view>
+</view>

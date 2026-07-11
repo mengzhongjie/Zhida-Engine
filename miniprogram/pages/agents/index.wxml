@@ -1,0 +1,10 @@
+<view class="page">
+  <view class="muted" style="margin-bottom: 20rpx;">仅显示管理员向受邀用户公开的助手</view>
+  <block wx:for="{{agents}}" wx:key="id">
+    <view class="card" bindtap="openAgent" data-id="{{item.id}}" data-name="{{item.name}}">
+      <view style="font-size: 32rpx; font-weight: 600;">{{item.avatar || '🤖'}} {{item.name}}</view>
+      <view class="muted" style="margin-top: 10rpx;">{{item.description || '暂无描述'}}</view>
+    </view>
+  </block>
+  <view wx:if="{{!agents.length}}" class="card muted">暂无可用助手，请联系管理员。</view>
+</view>

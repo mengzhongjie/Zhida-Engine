@@ -12,6 +12,7 @@ import {
   SettingOutlined,
   BookOutlined,
   PlusOutlined,
+  TeamOutlined,
 } from '@ant-design/icons'
 
 const { Sider, Content } = Layout
@@ -33,6 +34,11 @@ const menuItems = [
     key: '/settings',
     icon: <SettingOutlined />,
     label: '设置',
+  },
+  {
+    key: '/invitations',
+    icon: <TeamOutlined />,
+    label: '邀请码',
   },
 ]
 
