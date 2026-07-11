@@ -86,6 +86,7 @@ export default function KnowledgePage() {
   const [form] = Form.useForm()
 
   const selectedBase = bases.find((b) => b.id === selectedBaseId) || null
+  const completedDocumentCount = documents.filter((doc) => doc.status === 'completed').length
 
   const loadBases = useCallback(async () => {
     setLoadingBases(true)
@@ -354,8 +355,8 @@ export default function KnowledgePage() {
               <Card>
                 <Statistic
                   title="已解析"
-                  value={documents.filter(d => d.status === 'completed').length}
-                  suffix={`/ ${selectedBase.document_count}`}
+                  value={completedDocumentCount}
+                  suffix={`/ ${docTotal}`}
                   valueStyle={{ color: '#52c41a' }}
                 />
               </Card>

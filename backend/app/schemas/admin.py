@@ -17,8 +17,6 @@ class DashboardStatsOut(BaseModel):
     """仪表盘统计输出"""
     total_agents: int = Field(0, description="Agent 总数")
     running_agents: int = Field(0, description="运行中 Agent 数")
-    total_channels: int = Field(0, description="监听渠道总数")
-    active_channels: int = Field(0, description="活跃渠道数")
     today_messages: int = Field(0, description="今日消息总数")
     today_answers: int = Field(0, description="今日回答总数")
     success_rate: float = Field(0.0, description="响应成功率")

@@ -19,7 +19,6 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.core.resource_manager import resource_manager
 from app.models.agent import Agent
-from app.models.channel import ChannelConfig
 from app.models.knowledge import KnowledgeBase, Document
 from app.models.qa import QAHistory
 from app.models.llm_config import LLMConfig
@@ -197,6 +196,19 @@ async def list_invitations(db: AsyncSession = Depends(get_db)):
     return [await _invitation_out(db, invitation) for invitation in result.scalars()]
 
 
+@router.delete("/invitations/{invitation_id}")
+async def delete_invitation(invitation_id: int, db: AsyncSession = Depends(get_db)):
+    """删除未领取的邀请码；已领取的邀请码须保留记录以维持访问审计。"""
+    invitation = await db.get(Invitation, invitation_id)
+    if invitation is None:
+        raise HTTPException(status_code=404, detail="邀请码不存在")
+    if invitation.claimed_by_user_id:
+        raise HTTPException(status_code=409, detail="邀请码已领取，不能删除；请撤销用户访问权限")
+    await db.delete(invitation)
+    await db.flush()
+    return {"message": "邀请码已删除", "id": invitation_id}
+
+
 @router.post("/invitations/{invitation_id}/revoke", response_model=InvitationOut)
 async def revoke_invitation(invitation_id: int, db: AsyncSession = Depends(get_db)):
     """失效未领取的邀请码；已领取的邀请码请撤销其用户访问权限。"""
@@ -247,14 +259,6 @@ async def get_dashboard_stats(
     total_agents = len(agents)
     running_agents = sum(1 for a in agents if a.status == "running")
 
-    # 渠道统计
-    ch_result = await db.execute(
-        select(ChannelConfig).where(ChannelConfig.is_active == True)  # noqa: E712
-    )
-    channels = ch_result.scalars().all()
-    total_channels = len(channels)
-    active_channels = sum(1 for c in channels if c.is_listening)
-
     # 今日问答统计
     today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
     qa_result = await db.execute(
@@ -279,8 +283,6 @@ async def get_dashboard_stats(
     return DashboardStatsOut(
         total_agents=total_agents,
         running_agents=running_agents,
-        total_channels=total_channels,
-        active_channels=active_channels,
         today_messages=today_messages,
         today_answers=today_answers,
         success_rate=round(success_rate, 1),

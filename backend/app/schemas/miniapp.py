@@ -1,14 +1,22 @@
 """邀请码和小程序 API 的输入输出结构。"""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class InvitationCreate(BaseModel):
     daily_question_limit: int = Field(..., ge=1, le=1000)
     expires_at: Optional[datetime] = None
     note: Optional[str] = Field(None, max_length=500)
+
+    @field_validator("expires_at")
+    @classmethod
+    def normalize_expiry_to_utc_naive(cls, value: Optional[datetime]) -> Optional[datetime]:
+        """SQLite 存储无时区时间，统一把 ISO 8601 的时区时间转为 UTC。"""
+        if value is None or value.tzinfo is None:
+            return value
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
 
 
 class InvitationOut(BaseModel):

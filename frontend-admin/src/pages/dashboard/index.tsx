@@ -24,8 +24,8 @@ interface AgentItem {
   description: string
   avatar: string
   is_active: boolean
+  is_public: boolean
   status: string
-  channel_count: number
   today_messages: number
   today_answers: number
   success_rate: number
@@ -34,8 +34,6 @@ interface AgentItem {
 interface DashboardStats {
   total_agents: number
   running_agents: number
-  total_channels: number
-  active_channels: number
   today_messages: number
   today_answers: number
   success_rate: number
@@ -116,7 +114,7 @@ export default function Dashboard() {
   const deleteAgent = (agent: AgentItem) => {
     Modal.confirm({
       title: '确认删除',
-      content: `确定要删除 Agent "${agent.name}" 吗？关联的渠道配置也会被删除。`,
+      content: `确定要删除 Agent "${agent.name}" 吗？关联的知识库与配置也会被删除。`,
       okText: '删除',
       okType: 'danger',
       cancelText: '取消',
@@ -308,9 +306,9 @@ export default function Dashboard() {
                     <div style={{ marginTop: 12 }}>
                       <Row gutter={8}>
                         <Col span={8}>
-                          <Text type="secondary" style={{ fontSize: 12 }}>监听</Text>
+                          <Text type="secondary" style={{ fontSize: 12 }}>小程序</Text>
                           <br />
-                          <Text strong>{agent.channel_count} 个</Text>
+                          <Text strong>{agent.is_public ? '公开' : '未公开'}</Text>
                         </Col>
                         <Col span={8}>
                           <Text type="secondary" style={{ fontSize: 12 }}>今日回答</Text>

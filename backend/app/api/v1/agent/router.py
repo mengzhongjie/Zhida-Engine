@@ -18,7 +18,6 @@ from app.core.database import get_db
 from app.core.config import settings
 from app.core.sandbox import sandbox_manager
 from app.models.agent import Agent
-from app.models.channel import ChannelConfig
 from app.models.qa import QAHistory
 from app.schemas.agent import (
     AgentCreate,
@@ -62,7 +61,7 @@ async def list_agents(
     """
     获取所有 Agent 列表
 
-    返回每个 Agent 的基本信息 + 统计摘要（渠道数、今日消息数等）。
+    返回每个 Agent 的基本信息和问答统计摘要。
     """
     result = await db.execute(
         select(Agent).order_by(Agent.created_at.desc())
@@ -72,15 +71,6 @@ async def list_agents(
     items = []
     for agent in agents:
         out = _agent_to_out(agent)
-
-        # 统计渠道数
-        ch_result = await db.execute(
-            select(func.count(ChannelConfig.id)).where(
-                ChannelConfig.agent_id == agent.id,
-                ChannelConfig.is_active == True,  # noqa: E712
-            )
-        )
-        out.channel_count = ch_result.scalar() or 0
 
         # 今日消息数
         today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
@@ -149,15 +139,6 @@ async def get_agent(
 
     out = _agent_to_out(agent)
 
-    # 统计渠道数
-    ch_result = await db.execute(
-        select(func.count(ChannelConfig.id)).where(
-            ChannelConfig.agent_id == agent.id,
-            ChannelConfig.is_active == True,  # noqa: E712
-        )
-    )
-    out.channel_count = ch_result.scalar() or 0
-
     # 今日消息数
     today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
     qa_result = await db.execute(
@@ -201,7 +182,7 @@ async def delete_agent(
     """
     删除 Agent
 
-    同时删除关联的渠道配置、LLM 配置等。
+    同时删除关联的知识库、LLM 配置等。
     """
     result = await db.execute(select(Agent).where(Agent.id == agent_id))
     agent = result.scalar_one_or_none()
@@ -224,7 +205,7 @@ async def start_agent(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    启动 Agent —— 开始监听渠道消息
+    启动 Agent —— 准备小程序问答所需的运行环境
 
     启动时自动创建沙箱：
     - 初始化 Agent 独立数据目录（DATA_DIR/agents/{agent_id}/）
@@ -290,7 +271,7 @@ async def stop_agent(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    停止 Agent —— 停止监听所有渠道
+    停止 Agent —— 释放运行资源
 
     停止时自动销毁沙箱：
     - 清理临时文件
@@ -348,15 +329,6 @@ async def get_agent_stats(
     if agent is None:
         raise HTTPException(status_code=404, detail="Agent 不存在")
 
-    # 统计渠道
-    ch_result = await db.execute(
-        select(func.count(ChannelConfig.id)).where(
-            ChannelConfig.agent_id == agent.id,
-            ChannelConfig.is_active == True,  # noqa: E712
-        )
-    )
-    total_channels = ch_result.scalar() or 0
-
     # 今日统计
     today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
     qa_result = await db.execute(
@@ -379,8 +351,6 @@ async def get_agent_stats(
         agent_id=agent.id,
         agent_name=agent.name,
         status=agent.status,
-        total_channels=total_channels,
-        active_channels=total_channels,
         today_messages=today_answers * 2,  # 估算：每条回答对应约 2 条消息
         today_answers=today_answers,
         today_learned=0,

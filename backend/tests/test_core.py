@@ -603,66 +603,11 @@ except Exception as e:
     import traceback; traceback.print_exc()
 
 # ================================================================
-# 测试 11: 渠道适配器（基类 + 工厂）
-# ================================================================
-print("\n" + "=" * 60)
-print("测试 11: 渠道适配器 (base)")
-print("=" * 60)
-
-try:
-    from app.services.channel.base import (
-        ChannelAdapterFactory,
-        UnifiedMessage,
-        SendMessageRequest,
-        MessageType,
-        ChatType,
-    )
-
-    # 适配器工厂
-    factory = ChannelAdapterFactory()
-    supported = factory.get_supported_channels()
-    print(f"  ✅ 支持的渠道: {supported}")
-
-    # 统一消息格式
-    msg = UnifiedMessage(
-        message_id="msg_001",
-        channel_type="wechat",
-        chat_type=ChatType.GROUP,
-        chat_id="group_001",
-        chat_name="测试群",
-        sender_id="user_001",
-        sender_name="张三",
-        content="你好，请问退换货政策是什么？",
-        message_type=MessageType.TEXT,
-        timestamp=1234567890.0,
-    )
-    assert msg.channel_type == "wechat"
-    assert msg.chat_type == ChatType.GROUP
-    assert msg.content
-    print(f"  ✅ 统一消息创建: {msg.channel_type}/{msg.chat_type.value} - {msg.content[:30]}...")
-
-    # 发送消息请求
-    req = SendMessageRequest(
-        chat_id="group_001",
-        chat_type=ChatType.GROUP,
-        content="支持7天无理由退换货。",
-        mention_ids=["user_001"],
-    )
-    assert req.chat_id == "group_001"
-    assert "7天无理由" in req.content
-    print(f"  ✅ 发送消息请求: {req.content[:30]}...")
-
-    print("  ✅ 渠道适配器基类测试通过")
-except Exception as e:
-    print(f"  ❌ 渠道适配器测试失败: {e}")
-    import traceback; traceback.print_exc()
-
-# ================================================================
 # 总结
 # ================================================================
 print("\n" + "=" * 60)
 print("测试总结")
 print("=" * 60)
 print("所有核心模块测试完成！")
-print("测试覆盖: 配置/厂商模板/限流器/降级/Single-Flight/缓存/文档解析/切片/Prompt/Q&A提取/渠道适配器")
-print("未测试（需要外部依赖）: LLM网关/向量化/索引/检索器/重排序/生成器/消息监听器/微信QQ适配器")
+print("测试覆盖: 配置/厂商模板/限流器/降级/Single-Flight/缓存/文档解析/切片/Prompt/Q&A提取")
+print("未测试（需要外部依赖）: LLM网关/向量化/索引/检索器/重排序/生成器")

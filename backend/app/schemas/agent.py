@@ -46,7 +46,6 @@ class AgentOut(BaseModel):
     updated_at: datetime
 
     # 统计信息（非数据库字段，API 层动态填充）
-    channel_count: int = Field(0, description="监听渠道数")
     today_messages: int = Field(0, description="今日消息数")
     today_answers: int = Field(0, description="今日回答数")
     success_rate: float = Field(0.0, description="响应成功率")
@@ -69,8 +68,6 @@ class AgentStatsOut(BaseModel):
     agent_id: int
     agent_name: str
     status: str
-    total_channels: int = 0
-    active_channels: int = 0
     today_messages: int = 0
     today_answers: int = 0
     today_learned: int = 0

@@ -125,6 +125,7 @@ async def init_db():
 async def _run_compatible_migrations(conn):
     migrations = [
         "ALTER TABLE agents ADD COLUMN is_public BOOLEAN NOT NULL DEFAULT 0",
+        "ALTER TABLE miniapp_users ADD COLUMN daily_question_limit INTEGER NOT NULL DEFAULT 0",
     ]
     for sql in migrations:
         try:
@@ -132,6 +133,22 @@ async def _run_compatible_migrations(conn):
         except Exception:
             # 新库已由 create_all 建列；旧库重复执行会报错，均可安全忽略。
             pass
+
+    # 将旧的一对一绑定迁移为领取历史；重复启动可安全执行。
+    try:
+        await conn.execute(text(
+            "INSERT OR IGNORE INTO invitation_claims (invitation_id, user_id, claimed_at) "
+            "SELECT id, claimed_by_user_id, COALESCE(claimed_at, created_at) "
+            "FROM invitations WHERE claimed_by_user_id IS NOT NULL"
+        ))
+        await conn.execute(text(
+            "UPDATE miniapp_users SET daily_question_limit = COALESCE("
+            "(SELECT daily_question_limit FROM invitations WHERE invitations.id = miniapp_users.invitation_id), 0) "
+            "WHERE daily_question_limit = 0"
+        ))
+    except Exception:
+        # 首次建库或旧库尚未创建邀请表时，下一次启动会补齐。
+        pass
 
 
 async def _create_indexes(conn):
@@ -166,6 +183,7 @@ async def _create_indexes(conn):
 
         "CREATE INDEX IF NOT EXISTS idx_miniapp_users_openid ON miniapp_users(openid)",
         "CREATE INDEX IF NOT EXISTS idx_invitations_status_expires ON invitations(status, expires_at)",
+        "CREATE INDEX IF NOT EXISTS idx_invitation_claims_user_time ON invitation_claims(user_id, claimed_at)",
         "CREATE INDEX IF NOT EXISTS idx_miniapp_sessions_user_time ON miniapp_sessions(user_id, updated_at)",
         "CREATE INDEX IF NOT EXISTS idx_admin_sessions_expires ON admin_sessions(expires_at)",
     ]

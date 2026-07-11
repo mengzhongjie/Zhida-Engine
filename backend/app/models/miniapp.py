@@ -12,7 +12,9 @@ class MiniAppUser(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     # OpenID 仅在服务端保存，绝不由客户端提交或返回给普通用户。
     openid = Column(String(128), nullable=False, unique=True, index=True)
+    # 旧版本的首次邀请码，仅用于兼容已有数据；新领取记录见 InvitationClaim。
     invitation_id = Column(Integer, ForeignKey("invitations.id", ondelete="SET NULL"), nullable=True, unique=True)
+    daily_question_limit = Column(Integer, nullable=False, default=0)
     is_active = Column(Boolean, default=True, nullable=False)
     joined_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     revoked_at = Column(DateTime, nullable=True)
@@ -28,9 +30,21 @@ class Invitation(Base):
     expires_at = Column(DateTime, nullable=True)
     note = Column(Text, nullable=True)
     status = Column(String(20), default="active", nullable=False, index=True)  # active/revoked/claimed/expired
+    # 旧版本字段；新领取关系使用 invitation_claims，允许同一用户领取多个邀请码。
     claimed_by_user_id = Column(Integer, ForeignKey("miniapp_users.id", ondelete="SET NULL"), nullable=True, unique=True)
     claimed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class InvitationClaim(Base):
+    """邀请码的不可复用领取记录：一个邀请码只能领取一次，用户可领取多个。"""
+
+    __tablename__ = "invitation_claims"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    invitation_id = Column(Integer, ForeignKey("invitations.id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
+    user_id = Column(Integer, ForeignKey("miniapp_users.id", ondelete="CASCADE"), nullable=False, index=True)
+    claimed_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
 class MiniAppSession(Base):

@@ -20,7 +20,6 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
         "/api/v1/knowledge",
         "/api/v1/config",
         "/api/v1/embedding",
-        "/api/v1/channel",
         "/api/v1/qa",
     )
     PUBLIC_PREFIXES = (

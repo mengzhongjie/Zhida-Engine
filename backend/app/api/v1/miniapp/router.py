@@ -18,7 +18,7 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.models.agent import Agent
 from app.models.knowledge import KnowledgeBase
-from app.models.miniapp import Invitation, MiniAppDailyUsage, MiniAppSession, MiniAppUser
+from app.models.miniapp import Invitation, InvitationClaim, MiniAppDailyUsage, MiniAppSession, MiniAppUser
 from app.models.qa import QAHistory
 from app.schemas.miniapp import (
     InviteClaimRequest,
@@ -96,16 +96,13 @@ async def _get_usage(db: AsyncSession, user_id: int, create: bool = False) -> Mi
 
 
 async def _user_out(db: AsyncSession, user: MiniAppUser) -> MiniAppUserOut:
-    invite = await db.get(Invitation, user.invitation_id) if user.invitation_id else None
-    if invite is None:
-        raise HTTPException(status_code=403, detail="邀请资格无效")
     usage = await _get_usage(db, user.id)
     used = usage.question_count if usage else 0
     return MiniAppUserOut(
         id=user.id,
-        daily_question_limit=invite.daily_question_limit,
+        daily_question_limit=user.daily_question_limit,
         usage_today=used,
-        remaining_today=max(invite.daily_question_limit - used, 0),
+        remaining_today=max(user.daily_question_limit - used, 0),
     )
 
 
@@ -129,31 +126,33 @@ async def claim_invitation(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    """首次登录时用邀请码绑定当前微信 OpenID。"""
+    """领取一次性邀请码；同一 OpenID 可领取新码，最新额度覆盖旧额度。"""
     openid = _validate_gateway_signature(request)
     user_result = await db.execute(select(MiniAppUser).where(MiniAppUser.openid == openid))
     existing_user = user_result.scalar_one_or_none()
-    if existing_user:
-        if not existing_user.is_active:
-            raise HTTPException(status_code=403, detail="邀请资格已被撤销")
-        return await _user_out(db, existing_user)
-
     code = payload.invite_code.strip().upper()
     invite_result = await db.execute(select(Invitation).where(Invitation.code_hash == _code_hash(code)))
     invitation = invite_result.scalar_one_or_none()
     if invitation is None:
         raise HTTPException(status_code=400, detail="邀请码无效")
-    if invitation.status != "active" or invitation.claimed_by_user_id is not None:
+    if invitation.status != "active":
+        raise HTTPException(status_code=400, detail="邀请码已失效或已被领取")
+    claim_result = await db.execute(select(InvitationClaim).where(InvitationClaim.invitation_id == invitation.id))
+    if claim_result.scalar_one_or_none() is not None:
         raise HTTPException(status_code=400, detail="邀请码已失效或已被领取")
     if invitation.expires_at and invitation.expires_at < datetime.utcnow():
         invitation.status = "expired"
         await db.flush()
         raise HTTPException(status_code=400, detail="邀请码已过期")
 
-    user = MiniAppUser(openid=openid, invitation_id=invitation.id)
-    db.add(user)
-    await db.flush()
-    invitation.claimed_by_user_id = user.id
+    user = existing_user or MiniAppUser(openid=openid)
+    if existing_user is None:
+        db.add(user)
+        await db.flush()
+    user.daily_question_limit = invitation.daily_question_limit
+    user.is_active = True
+    user.revoked_at = None
+    db.add(InvitationClaim(invitation_id=invitation.id, user_id=user.id))
     invitation.claimed_at = datetime.utcnow()
     invitation.status = "claimed"
     await db.flush()
@@ -240,11 +239,8 @@ async def ask(
         await db.flush()
         session_id = session.id
 
-    invite = await db.get(Invitation, user.invitation_id)
-    if invite is None or invite.status != "claimed":
-        raise HTTPException(status_code=403, detail="邀请资格无效")
     usage = await _get_usage(db, user.id, create=True)
-    if usage.question_count >= invite.daily_question_limit:
+    if usage.question_count >= user.daily_question_limit:
         raise HTTPException(status_code=429, detail="今日问答次数已用完")
 
     kb_result = await db.execute(
@@ -282,5 +278,5 @@ async def ask(
         "answer": answer.answer,
         "sources": answer.sources,
         "from_cache": answer.is_cache_hit,
-        "remaining_today": invite.daily_question_limit - usage.question_count,
+        "remaining_today": user.daily_question_limit - usage.question_count,
     }

@@ -136,10 +136,6 @@ def create_app():
     from app.api.v1.qa.router import router as qa_router
     app.include_router(qa_router, prefix="/api/v1")
 
-    # 渠道管理
-    from app.api.v1.channel.router import router as channel_router
-    app.include_router(channel_router, prefix="/api/v1")
-
     # 管理后台
     from app.api.v1.admin.router import router as admin_router
     app.include_router(admin_router, prefix="/api/v1")

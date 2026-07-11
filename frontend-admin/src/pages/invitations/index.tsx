@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Button, Card, DatePicker, Form, Input, InputNumber, message, Modal, Popconfirm, Space, Table, Tag, Typography } from 'antd'
-import { PlusOutlined, ReloadOutlined, StopOutlined } from '@ant-design/icons'
+import { DeleteOutlined, PlusOutlined, ReloadOutlined, StopOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { api } from '@/services/api'
 
@@ -47,7 +47,8 @@ export default function Invitations() {
     try {
       const created = await api.post<CreatedInvitation>('/admin/invitations', {
         daily_question_limit: values.daily_question_limit,
-        expires_at: values.expires_at ? values.expires_at.toISOString() : undefined,
+        // 后端 SQLite 使用无时区时间；按管理员在界面选择的本地时间提交。
+        expires_at: values.expires_at ? values.expires_at.format('YYYY-MM-DDTHH:mm:ss') : undefined,
         note: values.note || undefined,
       })
       Modal.success({
@@ -72,6 +73,16 @@ export default function Invitations() {
     }
   }
 
+  const remove = async (record: Invitation) => {
+    try {
+      await api.delete(`/admin/invitations/${record.id}`)
+      message.success('邀请码已删除')
+      load()
+    } catch (err: any) {
+      message.error(err?.response?.data?.detail || '删除失败')
+    }
+  }
+
   const columns = [
     { title: '邀请码', dataIndex: 'code_hint', render: (v: string) => <Text code>******{v}</Text> },
     { title: '状态', dataIndex: 'status', render: (v: Invitation['status']) => <Tag color={{ active: 'green', claimed: 'blue', revoked: 'red', expired: 'default' }[v]}>{({ active: '待领取', claimed: '已领取', revoked: '已撤销', expired: '已过期' }[v])}</Tag> },
@@ -80,11 +91,20 @@ export default function Invitations() {
     { title: '备注', dataIndex: 'note', render: (v: string | null) => v || '-' },
     { title: '领取', dataIndex: 'claimed_at', render: (v: string | null) => v ? dayjs(v).format('YYYY-MM-DD HH:mm') : '-' },
     {
-      title: '操作', key: 'action', render: (_: unknown, r: Invitation) => r.status === 'active' || r.status === 'claimed' ? (
-        <Popconfirm title={r.status === 'claimed' ? '撤销后该用户将无法再使用小程序，确认继续？' : '确认使邀请码失效？'} onConfirm={() => revoke(r, r.status === 'claimed')}>
-          <Button danger type="link" icon={<StopOutlined />}>{r.status === 'claimed' ? '撤销用户' : '失效'}</Button>
-        </Popconfirm>
-      ) : '-'
+      title: '操作', key: 'action', render: (_: unknown, r: Invitation) => (
+        <Space size="small">
+          {(r.status === 'active' || r.status === 'claimed') && (
+            <Popconfirm title={r.status === 'claimed' ? '撤销后该用户将无法再使用小程序，确认继续？' : '确认使邀请码失效？'} onConfirm={() => revoke(r, r.status === 'claimed')}>
+              <Button danger type="link" icon={<StopOutlined />}>{r.status === 'claimed' ? '撤销用户' : '失效'}</Button>
+            </Popconfirm>
+          )}
+          {!r.claimed_by_user_id && (
+            <Popconfirm title="确认永久删除该未领取的邀请码？" onConfirm={() => remove(r)}>
+              <Button danger type="link" icon={<DeleteOutlined />}>删除</Button>
+            </Popconfirm>
+          )}
+        </Space>
+      )
     },
   ]
 
