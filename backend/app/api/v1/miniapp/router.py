@@ -9,6 +9,7 @@ import secrets
 import time
 import uuid
 from datetime import date, datetime
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
@@ -38,7 +39,13 @@ def _code_hash(code: str) -> str:
 
 
 def _validate_gateway_signature(request: Request) -> str:
-    """验证 CloudBase 网关透传的 OpenID，拒绝任意直连调用。"""
+    """验证 CloudBase 网关签名；仅 DEBUG 模式允许固定测试 OpenID 直连。"""
+    dev_openid = request.headers.get("X-Miniapp-Dev-Openid", "").strip()
+    if settings.DEBUG and settings.MINIPROGRAM_DEV_OPENID and hmac.compare_digest(
+        dev_openid, settings.MINIPROGRAM_DEV_OPENID
+    ):
+        return dev_openid
+
     secret = settings.MINIPROGRAM_GATEWAY_SECRET
     if not secret:
         raise HTTPException(status_code=503, detail="小程序网关未配置")
@@ -79,7 +86,7 @@ async def _get_user_or_reject(
     return user
 
 
-async def _get_usage(db: AsyncSession, user_id: int, create: bool = False) -> MiniAppDailyUsage | None:
+async def _get_usage(db: AsyncSession, user_id: int, create: bool = False) -> Optional[MiniAppDailyUsage]:
     today = date.today()
     result = await db.execute(
         select(MiniAppDailyUsage).where(
@@ -250,6 +257,10 @@ async def ask(
     if not knowledge_base_ids:
         raise HTTPException(status_code=409, detail="该 Agent 尚未挂载可用知识库")
 
+    # 查询 Agent 回复模式（用于 RAG 无结果降级策略）
+    agent_result = await db.execute(select(Agent.reply_mode).where(Agent.id == payload.agent_id))
+    agent_mode = agent_result.scalar_one_or_none() or "auto"
+
     # 在真正调用模型前落库计数，确保任何并发请求都不会突破邀请额度。
     usage.question_count += 1
     await db.flush()
@@ -258,6 +269,7 @@ async def ask(
         question=payload.question,
         user_id=user.openid,
         agent_id=payload.agent_id,
+        reply_mode=agent_mode,
     )
     history = QAHistory(
         agent_id=payload.agent_id,

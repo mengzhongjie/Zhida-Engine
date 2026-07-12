@@ -1,12 +1,39 @@
-<view class="page">
-  <block wx:for="{{messages}}" wx:key="index">
-    <view class="card" style="margin-left: {{item.role === 'user' ? '80rpx' : '0'}}; margin-right: {{item.role === 'assistant' ? '80rpx' : '0'}};">
-      <view class="muted">{{item.role === 'user' ? '我' : '助手'}}</view>
-      <view style="white-space: pre-wrap; margin-top: 10rpx;">{{item.content}}</view>
+<view class="chat-page">
+  <!-- 导航栏 -->
+  <view class="nav-bar">
+    <view class="nav-back" bindtap="goBack">
+      <text>‹ 返回</text>
     </view>
-  </block>
-  <view class="card" style="position: sticky; bottom: 16rpx;">
-    <textarea value="{{question}}" bindinput="onInput" placeholder="请输入问题" auto-height maxlength="1000" style="min-height: 80rpx;" />
-    <view class="primary" style="margin-top: 16rpx;" bindtap="ask">发送</view>
+    <text class="nav-title">{{navTitle}}</text>
+    <view class="nav-placeholder"></view>
+  </view>
+
+  <!-- 消息列表 -->
+  <scroll-view class="message-list" scroll-y="true" scroll-into-view="{{scrollToId}}" scroll-with-animation="true">
+    <block wx:for="{{messages}}" wx:key="index">
+      <view class="msg-row {{item.role === 'user' ? 'msg-row-user' : 'msg-row-assistant'}}" id="msg-{{index}}">
+        <view class="msg-avatar {{item.role === 'user' ? 'avatar-user' : 'avatar-assistant'}}">
+          <text>{{item.role === 'user' ? '我' : 'AI'}}</text>
+        </view>
+        <view class="msg-bubble {{item.role === 'user' ? 'bubble-user' : 'bubble-assistant'}}">
+          <text class="msg-content">{{item.content}}</text>
+          <text wx:if="{{item.role === 'assistant' && index === messages.length - 1 && typingIndex < (item.content || '').length}}" class="typing-cursor">|</text>
+        </view>
+      </view>
+    </block>
+    <view wx:if="{{loadingAnswer}}" class="msg-row msg-row-assistant">
+      <view class="msg-avatar avatar-assistant"><text>AI</text></view>
+      <view class="msg-bubble bubble-assistant">
+        <text class="typing-dots">思考中<span class="dot-anim">...</span></text>
+      </view>
+    </view>
+    <!-- 占位让输入框不遮挡 -->
+    <view style="height: 140rpx;"></view>
+  </scroll-view>
+
+  <!-- 底部输入区（fixed） -->
+  <view class="input-area">
+    <textarea class="input-textarea" value="{{question}}" bindinput="onInput" placeholder="输入问题..." maxlength="1000" auto-height />
+    <view class="send-btn {{question.trim() ? 'send-active' : ''}}" bindtap="ask">发送</view>
   </view>
 </view>

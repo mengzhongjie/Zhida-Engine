@@ -11,9 +11,10 @@ import {
 import {
   RobotOutlined, MessageOutlined, CheckCircleOutlined, PlusOutlined,
   PlayCircleOutlined, PauseCircleOutlined, DeleteOutlined, EyeOutlined,
-  DashboardOutlined, ApiOutlined, ReloadOutlined,
+  DashboardOutlined, ApiOutlined,
 } from '@ant-design/icons'
 import { api } from '../../services/api'
+import zhidaLogo from '../../assets/zhida-logo.png'
 
 const { Title, Text } = Typography
 
@@ -291,7 +292,7 @@ export default function Dashboard() {
             >
               <Card.Meta
                 avatar={
-                  <span style={{ fontSize: 32 }}>{agent.avatar || '🤖'}</span>
+                  <img src={zhidaLogo} alt="智答引擎" style={{ width: 40, height: 40, borderRadius: 10, objectFit: 'cover' }} />
                 }
                 title={
                   <Space>

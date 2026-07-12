@@ -142,6 +142,30 @@ async def create_knowledge_base(
     return _kb_to_out(kb)
 
 
+# 精确路径必须在参数化路径 {kb_id} 之前注册，否则 FastAPI 会将
+# "independent" 等字面量匹配为 kb_id 并触发 int 类型解析错误。
+@router.get("/bases/independent", response_model=KnowledgeBaseListOut)
+async def list_independent_knowledge_bases(
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    获取所有独立知识库列表（未挂载到任何 Agent）
+
+    可用于选择要挂载的知识库。
+    """
+    result = await db.execute(
+        select(KnowledgeBase)
+        .where(KnowledgeBase.agent_id.is_(None))
+        .order_by(KnowledgeBase.created_at.desc())
+    )
+    bases = result.scalars().all()
+
+    return KnowledgeBaseListOut(
+        total=len(bases),
+        items=[_kb_to_out(kb) for kb in bases],
+    )
+
+
 @router.get("/bases/{kb_id}", response_model=KnowledgeBaseOut)
 async def get_knowledge_base(
     kb_id: int,
@@ -275,28 +299,6 @@ async def detach_knowledge_base_from_agent(
         message="解绑成功",
         kb_id=kb_id,
         agent_id=None,
-    )
-
-
-@router.get("/bases/independent", response_model=KnowledgeBaseListOut)
-async def list_independent_knowledge_bases(
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    获取所有独立知识库列表（未挂载到任何 Agent）
-
-    可用于选择要挂载的知识库。
-    """
-    result = await db.execute(
-        select(KnowledgeBase)
-        .where(KnowledgeBase.agent_id.is_(None))
-        .order_by(KnowledgeBase.created_at.desc())
-    )
-    bases = result.scalars().all()
-
-    return KnowledgeBaseListOut(
-        total=len(bases),
-        items=[_kb_to_out(kb) for kb in bases],
     )
 
 

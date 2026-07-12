@@ -152,6 +152,15 @@ def create_app():
     # 前端静态文件服务（生产环境：前端构建产物嵌入 .exe）
     # ================================================================
     static_dir = os.path.join(os.path.dirname(__file__), "static")
+    # 健康检查端点（必须在 SPA 通配路由之前注册，避免被拦截）
+    @app.get("/health")
+    async def health_check():
+        return {
+            "status": "ok",
+            "app": settings.APP_NAME,
+            "version": settings.APP_VERSION,
+        }
+
     if os.path.isdir(static_dir) and os.path.exists(os.path.join(static_dir, "index.html")):
         # 挂载静态资源（JS/CSS/图片等）
         app.mount("/assets", StaticFiles(directory=os.path.join(static_dir, "assets")), name="assets")
@@ -165,7 +174,7 @@ def create_app():
             需要先加载 index.html，再由前端路由接管。
             """
             # API 路径不处理（让 FastAPI 路由处理）
-            if full_path.startswith("api/") or full_path == "health":
+            if full_path.startswith("api/"):
                 from fastapi.responses import JSONResponse
                 return JSONResponse({"detail": "Not Found"}, status_code=404)
 
@@ -175,15 +184,6 @@ def create_app():
         logger.info(f"前端静态文件已挂载: {static_dir}")
     else:
         logger.info("未找到前端静态文件，跳过挂载（开发模式请使用 npm run dev）")
-
-    # 健康检查端点
-    @app.get("/health")
-    async def health_check():
-        return {
-            "status": "ok",
-            "app": settings.APP_NAME,
-            "version": settings.APP_VERSION,
-        }
 
     return app
 

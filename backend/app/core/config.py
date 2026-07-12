@@ -13,6 +13,10 @@ from typing import Optional
 from pydantic_settings import BaseSettings
 
 
+# 与启动目录无关，始终读取 backend/.env，便于桌面端和本地小程序联调。
+_BACKEND_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
+
+
 # 获取应用数据目录
 # Windows: C:\Users\<用户名>\AppData\Local\ZhidaEngine\
 # macOS:   ~/Library/Application Support/ZhidaEngine/
@@ -132,6 +136,8 @@ class Settings(BaseSettings):
     # CloudBase 云函数使用此密钥对 OpenID 和时间戳签名；生产环境必须设置。
     MINIPROGRAM_GATEWAY_SECRET: str = ""
     MINIPROGRAM_SIGNATURE_TTL_SECONDS: int = 300
+    # 仅本地联调：必须同时 DEBUG=true，并与小程序中设置的测试 OpenID 完全匹配。
+    MINIPROGRAM_DEV_OPENID: str = ""
     ADMIN_OPENIDS: str = ""  # 逗号分隔的管理员微信 OpenID 白名单
     ADMIN_SESSION_TTL_SECONDS: int = 28800
     ADMIN_AUTH_REQUIRED: bool = False  # 云端部署时设为 true
@@ -188,7 +194,7 @@ class Settings(BaseSettings):
 
     model_config = {
         "env_prefix": "ZHIDA_",
-        "env_file": ".env",
+        "env_file": _BACKEND_ENV_FILE,
         "env_file_encoding": "utf-8",
     }
 

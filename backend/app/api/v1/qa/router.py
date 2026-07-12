@@ -91,6 +91,7 @@ async def ask_question(
         question=request.question,
         user_id=request.user_id,
         agent_id=request.agent_id,
+        reply_mode=agent.reply_mode,
     )
     sources = [
         QASource(

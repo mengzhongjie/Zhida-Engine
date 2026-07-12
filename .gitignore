@@ -59,6 +59,7 @@ installer/
 node_modules/
 frontend-admin/dist/
 frontend-admin/build/
+backend/static/
 .yarn/
 .pnpm/
 

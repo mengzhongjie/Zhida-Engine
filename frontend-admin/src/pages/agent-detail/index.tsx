@@ -10,6 +10,7 @@ import {
   PlusOutlined,
 } from '@ant-design/icons'
 import { api } from '../../services/api'
+import zhidaLogo from '../../assets/zhida-logo.png'
 
 const { Title, Text } = Typography
 
@@ -176,7 +177,8 @@ export default function AgentDetail() {
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 20 }}>
         <Space>
           <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(-1)}>返回</Button>
-          <Title level={3} style={{ margin: 0 }}>{agent.avatar || '🤖'} {agent.name}</Title>
+          <img src={zhidaLogo} alt="智答引擎" style={{ width: 36, height: 36, borderRadius: 9, objectFit: 'cover' }} />
+          <Title level={3} style={{ margin: 0 }}>{agent.name}</Title>
           {statusTag}
         </Space>
         <Button type={agent.status === 'running' ? 'default' : 'primary'} icon={agent.status === 'running' ? <PauseCircleOutlined /> : <PlayCircleOutlined />} onClick={toggleAgent}>

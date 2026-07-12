@@ -8,12 +8,12 @@ import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { Layout, Menu, Typography } from 'antd'
 import {
   DashboardOutlined,
-  RobotOutlined,
   SettingOutlined,
   BookOutlined,
   PlusOutlined,
   TeamOutlined,
 } from '@ant-design/icons'
+import zhidaLogo from '../assets/zhida-logo.png'
 
 const { Sider, Content } = Layout
 const { Text } = Typography
@@ -71,13 +71,13 @@ export default function MainLayout() {
           justifyContent: 'center',
           borderBottom: '1px solid rgba(255,255,255,0.06)',
         }}>
-          <Text strong style={{
-            color: '#1677ff',
-            fontSize: collapsed ? 16 : 20,
-            whiteSpace: 'nowrap',
-          }}>
-            {collapsed ? '智' : '🤖 智答引擎'}
-          </Text>
+          <img
+            src={zhidaLogo}
+            alt="智答引擎"
+            title="智答引擎"
+            style={{ width: collapsed ? 34 : 42, height: collapsed ? 34 : 42, borderRadius: 10, objectFit: 'cover' }}
+          />
+          {!collapsed && <Text strong style={{ color: '#fff', fontSize: 20, marginLeft: 10, whiteSpace: 'nowrap' }}>智答引擎</Text>}
         </div>
 
         {/* 导航菜单 */}

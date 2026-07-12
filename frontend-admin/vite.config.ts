@@ -9,15 +9,6 @@ export default defineConfig({
   build: {
     outDir: '../backend/static',
     emptyOutDir: true,
-    // 代码分割
-    rollupOptions: {
-      output: {
-        manualChunks: {
-          vendor: ['react', 'react-dom', 'react-router-dom'],
-          antd: ['antd', '@ant-design/icons'],
-        },
-      },
-    },
   },
   // 开发服务器代理 API 到后端
   server: {

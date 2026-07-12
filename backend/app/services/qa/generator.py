@@ -80,6 +80,7 @@ class AnswerGenerator:
         user_id: Optional[str] = None,
         agent_id: Optional[int] = None,
         enable_memory: bool = True,
+        reply_mode: str = "auto",
     ) -> AnswerResult:
         """
         生成回答 —— 端到端流程
@@ -142,11 +143,10 @@ class AnswerGenerator:
         if results and settings.ENABLE_RERANK:
             results = await reranker.rerank(question, results, top_k=top_k)
 
-        # 4. 构建上下文
+        # 4. 构建上下文 + RAG 无结果降级策略
         source_info = ""
         if results:
             context = prompt_template.build_context_from_results(results)
-            # 构建来源信息
             source_list = []
             for r in results[:3]:
                 source_list.append({
@@ -160,7 +160,22 @@ class AnswerGenerator:
                 if r.metadata
             )
         else:
-            context = "知识库中暂无相关内容"
+            # 手动模式：直接返回无结果，不调用 LLM
+            if reply_mode == "manual":
+                logger.info(f"RAG 无结果，reply_mode=manual，跳过 LLM")
+                return AnswerResult(
+                    answer="知识库中未找到相关信息，请尝试换个问法或上传相关文档。",
+                    sources=[],
+                    retrieval_time_ms=retrieval_time,
+                    generation_time_ms=0,
+                )
+            # 自动/混合模式：让 LLM 用自身知识回答
+            context = (
+                "知识库中未找到与问题直接相关的内容。\n\n"
+                "请根据自身知识回答，并在开头注明「以下内容基于模型自身知识，可能不完全准确」。\n\n"
+                "如果问题涉及实时信息（如新闻、天气、股价等），且你具备联网能力，请进行联网搜索。"
+            )
+            logger.info(f"RAG 无结果，reply_mode={reply_mode}，允许 LLM 自行回答")
 
         # 5. 构建 Prompt（注入记忆上下文）
         full_context = context + memory_context if memory_context else context

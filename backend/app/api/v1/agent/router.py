@@ -100,7 +100,7 @@ async def create_agent(
     agent = Agent(
         name=request.name,
         description=request.description or "",
-        avatar=request.avatar or "🤖",
+        avatar=request.avatar or "",
         reply_mode=request.reply_mode,
         is_public=request.is_public,
         status="stopped",

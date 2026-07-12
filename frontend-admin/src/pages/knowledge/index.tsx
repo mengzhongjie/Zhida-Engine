@@ -12,7 +12,7 @@ import {
 import {
   DeleteOutlined, FileTextOutlined, FilePdfOutlined,
   FileExcelOutlined, FileWordOutlined, SyncOutlined, InboxOutlined,
-  PlusOutlined, EditOutlined, DatabaseOutlined, SettingOutlined,
+  PlusOutlined, DatabaseOutlined, SettingOutlined,
 } from '@ant-design/icons'
 import type { UploadProps } from 'antd'
 import { api } from '@/services/api'
