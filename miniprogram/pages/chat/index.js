@@ -77,19 +77,21 @@ Page({
     }
     this.setData({ loadingAnswer: false })
     let pos = 0
-    const step = 3  // 每次增加字符数
+    const step = 3
 
     if (this.typingTimer) clearInterval(this.typingTimer)
 
     this.typingTimer = setInterval(() => {
       pos += step
-      if (pos >= fullText.length) {
+      const isFinished = pos >= fullText.length
+      if (isFinished) {
         pos = fullText.length
         clearInterval(this.typingTimer)
         this.typingTimer = null
       }
       const msgs = this.data.messages
       msgs[msgIndex].content = fullText.substring(0, pos)
+      msgs[msgIndex].showCursor = !isFinished
       this.setData({ messages: msgs, typingIndex: pos })
       this.scrollToBottom()
     }, 30)

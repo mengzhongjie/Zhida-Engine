@@ -116,7 +116,7 @@ class Settings(BaseSettings):
     # 所有重功能均有开关，用户根据实际需求自由组合
     ENABLE_SINGLE_FLIGHT: bool = True  # 幂等请求合并
     ENABLE_GRAPH_RETRIEVAL: bool = True  # 图检索增强
-    ENABLE_RERANK: bool = True  # 重排序
+    ENABLE_RERANK: bool = False  # 重排序（需从 HuggingFace 下载模型，默认关闭避免联网阻塞）
     ENABLE_STREAMING: bool = True  # 流式输出
     ENABLE_AUTO_LEARNING: bool = True  # 自动学习群聊知识
     ENABLE_SOURCE_CITATION: bool = True  # 回答后附带消息来源

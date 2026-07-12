@@ -83,8 +83,7 @@ async def ask_question(
         select(KnowledgeBase.id).where(KnowledgeBase.agent_id == request.agent_id, KnowledgeBase.is_active == True)  # noqa: E712
     )
     knowledge_base_ids = [str(kb_id) for kb_id in kb_result.scalars()]
-    if not knowledge_base_ids:
-        raise HTTPException(status_code=409, detail="Agent 尚未挂载可用知识库")
+    # 允许无知识库问答（RAG 降级策略：reply_mode=auto/hybrid 时 LLM 自行回答）
 
     answer = await answer_generator.generate(
         knowledge_base_ids=knowledge_base_ids,

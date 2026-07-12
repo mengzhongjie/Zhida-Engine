@@ -17,7 +17,7 @@
         </view>
         <view class="msg-bubble {{item.role === 'user' ? 'bubble-user' : 'bubble-assistant'}}">
           <text class="msg-content">{{item.content}}</text>
-          <text wx:if="{{item.role === 'assistant' && index === messages.length - 1 && typingIndex < (item.content || '').length}}" class="typing-cursor">|</text>
+          <text wx:if="{{item.showCursor}}" class="typing-cursor">|</text>
         </view>
       </view>
     </block>
@@ -33,7 +33,7 @@
 
   <!-- 底部输入区（fixed） -->
   <view class="input-area">
-    <textarea class="input-textarea" value="{{question}}" bindinput="onInput" placeholder="输入问题..." maxlength="1000" auto-height />
-    <view class="send-btn {{question.trim() ? 'send-active' : ''}}" bindtap="ask">发送</view>
+    <textarea class="input-textarea" value="{{question}}" bindinput="onInput" placeholder="输入问题..." maxlength="1000" auto-height bindconfirm="ask" confirm-type="send" />
+    <view class="send-btn {{question ? 'send-active' : ''}}" bindtap="ask">发送</view>
   </view>
 </view>

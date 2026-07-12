@@ -35,15 +35,21 @@ class Reranker:
         self._model_name = "BAAI/bge-reranker-v2-m3"  # 轻量级中文重排序模型
 
     async def _load_model(self):
-        """延迟加载重排序模型"""
+        """延迟加载重排序模型（带超时，避免网络问题阻塞调用）"""
         if self._model is not None:
             return
 
         try:
             from sentence_transformers import CrossEncoder
             logger.info(f"正在加载重排序模型: {self._model_name}")
-            self._model = CrossEncoder(self._model_name)
+            self._model = await asyncio.wait_for(
+                asyncio.to_thread(CrossEncoder, self._model_name),
+                timeout=30,
+            )
             logger.info("重排序模型加载完成")
+        except asyncio.TimeoutError:
+            logger.warning(f"重排序模型加载超时（30s），将使用规则排序")
+            self._model = None
         except Exception as e:
             logger.warning(f"重排序模型加载失败: {e}，将使用规则排序")
             self._model = None
