@@ -277,7 +277,8 @@ async def get_dashboard_stats(
     today_qas = qa_result.scalars().all()
     today_answers = len(today_qas)
     today_messages = today_answers * 2  # 估算
-    success_count = sum(1 for qa in today_qas if qa.confidence and qa.confidence > 0.5)
+    # QAHistory 模型没有 confidence 字段，以有回答记录视为成功
+    success_count = sum(1 for qa in today_qas if qa.answer)
     success_rate = (success_count / today_answers * 100) if today_answers > 0 else 0.0
 
     # 知识库统计
