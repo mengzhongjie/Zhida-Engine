@@ -72,15 +72,19 @@ async def list_agents(
     for agent in agents:
         out = _agent_to_out(agent)
 
-        # 今日消息数
+        # 今日统计
         today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
         qa_result = await db.execute(
-            select(func.count(QAHistory.id)).where(
+            select(QAHistory).where(
                 QAHistory.agent_id == agent.id,
                 QAHistory.created_at >= today_start,
             )
         )
-        out.today_answers = qa_result.scalar() or 0
+        today_qas = qa_result.scalars().all()
+        out.today_answers = len(today_qas)
+        out.today_messages = len(today_qas) * 2  # 估算
+        real_answers = sum(1 for qa in today_qas if qa.answer and not qa.is_degraded)
+        out.success_rate = round((real_answers / len(today_qas) * 100) if today_qas else 0.0, 1)
 
         items.append(out)
 
@@ -139,15 +143,19 @@ async def get_agent(
 
     out = _agent_to_out(agent)
 
-    # 今日消息数
+    # 今日统计
     today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
     qa_result = await db.execute(
-        select(func.count(QAHistory.id)).where(
+        select(QAHistory).where(
             QAHistory.agent_id == agent.id,
             QAHistory.created_at >= today_start,
         )
     )
-    out.today_answers = qa_result.scalar() or 0
+    today_qas = qa_result.scalars().all()
+    out.today_answers = len(today_qas)
+    out.today_messages = len(today_qas) * 2
+    real_answers = sum(1 for qa in today_qas if qa.answer and not qa.is_degraded)
+    out.success_rate = round((real_answers / len(today_qas) * 100) if today_qas else 0.0, 1)
 
     return out
 
@@ -340,10 +348,10 @@ async def get_agent_stats(
     today_qas = qa_result.scalars().all()
 
     today_answers = len(today_qas)
-    success_count = sum(1 for qa in today_qas if qa.confidence and qa.confidence > 0.5)
-    success_rate = (success_count / today_answers * 100) if today_answers > 0 else 0.0
+    real_answers = sum(1 for qa in today_qas if qa.answer and not qa.is_degraded)
+    success_rate = (real_answers / today_answers * 100) if today_answers > 0 else 0.0
     avg_response_time = (
-        sum(qa.response_time_ms for qa in today_qas) / today_answers
+        sum(qa.total_time_ms or 0 for qa in today_qas) / today_answers
         if today_answers > 0 else 0.0
     )
 

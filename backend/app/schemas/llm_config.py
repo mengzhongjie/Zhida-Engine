@@ -47,7 +47,7 @@ class LLMConfigCreate(BaseModel):
     base_url: Optional[str] = Field(None, description="API 基础地址（自定义时必填）")
     model_name: str = Field(..., description="模型名称")
     api_key: Optional[str] = Field(None, description="API Key")
-    is_primary: bool = Field(False, description="是否为主模型")
+    is_primary: bool = Field(True, description="是否为主模型")
     is_fallback: bool = Field(False, description="是否为降级模型")
     extra_config: Optional[str] = Field(None, description="额外配置（JSON 格式）")
     # API 限流配置

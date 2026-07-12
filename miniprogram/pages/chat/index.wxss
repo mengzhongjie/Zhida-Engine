@@ -85,14 +85,24 @@
   border-bottom-right-radius: 4rpx;
 }
 .bubble-assistant {
-  background: #ffffff;
-  color: #333;
+  background: linear-gradient(145deg, #ffffff, #f5f9ff);
+  color: #17233d;
   border-bottom-left-radius: 4rpx;
-  box-shadow: 0 2rpx 8rpx rgba(0,0,0,0.06);
+  box-shadow: 0 8rpx 24rpx rgba(22, 104, 220, 0.10);
 }
 .msg-content {
   white-space: pre-wrap;
 }
+.md-heading { font-weight: 700; color: #0f4cbf; margin: 12rpx 0; }
+.md-heading-1 { font-size: 36rpx; }
+.md-heading-2 { font-size: 32rpx; }
+.md-heading-3 { font-size: 30rpx; }
+.md-list { display: flex; line-height: 1.7; margin: 6rpx 0; }
+.md-list-mark { color: #1687f2; font-weight: 700; margin-right: 12rpx; }
+.md-code { margin: 14rpx 0; padding: 16rpx; border-radius: 12rpx; background: #101c35; color: #c8f7ff; font-family: monospace; font-size: 24rpx; white-space: pre-wrap; line-height: 1.6; }
+.source-list { margin-top: 18rpx; padding-top: 14rpx; border-top: 1rpx solid #dbe8fa; }
+.source-label { display: block; color: #7890ae; font-size: 22rpx; margin-bottom: 8rpx; }
+.source-chip { display: inline-block; max-width: 100%; margin: 0 8rpx 8rpx 0; padding: 5rpx 12rpx; border-radius: 999rpx; background: #e8f3ff; color: #1468c4; font-size: 22rpx; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* 打字光标 */
 .typing-cursor {

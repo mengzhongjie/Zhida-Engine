@@ -13,7 +13,9 @@ html, body, #root {
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  color: #eaf3ff;
+  background: #07111f;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -39,11 +41,66 @@ body {
 
 /* Ant Design 暗色主题微调 */
 .ant-layout {
-  background: #0f0f1a !important;
+  background:
+    radial-gradient(circle at 85% 5%, rgba(17, 141, 255, .16), transparent 28%),
+    radial-gradient(circle at 10% 100%, rgba(40, 225, 194, .10), transparent 24%),
+    #07111f !important;
 }
 
 .ant-card {
-  border-radius: 8px;
+  border: 1px solid rgba(119, 177, 255, .16) !important;
+  border-radius: 16px !important;
+  background: linear-gradient(145deg, rgba(18, 38, 65, .92), rgba(9, 22, 40, .94)) !important;
+  box-shadow: 0 16px 36px rgba(0, 0, 0, .18);
+  backdrop-filter: blur(12px);
+}
+
+.ant-card:hover {
+  border-color: rgba(83, 173, 255, .42) !important;
+}
+
+.ant-card .ant-card-head {
+  border-bottom-color: rgba(119, 177, 255, .14) !important;
+  color: #f1f7ff !important;
+}
+
+.ant-typography, .ant-statistic-title, .ant-descriptions-item-label, .ant-table, .ant-tabs-tab {
+  color: #d8e8fb !important;
+}
+
+.ant-statistic-content, .ant-descriptions-item-content {
+  color: #f5f9ff !important;
+}
+
+.ant-table-wrapper .ant-table {
+  background: transparent !important;
+}
+
+.ant-table-thead > tr > th {
+  background: rgba(36, 81, 130, .30) !important;
+  color: #a9cef7 !important;
+  border-bottom-color: rgba(119, 177, 255, .14) !important;
+}
+
+.ant-table-tbody > tr > td {
+  background: transparent !important;
+  border-bottom-color: rgba(119, 177, 255, .10) !important;
+}
+
+.ant-table-tbody > tr:hover > td {
+  background: rgba(38, 124, 216, .14) !important;
+}
+
+.ant-btn-primary {
+  border: 0 !important;
+  background: linear-gradient(135deg, #1677ff, #23b7ff) !important;
+  box-shadow: 0 8px 20px rgba(22, 119, 255, .26);
+}
+
+.ant-input, .ant-input-affix-wrapper, .ant-select-selector, .ant-input-number {
+  background: rgba(5, 17, 32, .65) !important;
+  border-color: rgba(119, 177, 255, .22) !important;
+  color: #ecf6ff !important;
 }
 
 /* 状态指示灯 */

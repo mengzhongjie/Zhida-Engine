@@ -117,6 +117,9 @@ async def ask_question(
             channel="web",
             chat_id=request.chat_id,
             user_id=request.user_id,
+            input_tokens=answer.input_tokens,
+            output_tokens=answer.output_tokens,
+            is_degraded=answer.degraded,
         )
         db.add(qa_record)
         await db.flush()

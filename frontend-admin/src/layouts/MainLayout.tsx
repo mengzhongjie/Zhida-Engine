@@ -8,9 +8,9 @@ import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { Layout, Menu, Typography } from 'antd'
 import {
   DashboardOutlined,
+  RobotOutlined,
   SettingOutlined,
   BookOutlined,
-  PlusOutlined,
   TeamOutlined,
 } from '@ant-design/icons'
 import zhidaLogo from '../assets/zhida-logo.png'
@@ -24,6 +24,11 @@ const menuItems = [
     key: '/',
     icon: <DashboardOutlined />,
     label: '仪表盘',
+  },
+  {
+    key: '/agents',
+    icon: <RobotOutlined />,
+    label: 'Agent 管理',
   },
   {
     key: '/knowledge',
@@ -59,8 +64,8 @@ export default function MainLayout() {
         onCollapse={setCollapsed}
         width={220}
         style={{
-          background: '#141428',
-          borderRight: '1px solid rgba(255,255,255,0.06)',
+          background: 'linear-gradient(180deg, #0a1b32, #07111f)',
+          borderRight: '1px solid rgba(119,177,255,0.16)',
         }}
       >
         {/* Logo 区域 */}
@@ -69,7 +74,7 @@ export default function MainLayout() {
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          borderBottom: '1px solid rgba(255,255,255,0.06)',
+          borderBottom: '1px solid rgba(119,177,255,0.16)',
         }}>
           <img
             src={zhidaLogo}
@@ -94,28 +99,13 @@ export default function MainLayout() {
           }}
         />
 
-        {/* 底部新建按钮 */}
-        <div style={{ padding: '12px 16px' }}>
-          <Menu
-            theme="dark"
-            mode="inline"
-            selectable={false}
-            items={[{
-              key: '/agents/new',
-              icon: <PlusOutlined />,
-              label: collapsed ? '' : '新建 Agent',
-            }]}
-            onClick={({ key }) => navigate(key)}
-            style={{ background: 'transparent', borderRight: 'none' }}
-          />
-        </div>
       </Sider>
 
       {/* 内容区 */}
       <Content style={{
         overflow: 'auto',
         padding: 24,
-        background: '#0f0f1a',
+        background: 'transparent',
       }}>
         <Outlet />
       </Content>

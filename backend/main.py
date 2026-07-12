@@ -72,8 +72,10 @@ def create_app():
         # 初始化向量化配置（从数据库加载）
         from app.core.database import async_session_factory
         from app.api.v1.embedding.router import init_embedding_config
+        from app.api.v1.admin.router import load_web_search_config
         async with async_session_factory() as db:
             await init_embedding_config(db)
+            await load_web_search_config(db)
 
         # 后台异步加载重模块（不阻塞启动）
         import asyncio

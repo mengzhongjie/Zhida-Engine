@@ -34,6 +34,15 @@ class ModelClient:
     provider: Optional[ProviderTemplate] = None
 
 
+@dataclass
+class ChatResult:
+    """LLM 调用结果"""
+    text: str
+    model_used: str = ""
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+
 class LLMGateway:
     """
     LLM 统一网关 —— 管理所有已配置的 LLM 模型
@@ -85,6 +94,14 @@ class LLMGateway:
             elif config.is_fallback:
                 self._fallback_clients.append(client)
 
+        # 兼容早期配置：用户完成连接测试但未勾选“主模型”时，实际问答仍应使用唯一的启用配置。
+        if self._primary_client is None and configs:
+            self._primary_client = self._build_client(configs[0])
+            logger.warning(
+                f"Agent {agent_id}: 没有标记主模型，临时使用 {configs[0].model_name}；"
+                "请在设置中将其设为主模型"
+            )
+
         # 如果没有配置主模型，记录警告
         if self._primary_client is None:
             logger.warning(f"Agent {agent_id}: 未配置主模型，LLM 功能不可用")
@@ -96,7 +113,7 @@ class LLMGateway:
         )
 
     async def _load_configs(self, agent_id: Optional[int]) -> list[LLMConfig]:
-        """从数据库加载 LLM 配置"""
+        """从数据库加载 LLM 配置；Agent 未单独配置时回退全局主模型。"""
         from app.core.database import async_session_factory
         from sqlalchemy import select
 
@@ -105,12 +122,17 @@ class LLMGateway:
                 LLMConfig.is_active == True,  # noqa: E712
             )
             if agent_id is not None:
-                query = query.where(LLMConfig.agent_id == agent_id)
-            else:
-                query = query.where(LLMConfig.agent_id.is_(None))
+                agent_result = await session.execute(
+                    query.where(LLMConfig.agent_id == agent_id).order_by(LLMConfig.is_primary.desc())
+                )
+                agent_configs = list(agent_result.scalars().all())
+                if agent_configs:
+                    return agent_configs
+                logger.info(f"Agent {agent_id} 未配置专属模型，回退使用全局 LLM 配置")
 
-            query = query.order_by(LLMConfig.is_primary.desc())
-            result = await session.execute(query)
+            result = await session.execute(
+                query.where(LLMConfig.agent_id.is_(None)).order_by(LLMConfig.is_primary.desc())
+            )
             return list(result.scalars().all())
 
     def _build_client(self, config: LLMConfig) -> ModelClient:
@@ -144,7 +166,7 @@ class LLMGateway:
         system_prompt: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: int = 2048,
-    ) -> str:
+    ) -> ChatResult:
         """
         发送对话请求 —— 主模型失败时自动降级
 
@@ -155,7 +177,7 @@ class LLMGateway:
             max_tokens: 最大 token 数
 
         Returns:
-            模型回复文本
+            ChatResult 包含回复文本和 token 用量
 
         Raises:
             RuntimeError: 所有模型（主模型 + 降级模型）都不可用时
@@ -229,8 +251,8 @@ class LLMGateway:
         messages: list[dict],
         temperature: float,
         max_tokens: int,
-    ) -> str:
-        """调用单个模型（非流式）"""
+    ) -> ChatResult:
+        """调用单个模型（非流式），返回包含 token 用量的结果"""
         start_time = time.time()
 
         response = await model_client.client.chat.completions.create(
@@ -242,13 +264,19 @@ class LLMGateway:
 
         elapsed = (time.time() - start_time) * 1000
         content = response.choices[0].message.content or ""
+        usage = response.usage
 
         logger.debug(
             f"模型 {model_client.config.model_name} 响应: "
             f"{len(content)} 字符, {elapsed:.0f}ms"
         )
 
-        return content
+        return ChatResult(
+            text=content,
+            model_used=model_client.config.model_name,
+            input_tokens=usage.prompt_tokens if usage else 0,
+            output_tokens=usage.completion_tokens if usage else 0,
+        )
 
     async def _call_model_stream(
         self,

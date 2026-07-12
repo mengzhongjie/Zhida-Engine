@@ -28,6 +28,7 @@ from app.services.cache.idempotency import single_flight
 from app.services.cache.degradation import degradation_manager
 from app.services.knowledge.indexer import IndexResult
 from app.services.memory.memory_service import memory_service
+from app.services.qa.web_search import web_search_service
 
 
 @dataclass
@@ -40,6 +41,8 @@ class AnswerResult:
     generation_time_ms: float = 0.0
     model_used: str = ""
     degraded: bool = False  # 是否使用了降级策略
+    input_tokens: int = 0   # 请求 Token 数
+    output_tokens: int = 0  # 回答 Token 数
 
 
 class AnswerGenerator:
@@ -67,6 +70,28 @@ class AnswerGenerator:
         # LLMGateway 当前维护可变的 Agent 配置。低成本单机部署下串行化模型调用，
         # 能避免两个不同 Agent 的并发请求串用模型或 API Key。
         self._llm_lock = asyncio.Lock()
+
+    @staticmethod
+    def _unique_sources(results: list[IndexResult], limit: int = 3) -> list[dict]:
+        """按文档与章节去重，避免同一文档的相邻切片重复显示为多个来源。"""
+        sources: list[dict] = []
+        seen: set[tuple[str, str]] = set()
+        for result in results:
+            metadata = result.metadata or {}
+            filename = str(metadata.get("filename", "未知来源"))
+            section = str(metadata.get("section_title", ""))
+            key = (filename, section)
+            if key in seen:
+                continue
+            seen.add(key)
+            sources.append({
+                "text": result.text[:100],
+                "score": result.score,
+                "metadata": metadata,
+            })
+            if len(sources) >= limit:
+                break
+        return sources
 
     async def generate(
         self,
@@ -145,19 +170,13 @@ class AnswerGenerator:
 
         # 4. 构建上下文 + RAG 无结果降级策略
         source_info = ""
+        supplemental_sources: list[dict] = []
         if results:
             context = prompt_template.build_context_from_results(results)
-            source_list = []
-            for r in results[:3]:
-                source_list.append({
-                    "text": r.text[:100],
-                    "score": r.score,
-                    "metadata": r.metadata,
-                })
+            source_list = self._unique_sources(results)
             source_info = "; ".join(
-                r.metadata.get("section_title", r.metadata.get("filename", "未知来源"))
-                for r in results[:3]
-                if r.metadata
+                item["metadata"].get("section_title") or item["metadata"].get("filename", "未知来源")
+                for item in source_list
             )
         else:
             # 手动模式：直接返回无结果，不调用 LLM
@@ -170,12 +189,25 @@ class AnswerGenerator:
                     generation_time_ms=0,
                 )
             # 自动/混合模式：让 LLM 用自身知识回答
-            context = (
-                "知识库中未找到与问题直接相关的内容。\n\n"
-                "请根据自身知识回答，并在开头注明「以下内容基于模型自身知识，可能不完全准确」。\n\n"
-                "如果问题涉及实时信息（如新闻、天气、股价等），且你具备联网能力，请进行联网搜索。"
-            )
-            logger.info(f"RAG 无结果，reply_mode={reply_mode}，允许 LLM 自行回答")
+            web_results = await web_search_service.search(question)
+            if web_results:
+                context = "【网络检索结果】\n" + "\n\n".join(
+                    f"---\n来源：{item.title}\n链接：{item.url}\n内容：{item.content[:1200]}"
+                    for item in web_results
+                )
+                supplemental_sources = [{
+                    "text": item.content[:100],
+                    "score": 0.0,
+                    "metadata": {"filename": item.title, "url": item.url, "source_type": "web"},
+                } for item in web_results]
+                source_info = "; ".join(item.title for item in web_results)
+                logger.info(f"RAG 无结果，已补充 {len(web_results)} 条网络检索结果")
+            else:
+                context = (
+                    "知识库中未找到与问题直接相关的内容。\n\n"
+                    "请根据自身知识回答，并在开头注明「以下内容基于模型自身知识，可能不完全准确」。"
+                )
+                logger.info(f"RAG 无结果，reply_mode={reply_mode}，允许 LLM 自行回答")
 
         # 5. 构建 Prompt（注入记忆上下文）
         full_context = context + memory_context if memory_context else context
@@ -193,29 +225,34 @@ class AnswerGenerator:
         generation_start = time.time()
 
         # 6. LLM 生成（含降级）
+        input_tokens = 0
+        output_tokens = 0
         try:
             async with self._llm_lock:
                 await llm_gateway.initialize(agent_id)
-                answer = await llm_gateway.chat(
+                chat_result = await llm_gateway.chat(
                     prompt=prompt,
                     temperature=temperature,
                     max_tokens=2048,
                 )
-                model_used = llm_gateway.primary_model_name or "unknown"
+                answer_text = chat_result.text
+                model_used = chat_result.model_used or llm_gateway.primary_model_name or "unknown"
+                input_tokens = chat_result.input_tokens
+                output_tokens = chat_result.output_tokens
             degraded = False
         except Exception as e:
             logger.warning(f"LLM 生成失败: {e}")
 
             # 如果配置了自动 @，返回 @ 消息
             if auto_mention_users and settings.ENABLE_AUTO_MENTION:
-                answer = prompt_template.build_auto_mention(
+                answer_text = prompt_template.build_auto_mention(
                     question=question,
                     mention_users=auto_mention_users,
                     source_info=source_info,
                     failed_attempt=True,
                 )
             else:
-                answer = degradation_manager.get_llm_offline_response()
+                answer_text = degradation_manager.get_llm_offline_response()
 
             model_used = "offline"
             degraded = True
@@ -224,7 +261,7 @@ class AnswerGenerator:
 
         # 7. 写入缓存
         if not degraded:
-            await query_cache.set(cache_query, answer)
+            await query_cache.set(cache_query, answer_text)
 
         # 8. 写入记忆（异步，不阻塞返回）
         if enable_memory and memory_service.is_available and not degraded:
@@ -233,7 +270,7 @@ class AnswerGenerator:
                 agent_str = str(agent_id) if agent_id else None
                 messages = [
                     {"role": "user", "content": question},
-                    {"role": "assistant", "content": answer},
+                    {"role": "assistant", "content": answer_text},
                 ]
                 # 后台任务写入记忆，不阻塞主流程
                 asyncio.create_task(
@@ -255,15 +292,14 @@ class AnswerGenerator:
         )
 
         return AnswerResult(
-            answer=answer,
-            sources=[
-                {"text": r.text[:100], "score": r.score, "metadata": r.metadata}
-                for r in results[:3]
-            ] if results else [],
+            answer=answer_text,
+            sources=self._unique_sources(results) if results else supplemental_sources,
             retrieval_time_ms=retrieval_time,
             generation_time_ms=generation_time,
             model_used=model_used,
             degraded=degraded,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
         )
 
     async def generate_stream(

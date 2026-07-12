@@ -280,6 +280,9 @@ async def ask(
         chat_id=session_id,
         user_id=user.openid,
         is_cache_hit=answer.is_cache_hit,
+        input_tokens=answer.input_tokens,
+        output_tokens=answer.output_tokens,
+        is_degraded=answer.degraded,
     )
     db.add(history)
     await db.flush()

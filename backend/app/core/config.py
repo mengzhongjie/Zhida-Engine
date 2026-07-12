@@ -142,6 +142,12 @@ class Settings(BaseSettings):
     ADMIN_SESSION_TTL_SECONDS: int = 28800
     ADMIN_AUTH_REQUIRED: bool = False  # 云端部署时设为 true
 
+    # ---- 网络检索（RAG 未命中时的补充能力）----
+    WEB_SEARCH_ENABLED: bool = False
+    WEB_SEARCH_PROVIDER: str = "tavily"
+    WEB_SEARCH_API_KEY: str = ""
+    WEB_SEARCH_MAX_RESULTS: int = 3
+
     # ---- 限流配置 ----
     RATE_LIMIT_TOKEN_RATE: float = 10.0  # 令牌桶速率（令牌/秒）
     RATE_LIMIT_TOKEN_CAPACITY: int = 3  # 令牌桶容量

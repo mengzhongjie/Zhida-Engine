@@ -4,13 +4,13 @@
 提供仪表盘统计、模块开关、缓存管理等接口。
 """
 
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, time as dt_time
 import hashlib
 import secrets
 import hmac
 import time
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from loguru import logger
@@ -23,6 +23,7 @@ from app.models.knowledge import KnowledgeBase, Document
 from app.models.qa import QAHistory
 from app.models.llm_config import LLMConfig
 from app.models.miniapp import AdminLoginTicket, AdminSession, Invitation, InvitationClaim, MiniAppDailyUsage, MiniAppUser
+from app.models.web_search_config import WebSearchConfig
 from app.schemas.admin import (
     DashboardStatsOut,
     ModuleSwitchesOut,
@@ -36,6 +37,8 @@ from app.schemas.admin import (
     MemoryAddIn,
     MemoryUpdateIn,
     MemoryStatsOut,
+    WebSearchConfigOut,
+    WebSearchConfigUpdate,
 )
 from app.schemas.miniapp import (
     AdminTicketConfirm,
@@ -48,8 +51,44 @@ from app.schemas.miniapp import (
 from app.services.cache.query_cache import query_cache
 from app.services.cache.rate_limiter import rate_limiter
 from app.services.memory.memory_service import memory_service
+from app.core.security import encrypt_api_key, decrypt_api_key, mask_api_key
 
 router = APIRouter(prefix="/admin", tags=["管理后台"])
+
+
+async def load_web_search_config(db: AsyncSession) -> None:
+    config = await db.get(WebSearchConfig, 1)
+    if config is None:
+        return
+    settings.WEB_SEARCH_ENABLED = config.enabled
+    settings.WEB_SEARCH_PROVIDER = config.provider
+    settings.WEB_SEARCH_MAX_RESULTS = config.max_results
+    settings.WEB_SEARCH_API_KEY = decrypt_api_key(config.api_key)
+
+
+@router.get("/web-search", response_model=WebSearchConfigOut)
+async def get_web_search_config(db: AsyncSession = Depends(get_db)):
+    config = await db.get(WebSearchConfig, 1)
+    if config is None:
+        return WebSearchConfigOut(enabled=settings.WEB_SEARCH_ENABLED, provider=settings.WEB_SEARCH_PROVIDER, max_results=settings.WEB_SEARCH_MAX_RESULTS)
+    return WebSearchConfigOut(enabled=config.enabled, provider=config.provider, api_key=mask_api_key(decrypt_api_key(config.api_key)), max_results=config.max_results)
+
+
+@router.put("/web-search", response_model=WebSearchConfigOut)
+async def update_web_search_config(request: WebSearchConfigUpdate, db: AsyncSession = Depends(get_db)):
+    config = await db.get(WebSearchConfig, 1)
+    if config is None:
+        config = WebSearchConfig(id=1)
+        db.add(config)
+    config.enabled, config.provider, config.max_results = request.enabled, request.provider, request.max_results
+    if request.api_key:
+        config.api_key = encrypt_api_key(request.api_key)
+    settings.WEB_SEARCH_ENABLED = config.enabled
+    settings.WEB_SEARCH_PROVIDER = config.provider
+    settings.WEB_SEARCH_MAX_RESULTS = config.max_results
+    settings.WEB_SEARCH_API_KEY = decrypt_api_key(config.api_key)
+    await db.flush()
+    return await get_web_search_config(db)
 
 
 def _invite_code_hash(code: str) -> str:
@@ -255,6 +294,8 @@ async def revoke_invited_user(invitation_id: int, db: AsyncSession = Depends(get
 
 @router.get("/dashboard", response_model=DashboardStatsOut)
 async def get_dashboard_stats(
+    start_date: Optional[date] = Query(None),
+    end_date: Optional[date] = Query(None),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -269,17 +310,22 @@ async def get_dashboard_stats(
     total_agents = len(agents)
     running_agents = sum(1 for a in agents if a.status == "running")
 
-    # 今日问答统计
-    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    # 今日问答统计（含 Token 用量）
+    range_start = datetime.combine(start_date or date.today(), dt_time.min)
+    range_end = datetime.combine((end_date or date.today()) + timedelta(days=1), dt_time.min)
     qa_result = await db.execute(
-        select(QAHistory).where(QAHistory.created_at >= today_start)
+        select(QAHistory).where(QAHistory.created_at >= range_start, QAHistory.created_at < range_end)
     )
     today_qas = qa_result.scalars().all()
     today_answers = len(today_qas)
     today_messages = today_answers * 2  # 估算
-    # QAHistory 模型没有 confidence 字段，以有回答记录视为成功
-    success_count = sum(1 for qa in today_qas if qa.answer)
-    success_rate = (success_count / today_answers * 100) if today_answers > 0 else 0.0
+    # 成功率：非降级回答 / 总回答（is_degraded=False 且 is_cache_hit=False 为真实成功）
+    real_answers = sum(1 for qa in today_qas if qa.answer and not qa.is_degraded)
+    success_rate = (real_answers / today_answers * 100) if today_answers > 0 else 0.0
+    # Token 统计
+    today_input_tokens = sum(qa.input_tokens or 0 for qa in today_qas)
+    today_output_tokens = sum(qa.output_tokens or 0 for qa in today_qas)
+    web_search_count = sum(1 for qa in today_qas if "source_type': 'web'" in (qa.sources or ""))
 
     # 知识库统计
     doc_result = await db.execute(select(Document))
@@ -300,7 +346,23 @@ async def get_dashboard_stats(
         total_knowledge_chunks=total_chunks,
         total_documents=total_documents,
         cache_hit_rate=round(cache_hit_rate, 1),
+        today_input_tokens=today_input_tokens,
+        today_output_tokens=today_output_tokens,
+        web_search_count=web_search_count,
     )
+
+
+@router.get("/model-health")
+async def get_model_health(db: AsyncSession = Depends(get_db)):
+    configs = (await db.execute(select(LLMConfig).where(LLMConfig.is_active == True).order_by(LLMConfig.is_primary.desc()))).scalars().all()  # noqa: E712
+    primary = next((item for item in configs if item.is_primary), configs[0] if configs else None)
+    llm = {"name": primary.model_name if primary else "未配置", "available": False, "message": "未配置"}
+    if primary:
+        from app.services.llm.gateway import llm_gateway
+        test = await llm_gateway.test_connection(primary.base_url, decrypt_api_key(primary.api_key), primary.model_name)
+        llm.update(available=test["success"], message=test["message"])
+    from app.services.knowledge.embedder import embedding_service
+    return {"llm": llm, "embedding": {"name": embedding_service.model_name, "available": await embedding_service.is_ready()}}
 
 
 # ============================================================

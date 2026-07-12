@@ -111,6 +111,7 @@ async def init_db():
         import app.models.agent             # noqa: F401
         import app.models.embedding_config  # noqa: F401
         import app.models.miniapp           # noqa: F401
+        import app.models.web_search_config # noqa: F401
 
         # 创建所有表
         await conn.run_sync(Base.metadata.create_all)
@@ -126,6 +127,9 @@ async def _run_compatible_migrations(conn):
     migrations = [
         "ALTER TABLE agents ADD COLUMN is_public BOOLEAN NOT NULL DEFAULT 0",
         "ALTER TABLE miniapp_users ADD COLUMN daily_question_limit INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE qa_history ADD COLUMN input_tokens INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE qa_history ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE qa_history ADD COLUMN is_degraded BOOLEAN NOT NULL DEFAULT 0",
     ]
     for sql in migrations:
         try:

@@ -44,6 +44,12 @@ class QAHistory(Base):
     # 缓存命中
     is_cache_hit = Column(Boolean, default=False, comment="是否命中缓存")
 
+    # Token 用量
+    input_tokens = Column(Integer, default=0, comment="请求 Token 数")
+    output_tokens = Column(Integer, default=0, comment="回答 Token 数")
+    # 降级标记（LLM 调用失败/离线模式）
+    is_degraded = Column(Boolean, default=False, comment="是否使用了降级策略")
+
     created_at = Column(DateTime, default=datetime.utcnow)
 
 

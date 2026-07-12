@@ -9,7 +9,7 @@ import {
   Row, Col, Card, Statistic, Button, Tag, Space, Modal, message, Typography, Progress, Tooltip,
 } from 'antd'
 import {
-  RobotOutlined, MessageOutlined, CheckCircleOutlined, PlusOutlined,
+  RobotOutlined, MessageOutlined, CheckCircleOutlined,
   PlayCircleOutlined, PauseCircleOutlined, DeleteOutlined, EyeOutlined,
   DashboardOutlined, ApiOutlined,
 } from '@ant-design/icons'
@@ -149,8 +149,8 @@ export default function Dashboard() {
           <DashboardOutlined style={{ marginRight: 8 }} />
           仪表盘
         </Title>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/agents/new')}>
-          新建 Agent
+        <Button type="primary" icon={<RobotOutlined />} onClick={() => navigate('/agents')}>
+          进入 Agent 管理
         </Button>
       </div>
 

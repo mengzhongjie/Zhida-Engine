@@ -92,6 +92,8 @@ interface EmbeddingConfig {
   current_dimension: number
 }
 
+interface WebSearchConfig { enabled: boolean; provider: string; api_key: string; max_results: number }
+
 export default function SettingsPage() {
   const [templates, setTemplates] = useState<{
     cloud: ProviderTemplate[]
@@ -115,6 +117,17 @@ export default function SettingsPage() {
   }>({ cloud: [], custom: [] })
   const [embeddingAvailableModels, setEmbeddingAvailableModels] = useState<EmbeddingProviderModel[]>([])
   const [embeddingProviderId, setEmbeddingProviderId] = useState<string>('')
+  const [webSearchConfig, setWebSearchConfig] = useState<WebSearchConfig | null>(null)
+  const [webSearchForm] = Form.useForm()
+  const [webSearchSaving, setWebSearchSaving] = useState(false)
+
+  const loadWebSearchConfig = useCallback(async () => {
+    try {
+      const config = await api.get<WebSearchConfig>('/admin/web-search')
+      setWebSearchConfig(config)
+      webSearchForm.setFieldsValue({ ...config, api_key: '' })
+    } catch { message.error('加载网络检索配置失败') }
+  }, [webSearchForm])
 
   const loadData = useCallback(async () => {
     setLoading(true)
@@ -165,9 +178,25 @@ export default function SettingsPage() {
     loadData()
   }, [loadData])
 
+  useEffect(() => { loadWebSearchConfig() }, [loadWebSearchConfig])
+
+  const saveWebSearchConfig = async () => {
+    const values = await webSearchForm.validateFields()
+    setWebSearchSaving(true)
+    try {
+      const saved = await api.put<WebSearchConfig>('/admin/web-search', values)
+      setWebSearchConfig(saved)
+      webSearchForm.setFieldsValue({ ...saved, api_key: '' })
+      message.success('网络检索配置已保存')
+    } catch (error: any) { message.error(error?.response?.data?.detail || '保存失败') }
+    finally { setWebSearchSaving(false) }
+  }
+
   const handleCreate = () => {
     setEditingId(null)
     form.resetFields()
+    // 单模型场景是默认使用方式，避免“测试成功但没有主模型可调用”。
+    form.setFieldsValue({ is_primary: true, is_fallback: false, is_active: true })
     setModalVisible(true)
   }
 
@@ -664,6 +693,22 @@ export default function SettingsPage() {
             </Form>
           </Card>
         </Space>
+      ),
+    },
+    {
+      key: 'web-search',
+      label: '网络检索',
+      children: (
+        <Card title="网络检索补充">
+          <Alert type="info" showIcon style={{ marginBottom: 20 }} message="仅在知识库未命中时调用网络检索；网络内容会作为补充来源，不会覆盖知识库结论。" />
+          <Form form={webSearchForm} layout="vertical" style={{ maxWidth: 620 }}>
+            <Form.Item name="enabled" label="启用网络检索" valuePropName="checked"><Switch /></Form.Item>
+            <Form.Item name="provider" label="搜索服务" rules={[{ required: true }]}><Select options={[{ label: 'Tavily（推荐，有免费额度）', value: 'tavily' }]} /></Form.Item>
+            <Form.Item name="api_key" label="Tavily API Key" extra={webSearchConfig?.api_key ? `当前：${webSearchConfig.api_key}；留空表示不修改` : '在 Tavily 控制台创建 API Key'}><Input.Password autoComplete="new-password" placeholder="tvly-..." /></Form.Item>
+            <Form.Item name="max_results" label="每次最多返回结果" rules={[{ required: true }]}><InputNumber min={1} max={10} style={{ width: '100%' }} /></Form.Item>
+            <Button type="primary" onClick={saveWebSearchConfig} loading={webSearchSaving}>保存网络检索配置</Button>
+          </Form>
+        </Card>
       ),
     },
     {

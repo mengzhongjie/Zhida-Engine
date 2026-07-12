@@ -16,8 +16,24 @@
           <text>{{item.role === 'user' ? '我' : 'AI'}}</text>
         </view>
         <view class="msg-bubble {{item.role === 'user' ? 'bubble-user' : 'bubble-assistant'}}">
-          <text class="msg-content">{{item.content}}</text>
+          <block wx:if="{{item.role === 'assistant' && item.blocks && item.blocks.length}}">
+            <block wx:for="{{item.blocks}}" wx:key="index" wx:for-item="block">
+              <view wx:if="{{block.type === 'heading1'}}" class="md-heading md-heading-1">{{block.text}}</view>
+              <view wx:elif="{{block.type === 'heading2'}}" class="md-heading md-heading-2">{{block.text}}</view>
+              <view wx:elif="{{block.type === 'heading3'}}" class="md-heading md-heading-3">{{block.text}}</view>
+              <view wx:elif="{{block.type === 'list'}}" class="md-list"><text class="md-list-mark">{{block.ordered ? '▸' : '•'}}</text><text>{{block.text}}</text></view>
+              <view wx:elif="{{block.type === 'code'}}" class="md-code">{{block.text}}</view>
+              <text wx:else class="msg-content">{{block.text}}</text>
+            </block>
+          </block>
+          <text wx:else class="msg-content">{{item.content}}</text>
           <text wx:if="{{item.showCursor}}" class="typing-cursor">|</text>
+          <view wx:if="{{item.sources && item.sources.length}}" class="source-list">
+            <text class="source-label">参考来源</text>
+            <block wx:for="{{item.sources}}" wx:key="index" wx:for-item="source">
+              <view class="source-chip">{{source.metadata.section_title || source.metadata.filename || '知识库片段'}}</view>
+            </block>
+          </view>
         </view>
       </view>
     </block>

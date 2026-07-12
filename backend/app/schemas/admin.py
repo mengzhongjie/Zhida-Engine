@@ -19,10 +19,27 @@ class DashboardStatsOut(BaseModel):
     running_agents: int = Field(0, description="运行中 Agent 数")
     today_messages: int = Field(0, description="今日消息总数")
     today_answers: int = Field(0, description="今日回答总数")
-    success_rate: float = Field(0.0, description="响应成功率")
+    success_rate: float = Field(0.0, description="响应成功率（非降级回答占比）")
     total_knowledge_chunks: int = Field(0, description="知识库切片总数")
     total_documents: int = Field(0, description="文档总数")
     cache_hit_rate: float = Field(0.0, description="缓存命中率")
+    today_input_tokens: int = Field(0, description="今日请求 Token 数")
+    today_output_tokens: int = Field(0, description="今日回答 Token 数")
+    web_search_count: int = Field(0, description="网络检索次数")
+
+
+class WebSearchConfigOut(BaseModel):
+    enabled: bool = False
+    provider: str = "tavily"
+    api_key: str = ""
+    max_results: int = 3
+
+
+class WebSearchConfigUpdate(BaseModel):
+    enabled: bool
+    provider: str = "tavily"
+    api_key: Optional[str] = None
+    max_results: int = Field(3, ge=1, le=10)
 
 
 # ============================================================
