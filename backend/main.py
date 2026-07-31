@@ -77,6 +77,10 @@ def create_app():
             await init_embedding_config(db)
             await load_web_search_config(db)
 
+        # 单机后台任务没有外部队列；启动时恢复上次中断的文档处理。
+        from app.services.knowledge.document_processor import resume_unfinished_document_processing
+        await resume_unfinished_document_processing()
+
         # 后台异步加载重模块（不阻塞启动）
         import asyncio
         asyncio.create_task(_lazy_load_heavy_modules())

@@ -703,8 +703,8 @@ export default function SettingsPage() {
           <Alert type="info" showIcon style={{ marginBottom: 20 }} message="仅在知识库未命中时调用网络检索；网络内容会作为补充来源，不会覆盖知识库结论。" />
           <Form form={webSearchForm} layout="vertical" style={{ maxWidth: 620 }}>
             <Form.Item name="enabled" label="启用网络检索" valuePropName="checked"><Switch /></Form.Item>
-            <Form.Item name="provider" label="搜索服务" rules={[{ required: true }]}><Select options={[{ label: 'Tavily（推荐，有免费额度）', value: 'tavily' }]} /></Form.Item>
-            <Form.Item name="api_key" label="Tavily API Key" extra={webSearchConfig?.api_key ? `当前：${webSearchConfig.api_key}；留空表示不修改` : '在 Tavily 控制台创建 API Key'}><Input.Password autoComplete="new-password" placeholder="tvly-..." /></Form.Item>
+            <Form.Item name="provider" label="搜索服务" rules={[{ required: true }]}><Select options={[{ label: 'Tavily（推荐，有免费额度）', value: 'tavily' }, { label: 'Bing RSS（实验，无需密钥）', value: 'bing_rss' }]} /></Form.Item>
+            <Form.Item name="api_key" label="搜索 API Key" extra={webSearchConfig?.api_key ? `当前：${webSearchConfig.api_key}；留空表示不修改` : 'Tavily 需要 API Key；Bing RSS 实验模式无需填写'}><Input.Password autoComplete="new-password" placeholder="Bing RSS 可留空" /></Form.Item>
             <Form.Item name="max_results" label="每次最多返回结果" rules={[{ required: true }]}><InputNumber min={1} max={10} style={{ width: '100%' }} /></Form.Item>
             <Button type="primary" onClick={saveWebSearchConfig} loading={webSearchSaving}>保存网络检索配置</Button>
           </Form>

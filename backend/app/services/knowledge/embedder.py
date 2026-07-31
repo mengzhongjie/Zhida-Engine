@@ -8,12 +8,22 @@
 """
 
 import time
-from typing import Optional, Protocol
 from abc import ABC, abstractmethod
 
 from loguru import logger
 
 from app.core.config import settings
+
+
+BGE_QUERY_INSTRUCTION = "为这个句子生成表示以用于检索相关文章："
+
+
+def _prepare_query(model_name: str, query: str) -> str:
+    """BGE v1.5 仅查询侧需要检索指令，文档侧保持原文。"""
+    normalized_name = model_name.strip().lower()
+    if normalized_name == "baai/bge-large-zh-v1.5" or normalized_name.endswith("/bge-large-zh-v1.5"):
+        return f"{BGE_QUERY_INSTRUCTION}{query}"
+    return query
 
 
 class EmbeddingService(ABC):
@@ -32,6 +42,10 @@ class EmbeddingService(ABC):
     async def embed_texts(self, texts: list[str]) -> list[list[float]]:
         """批量将文本转为向量"""
         ...
+
+    async def embed_query(self, query: str) -> list[float]:
+        """向量化查询；特定模型可覆盖查询侧预处理。"""
+        return await self.embed_text(_prepare_query(self.model_name, query))
 
     @abstractmethod
     async def is_ready(self) -> bool:
@@ -135,6 +149,9 @@ class LocalBGEEmbedding(EmbeddingService):
         logger.debug(f"批量向量化: {len(texts)} 条文本, 耗时 {elapsed:.2f}s")
 
         return embeddings.tolist()
+
+    async def embed_query(self, query: str) -> list[float]:
+        return await self.embed_text(_prepare_query(self.model_name, query))
 
 
 class CloudEmbedding(EmbeddingService):
@@ -244,6 +261,9 @@ class CloudEmbedding(EmbeddingService):
                 f"model={self._model_name}, count={len(texts)}, error={error_msg}"
             )
             raise ValueError(f"向量化请求失败: {self._format_error(e)}") from e
+
+    async def embed_query(self, query: str) -> list[float]:
+        return await self.embed_text(_prepare_query(self.model_name, query))
 
     def _format_error(self, e: Exception) -> str:
         """
@@ -368,6 +388,10 @@ class EmbeddingServiceProxy(EmbeddingService):
     async def embed_texts(self, texts: list[str]) -> list[list[float]]:
         """批量将文本转为向量"""
         return await self._impl.embed_texts(texts)
+
+    async def embed_query(self, query: str) -> list[float]:
+        """使用当前实现的查询向量化规则。"""
+        return await self._impl.embed_query(query)
 
     async def is_ready(self) -> bool:
         """检查服务是否就绪"""

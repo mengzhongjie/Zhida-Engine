@@ -14,6 +14,8 @@
 import time
 import asyncio
 import hashlib
+import re
+from pathlib import Path
 from typing import Optional, AsyncIterator
 from dataclasses import dataclass, field
 
@@ -94,6 +96,112 @@ class AnswerGenerator:
                 break
         return sources
 
+    @staticmethod
+    def _needs_web_supplement(question: str, results: list[IndexResult]) -> bool:
+        """本地有命中时，身份/别名类问题仍需要联网核实缺失字段。"""
+        if not results:
+            return True
+        return bool(re.search(
+            r"(是谁|什么人|哪位|全名|真名|真实姓名|本名|又名|别名|身份)",
+            question,
+            flags=re.IGNORECASE,
+        ))
+
+    @staticmethod
+    def _build_web_search_query(question: str, results: list[IndexResult]) -> str:
+        """从本地上下文提取消歧词，避免直接搜索 Tim 等歧义短词。"""
+        if not results:
+            return question
+
+        identity_match = re.match(
+            r"\s*(.+?)(?:是谁|是什么人|是哪位|的?全名|的?真名|的?真实姓名|的?本名|的?身份)",
+            question,
+            flags=re.IGNORECASE,
+        )
+        exact_terms: list[str] = []
+        subject = ""
+        if identity_match:
+            subject = identity_match.group(1).strip(" ，。？！?：:")
+            if subject:
+                exact_terms.append(f'"{subject}"')
+
+        ranked_results = list(results)
+        if subject:
+            lowered_subject = subject.lower()
+
+            def subject_relevance(result: IndexResult) -> tuple[int, float]:
+                filename = str((result.metadata or {}).get("filename", "")).lower()
+                text = result.text.lower()
+                if re.fullmatch(r"[a-z0-9_-]+", lowered_subject):
+                    exact_count = len(re.findall(
+                        rf"(?<![a-z0-9_-]){re.escape(lowered_subject)}(?![a-z0-9_-])",
+                        text,
+                    ))
+                else:
+                    exact_count = text.count(lowered_subject)
+                return (
+                    (10 if lowered_subject in filename else 0) + exact_count,
+                    result.score,
+                )
+
+            ranked_results.sort(key=subject_relevance, reverse=True)
+
+        context = "\n".join(result.text[:800] for result in ranked_results[:2])
+
+        # 常见机构复合名容易被分词拆开，保留原始短语用于实体消歧。
+        exact_terms.extend(
+            f'"{term}"'
+            for term in re.findall(r"影视[\u4e00-\u9fff]{2}", context)
+            if f'"{term}"' not in exact_terms
+        )
+        candidates: list[str] = []
+        try:
+            import jieba.analyse
+            candidates.extend(jieba.analyse.extract_tags(context, topK=12))
+        except Exception:
+            pass
+
+        for result in ranked_results[:2]:
+            filename = str((result.metadata or {}).get("filename", ""))
+            if filename:
+                candidates.append(Path(filename).stem)
+
+        # 连续英文名通常是有效消歧词，例如 Tim、Links。
+        candidates.extend(re.findall(r"\b[A-Za-z][A-Za-z0-9_-]{1,30}\b", context))
+        ignored = {"一个", "这个", "就是", "如果", "可以", "没有", "关于", "正文", "前言"}
+        selected: list[str] = []
+        for candidate in candidates:
+            term = candidate.strip()
+            if len(term) < 2 or term.lower() in ignored or term in selected:
+                continue
+            selected.append(term)
+            if len(selected) >= 10:
+                break
+        if len(exact_terms) >= 2:
+            return " ".join(exact_terms[:3])[:240]
+        if exact_terms:
+            return " ".join([*exact_terms, *selected[:4]])[:240]
+        return " ".join([question, *selected])[:240]
+
+    @staticmethod
+    def _web_context_and_sources(web_results) -> tuple[str, list[dict]]:
+        if not web_results:
+            return "", []
+        context = "【网络补充资料】\n" + "\n\n".join(
+            f"---\n来源：{item.title}\n链接：{item.url}\n内容：{item.content[:1200]}"
+            for item in web_results
+        )
+        sources = [{
+            "text": item.content[:100],
+            "score": 0.0,
+            "metadata": {
+                "filename": item.title,
+                "url": item.url,
+                "source_type": "web",
+            },
+        } for item in web_results]
+        return context, sources
+
     async def generate(
         self,
         knowledge_base_ids: list[str],
@@ -131,7 +239,7 @@ class AnswerGenerator:
         )
         history_key = hashlib.sha256(history_text.encode("utf-8")).hexdigest()[:16] if history_text else "none"
         cache_query = (
-            f"agent:{agent_id if agent_id is not None else 'global'}:"
+            f"pipeline:web-gap-v4:agent:{agent_id if agent_id is not None else 'global'}:"
             f"user:{user_id or 'shared'}:history:{history_key}:{question}"
         )
         if cached := await query_cache.get(cache_query):
@@ -188,6 +296,20 @@ class AnswerGenerator:
                 item["metadata"].get("section_title") or item["metadata"].get("filename", "未知来源")
                 for item in source_list
             )
+
+            if self._needs_web_supplement(question, results):
+                search_query = self._build_web_search_query(question, results)
+                web_results = await web_search_service.search(search_query)
+                web_context, supplemental_sources = self._web_context_and_sources(web_results)
+                if web_context:
+                    context = f"{context}\n\n{web_context}"
+                    source_info = "; ".join([
+                        source_info,
+                        *(item.title for item in web_results),
+                    ]).strip("; ")
+                    logger.info(
+                        f"本地答案存在身份信息缺口，联网补充 {len(web_results)} 条: {search_query}"
+                    )
         else:
             # 手动模式：直接返回无结果，不调用 LLM
             if reply_mode == "manual":
@@ -201,15 +323,7 @@ class AnswerGenerator:
             # 自动/混合模式：让 LLM 用自身知识回答
             web_results = await web_search_service.search(question)
             if web_results:
-                context = "【网络检索结果】\n" + "\n\n".join(
-                    f"---\n来源：{item.title}\n链接：{item.url}\n内容：{item.content[:1200]}"
-                    for item in web_results
-                )
-                supplemental_sources = [{
-                    "text": item.content[:100],
-                    "score": 0.0,
-                    "metadata": {"filename": item.title, "url": item.url, "source_type": "web"},
-                } for item in web_results]
+                context, supplemental_sources = self._web_context_and_sources(web_results)
                 source_info = "; ".join(item.title for item in web_results)
                 logger.info(f"RAG 无结果，已补充 {len(web_results)} 条网络检索结果")
             else:
@@ -309,7 +423,7 @@ class AnswerGenerator:
 
         return AnswerResult(
             answer=answer_text,
-            sources=self._unique_sources(results) if results else supplemental_sources,
+            sources=(self._unique_sources(results) if results else []) + supplemental_sources,
             retrieval_time_ms=retrieval_time,
             generation_time_ms=generation_time,
             model_used=model_used,
@@ -359,8 +473,14 @@ class AnswerGenerator:
         if results and settings.ENABLE_RERANK:
             results = await reranker.rerank(question, results, top_k=top_k)
 
-        # 构建上下文
+        # 构建上下文；无结果或身份类问题信息不完整时补充网络资料。
         context = prompt_template.build_context_from_results(results) if results else "知识库中暂无相关内容"
+        if self._needs_web_supplement(question, results):
+            search_query = self._build_web_search_query(question, results)
+            web_results = await web_search_service.search(search_query)
+            web_context, _ = self._web_context_and_sources(web_results)
+            if web_context:
+                context = f"{context}\n\n{web_context}"
 
         # 构建 Prompt
         prompt = prompt_template.build_qa_prompt(

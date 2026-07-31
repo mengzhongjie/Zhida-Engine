@@ -4,14 +4,15 @@
 提供文档上传、文档列表、知识库优化、统计等接口。
 """
 
+import hashlib
 import os
-import time
 from datetime import datetime
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, Form
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
+from sqlalchemy.exc import IntegrityError
 from loguru import logger
 
 from app.core.config import settings
@@ -28,11 +29,9 @@ from app.schemas.knowledge import (
     OptimizeRequest,
     OptimizeResponse,
 )
-from app.services.knowledge.parser import document_parser
-from app.services.knowledge.splitter import text_splitter
 from app.services.knowledge.indexer import index_manager
+from app.services.knowledge.document_processor import schedule_document_processing
 from app.services.validation.precheck import upload_prechecker
-from app.services.validation.quality_checker import parse_quality_checker
 
 router = APIRouter(prefix="/knowledge", tags=["知识库管理"])
 
@@ -41,7 +40,7 @@ router = APIRouter(prefix="/knowledge", tags=["知识库管理"])
 # 辅助函数
 # ============================================================
 
-def _document_to_out(doc: Document) -> DocumentOut:
+def _document_to_out(doc: Document, duplicate: bool = False) -> DocumentOut:
     """将数据库模型转为输出 Schema"""
     return DocumentOut(
         id=doc.id,
@@ -55,7 +54,47 @@ def _document_to_out(doc: Document) -> DocumentOut:
         parse_time_ms=doc.parse_time_ms,
         created_at=doc.created_at,
         updated_at=doc.updated_at,
+        duplicate=duplicate,
     )
+
+
+async def _find_duplicate_document(
+    db: AsyncSession,
+    knowledge_base_id: int,
+    filename: str,
+    file_size: int,
+    content_hash: str,
+) -> Optional[Document]:
+    """按 SHA-256 去重，并在用户再次上传时逐步补齐旧文档的哈希。"""
+    result = await db.execute(
+        select(Document).where(
+            Document.knowledge_base_id == knowledge_base_id,
+            Document.content_hash == content_hash,
+        ).order_by(Document.id.desc())
+    )
+    if document := result.scalar_one_or_none():
+        return document
+
+    # 兼容升级前没有 content_hash 的文档。仅比较同名同大小候选，避免扫描全部文件。
+    candidates = (await db.execute(
+        select(Document).where(
+            Document.knowledge_base_id == knowledge_base_id,
+            Document.content_hash.is_(None),
+            Document.filename == filename,
+            Document.file_size == file_size,
+        ).order_by(Document.id.desc())
+    )).scalars().all()
+    for document in candidates:
+        try:
+            with open(document.file_path, "rb") as existing_file:
+                existing_hash = hashlib.file_digest(existing_file, "sha256").hexdigest()
+        except OSError:
+            continue
+        if existing_hash == content_hash:
+            document.content_hash = content_hash
+            await db.flush()
+            return document
+    return None
 
 
 def _kb_to_out(kb: KnowledgeBase) -> KnowledgeBaseOut:
@@ -339,7 +378,7 @@ async def upload_document_to_kb(
     上传文档到指定知识库
 
     支持 PDF、Word、Excel、TXT 格式，文件大小限制 100MB。
-    上传后自动解析并向量化入库。
+    文件接收后立即返回，解析与向量化由轻量后台任务完成。
     """
     # 查找知识库
     kb_result = await db.execute(
@@ -388,10 +427,27 @@ async def upload_document_to_kb(
     else:
         safe_filename = upload_prechecker.sanitize_filename(file.filename or "untitled")
 
+    content_hash = hashlib.sha256(content).hexdigest()
+    duplicate = await _find_duplicate_document(
+        db, kb.id, safe_filename, len(content), content_hash
+    )
+    if duplicate:
+        # 同文件此前处理失败时允许重新提交，仍复用原记录与文件，避免重复索引。
+        if duplicate.status == "error":
+            duplicate.status = "pending"
+            duplicate.error_message = None
+            duplicate.chunk_count = 0
+            duplicate.parent_chunk_count = 0
+            await db.commit()
+            await db.refresh(duplicate)
+            schedule_document_processing(duplicate.id)
+        return _document_to_out(duplicate, duplicate=True)
+
     # 保存文件到本地
     upload_dir = os.path.join(settings.DATA_DIR, "uploads", f"kb_{kb_id}")
     os.makedirs(upload_dir, exist_ok=True)
-    file_path = os.path.join(upload_dir, safe_filename)
+    # 使用哈希前缀，避免同名不同内容的上传覆盖已有原文件。
+    file_path = os.path.join(upload_dir, f"{content_hash[:16]}_{safe_filename}")
     with open(file_path, "wb") as f:
         f.write(content)
 
@@ -402,103 +458,24 @@ async def upload_document_to_kb(
         file_type=file_ext.replace(".", ""),
         file_path=file_path,
         file_size=len(content),
+        content_hash=content_hash,
         status="pending",
     )
     db.add(doc)
-    await db.flush()
-
-    # 异步解析文档（同步执行，后续可改为后台任务）
     try:
-        doc.status = "processing"
         await db.flush()
-
-        start_time = time.time()
-        parse_result = await document_parser.parse(file_path)
-        elapsed_ms = (time.time() - start_time) * 1000
-
-        # ---- 解析结果质量检查 ----
-        if settings.ENABLE_FORMAT_CHECK:
-            quality = parse_quality_checker.check(parse_result)
-            # 质量评分过低且自动拒绝启用→标记失败
-            if not quality.passed:
-                logger.warning(
-                    f"文档 {file.filename} 质量检查未通过: "
-                    f"score={quality.score}, errors={quality.errors}"
-                )
-                doc.status = "error"
-                doc.error_message = (
-                    parse_result.error_message
-                    or f"文档质量检查未通过 (评分 {quality.score}/100): "
-                    + "; ".join(quality.errors or quality.warnings)
-                )
-                doc.parse_time_ms = elapsed_ms
-                await _sync_kb_statistics(db, kb)
-                await db.flush()
-                await db.refresh(doc)
-                return _document_to_out(doc)
-
-        # 降级和部分解析仍可能得到可用于知识库的正文；仅在没有正文或明确失败时中止。
-        if parse_result.status.value == "failed" or not parse_result.text.strip():
-            doc.status = "error"
-            doc.error_message = parse_result.error_message or "解析失败"
-            doc.parse_time_ms = elapsed_ms
-            await _sync_kb_statistics(db, kb)
-            await db.flush()
-            await db.refresh(doc)
-            return _document_to_out(doc)
-
-        # ---- 父子块切分 ----
-        parent_chunks, child_chunks = text_splitter.split_parent_child(
-            text=parse_result.text,
-            child_size=200,
-            child_overlap=50,
-            parent_multiplier=4,
-            metadata={
-                "document_id": doc.id,
-                "filename": doc.filename,
-                "file_type": doc.file_type,
-            },
+        await db.commit()
+    except IntegrityError:
+        # 并发上传相同文件时，唯一索引会保留先创建的记录。
+        await db.rollback()
+        duplicate = await _find_duplicate_document(
+            db, kb.id, safe_filename, len(content), content_hash
         )
-
-        doc.chunk_count = len(child_chunks)
-        doc.parent_chunk_count = len(parent_chunks)
-        doc.status = "completed"
-        doc.parse_time_ms = elapsed_ms
-
-        # ---- 保存父块到数据库 ----
-        for i, parent in enumerate(parent_chunks):
-            import json
-            chunk = DocumentChunk(
-                document_id=doc.id,
-                knowledge_base_id=kb.id,
-                parent_id=parent.metadata.get("parent_id", f"parent_{i}"),
-                content=parent.text,
-                content_type=parent.metadata.get("content_type", "text"),
-                code_lang=parent.metadata.get("code_lang"),
-                chunk_index=parent.chunk_index,
-                metadata_json=json.dumps(parent.metadata, ensure_ascii=False),
-            )
-            db.add(chunk)
-
-        # ---- 子块向量化索引到 ChromaDB ----
-        if child_chunks:
-            try:
-                indexed = await index_manager.index_chunks(str(kb.id), child_chunks)
-                logger.info(f"文档 {doc.id} 索引完成: {indexed} 个子块")
-            except Exception as index_err:
-                logger.warning(f"文档 {doc.id} 向量化索引失败: {index_err}")
-                # 索引失败不影响文档状态，在 error_message 中提示
-                doc.error_message = f"文档解析成功，但向量化索引失败：{str(index_err)[:200]}"
-
-    except Exception as e:
-        doc.status = "error"
-        doc.error_message = str(e)
-        logger.exception(f"文档处理失败: {e}")
-
-    await _sync_kb_statistics(db, kb)
-    await db.flush()
+        if duplicate:
+            return _document_to_out(duplicate, duplicate=True)
+        raise
     await db.refresh(doc)
-
+    schedule_document_processing(doc.id)
     return _document_to_out(doc)
 
 
@@ -532,7 +509,7 @@ async def delete_document(
 
     # 删除向量索引
     try:
-        await index_manager.remove_document_chunks(str(kb_id), str(document_id))
+        await index_manager.remove_document_chunks(str(kb_id), document_id)
     except Exception as e:
         logger.warning(f"删除向量索引失败: {e}")
 

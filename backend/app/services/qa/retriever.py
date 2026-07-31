@@ -16,14 +16,15 @@
 
 import re
 import json
+import math
 from typing import Optional
-from collections import Counter
 
 import jieba
 from loguru import logger
 
 from app.core.config import settings
 from app.services.knowledge.indexer import index_manager, IndexResult
+from app.services.knowledge.text_normalizer import normalize_text
 
 
 class KeywordRetriever:
@@ -52,6 +53,7 @@ class KeywordRetriever:
             "have", "has", "had", "do", "does", "did", "will", "would", "could",
             "should", "may", "might", "can", "shall", "to", "of", "in", "for",
             "on", "with", "at", "by", "from", "as", "into", "through", "during",
+            "如何", "怎么", "什么", "哪些", "是否", "可以", "进行", "对应",
         }
 
     def extract_keywords(self, query: str, top_k: int = 10) -> list[str]:
@@ -100,20 +102,42 @@ class KeywordRetriever:
         if not keywords:
             return []
 
+        normalized_keywords = [keyword.lower() for keyword in keywords]
+        document_frequency = {
+            keyword: sum(
+                1 for chunk in chunks
+                if keyword in normalize_text(chunk.get("text", "")).lower()
+            )
+            for keyword in normalized_keywords
+        }
+        corpus_size = max(len(chunks), 1)
+        adjacent_phrases = [
+            normalized_keywords[index] + normalized_keywords[index + 1]
+            for index in range(len(normalized_keywords) - 1)
+        ]
         scored = []
         for chunk in chunks:
-            text = chunk.get("text", "")
-            score = 0
+            text = normalize_text(chunk.get("text", ""))
+            lowered_text = text.lower()
+            score = 0.0
 
-            # 关键词匹配计分
-            for kw in keywords:
-                # 精确匹配加分
-                count = text.lower().count(kw.lower())
-                score += count * 2
+            # 稀有术语比“开发”等高频词更有区分度，避免词频量纲压过 RAG 等专名。
+            for keyword in normalized_keywords:
+                if re.fullmatch(r"[a-z0-9_-]+", keyword):
+                    count = len(re.findall(
+                        rf"(?<![a-z0-9_-]){re.escape(keyword)}(?![a-z0-9_-])",
+                        lowered_text,
+                    ))
+                else:
+                    count = lowered_text.count(keyword)
+                if not count:
+                    continue
+                idf = math.log((corpus_size + 1) / (document_frequency[keyword] + 1)) + 1.0
+                length_boost = 1.0 + min(len(keyword), 8) / 8.0
+                score += idf * length_boost * (1.0 + math.log1p(count))
 
-                # 部分匹配（如"退换货"匹配"退换货政策"）
-                if kw in text:
-                    score += 5
+            # “Agent工程师”等相邻复合词比散落命中更能表达用户意图。
+            score += sum(5.0 for phrase in adjacent_phrases if phrase in lowered_text)
 
             if score > 0:
                 scored.append({
@@ -150,15 +174,14 @@ class HybridRetriever:
 
     def __init__(self):
         self._keyword_retriever = KeywordRetriever()
-        self._parent_chunk_cache: dict[str, str] = {}  # parent_id → parent_text 缓存
 
     async def retrieve(
         self,
         knowledge_base_ids: list[str],
         query: str,
         top_k: int = 5,
-        vector_weight: float = 0.7,
-        keyword_weight: float = 0.3,
+        vector_weight: float = 0.45,
+        keyword_weight: float = 0.55,
     ) -> list[IndexResult]:
         """
         混合检索 —— 融合向量和关键词结果
@@ -173,39 +196,64 @@ class HybridRetriever:
         Returns:
             融合后的检索结果（包含父块内容）
         """
-        # 1. 向量检索
-        vector_results = await index_manager.search_multi(
+        normalized_query = normalize_text(query).strip()
+        if not normalized_query:
+            return []
+
+        # 两路检索相互独立：向量漏召回时，父块全文关键词检索仍能恢复结果。
+        vector_children = await index_manager.search_multi(
             knowledge_base_ids=knowledge_base_ids,
-            query=query,
-            top_k=top_k * 2,  # 多取一些用于融合
+            query=normalized_query,
+            top_k=top_k * 4,
+        )
+        vector_parents = await self._expand_to_parent_chunks(vector_children, knowledge_base_ids)
+        keyword_parents = await self._search_all_parent_chunks(
+            knowledge_base_ids,
+            normalized_query,
+            top_k=top_k * 4,
         )
 
-        # 2. 关键词检索
-        # 获取所有 chunk 文本
-        all_chunks = [
-            {"text": r.text, "metadata": r.metadata, "chunk_id": r.chunk_id}
-            for r in vector_results
-        ]
-        keyword_results = self._keyword_retriever.search(all_chunks, query, top_k=top_k * 2)
-
-        # 3. 融合去重
-        merged = self._merge_results(
-            vector_results=vector_results,
-            keyword_results=keyword_results,
+        merged = self._rrf_merge(
+            vector_results=vector_parents,
+            keyword_results=keyword_parents,
             vector_weight=vector_weight,
             keyword_weight=keyword_weight,
         )
+        self._boost_identity_filename_matches(merged, normalized_query)
+        return merged[:top_k]
 
-        # 4. 截取 top_k
-        top_results = merged[:top_k]
+    def _boost_identity_filename_matches(
+        self,
+        results: list[IndexResult],
+        query: str,
+    ) -> None:
+        """身份问题中，标题精确包含实体名是比正文缩写更强的消歧证据。"""
+        if not re.search(r"(是谁|什么人|哪位|全名|真名|真实姓名|本名|身份)", query):
+            return
+        keywords = self._keyword_retriever.extract_keywords(query)
+        if not keywords:
+            return
 
-        # 5. 父子块模式：通过子块获取父块内容（去重，相同父块只保留一个）
-        final_results = await self._expand_to_parent_chunks(
-            results=top_results,
-            knowledge_base_ids=knowledge_base_ids,
-        )
+        boosted = False
+        for result in results:
+            filename = str((result.metadata or {}).get("filename", "")).lower()
+            for keyword in keywords:
+                lowered_keyword = keyword.lower()
+                if re.fullmatch(r"[a-z0-9_-]+", lowered_keyword):
+                    # 中文标题会紧贴英文名（如“忆Tim有感”），这里按标题子串匹配。
+                    matched = lowered_keyword in filename
+                else:
+                    matched = lowered_keyword in filename
+                if matched:
+                    result.score += 1.0
+                    boosted = True
+                    break
 
-        return final_results[:top_k]
+        if boosted:
+            results.sort(key=lambda item: item.score, reverse=True)
+            max_score = results[0].score
+            for result in results:
+                result.score = round(result.score / max_score, 4)
 
     async def _expand_to_parent_chunks(
         self,
@@ -223,36 +271,38 @@ class HybridRetriever:
         if not results:
             return []
 
-        # 收集所有 parent_id
-        parent_ids = []
+        parent_keys: list[tuple[int, str]] = []
         for r in results:
             pid = r.metadata.get("parent_id") if r.metadata else None
-            if pid and pid not in parent_ids:
-                parent_ids.append(pid)
+            document_id = r.metadata.get("document_id") if r.metadata else None
+            if pid and document_id is not None:
+                key = (int(document_id), str(pid))
+                if key not in parent_keys:
+                    parent_keys.append(key)
 
-        # 没有父子块数据，直接返回
-        if not parent_ids:
+        if not parent_keys:
             return results
 
-        # 从数据库批量获取父块
-        parent_texts = await self._fetch_parent_chunks(parent_ids, knowledge_base_ids)
+        parent_chunks = await self._fetch_parent_chunks(parent_keys, knowledge_base_ids)
 
         # 构建去重的父块结果列表
-        seen_parents = set()
+        seen_parents: set[tuple[int, str]] = set()
         final_results = []
 
         for r in results:
             pid = r.metadata.get("parent_id") if r.metadata else None
+            document_id = r.metadata.get("document_id") if r.metadata else None
+            key = (int(document_id), str(pid)) if pid and document_id is not None else None
 
-            if pid and pid in parent_texts:
-                # 有父块，且未重复
-                if pid not in seen_parents:
-                    seen_parents.add(pid)
-                    # 返回父块文本，保留子块的分数
+            if key and key in parent_chunks:
+                if key not in seen_parents:
+                    seen_parents.add(key)
+                    parent = parent_chunks[key]
                     parent_result = IndexResult(
-                        chunk_id=f"parent_{pid}",
-                        text=parent_texts[pid],
+                        chunk_id=f"document_{key[0]}:{key[1]}",
+                        text=parent["text"],
                         metadata={
+                            **parent["metadata"],
                             **(r.metadata or {}),
                             "is_parent": True,
                             "child_chunk_id": r.chunk_id,
@@ -269,108 +319,156 @@ class HybridRetriever:
 
     async def _fetch_parent_chunks(
         self,
-        parent_ids: list[str],
+        parent_keys: list[tuple[int, str]],
         knowledge_base_ids: list[str],
-    ) -> dict[str, str]:
+    ) -> dict[tuple[int, str], dict]:
         """
         从数据库批量获取父块内容
 
         Returns:
-            {parent_id: parent_text}
+            {(document_id, parent_id): {text, metadata}}
         """
-        if not parent_ids:
+        if not parent_keys:
             return {}
 
-        # 先查缓存
-        cached = {pid: self._parent_chunk_cache[pid] for pid in parent_ids if pid in self._parent_chunk_cache}
-        missing = [pid for pid in parent_ids if pid not in self._parent_chunk_cache]
-
-        if not missing:
-            return cached
-
-        # 从数据库查询
+        fetched: dict[tuple[int, str], dict] = {}
         try:
             from app.core.database import async_session_factory
             from app.models.knowledge import DocumentChunk
             from sqlalchemy import select
 
+            kb_ids = [int(index_manager.normalize_knowledge_base_id(kb_id)) for kb_id in knowledge_base_ids]
+            document_ids = list({key[0] for key in parent_keys})
+            parent_ids = list({key[1] for key in parent_keys})
+            wanted = set(parent_keys)
             async with async_session_factory() as db:
                 result = await db.execute(
-                    select(DocumentChunk).where(DocumentChunk.parent_id.in_(missing))
+                    select(DocumentChunk).where(
+                        DocumentChunk.knowledge_base_id.in_(kb_ids),
+                        DocumentChunk.document_id.in_(document_ids),
+                        DocumentChunk.parent_id.in_(parent_ids),
+                    )
                 )
                 chunks = result.scalars().all()
 
                 for chunk in chunks:
-                    cached[chunk.parent_id] = chunk.content
-                    self._parent_chunk_cache[chunk.parent_id] = chunk.content
+                    key = (chunk.document_id, chunk.parent_id)
+                    if key not in wanted:
+                        continue
+                    metadata = self._parse_metadata(chunk.metadata_json)
+                    fetched[key] = {
+                        "text": chunk.content,
+                        "metadata": {
+                            **metadata,
+                            "document_id": chunk.document_id,
+                            "knowledge_base_id": chunk.knowledge_base_id,
+                            "parent_id": chunk.parent_id,
+                        },
+                    }
 
         except Exception as e:
             logger.warning(f"获取父块失败: {e}")
 
-        return cached
+        return fetched
 
-    def _merge_results(
+    async def _search_all_parent_chunks(
+        self,
+        knowledge_base_ids: list[str],
+        query: str,
+        top_k: int,
+    ) -> list[IndexResult]:
+        """扫描父块语料做独立关键词召回；轻量规模下无需额外搜索服务。"""
+        try:
+            from app.core.database import async_session_factory
+            from app.models.knowledge import DocumentChunk
+            from sqlalchemy import select
+
+            kb_ids = [int(index_manager.normalize_knowledge_base_id(kb_id)) for kb_id in knowledge_base_ids]
+            async with async_session_factory() as db:
+                result = await db.execute(
+                    select(DocumentChunk).where(DocumentChunk.knowledge_base_id.in_(kb_ids))
+                )
+                chunks = result.scalars().all()
+
+            candidates = []
+            for chunk in chunks:
+                metadata = self._parse_metadata(chunk.metadata_json)
+                candidates.append({
+                    "chunk_id": f"document_{chunk.document_id}:{chunk.parent_id}",
+                    "text": normalize_text(chunk.content),
+                    "metadata": {
+                        **metadata,
+                        "document_id": chunk.document_id,
+                        "knowledge_base_id": chunk.knowledge_base_id,
+                        "parent_id": chunk.parent_id,
+                        "is_parent": True,
+                    },
+                })
+
+            matched = self._keyword_retriever.search(candidates, query, top_k=top_k)
+            return [
+                IndexResult(
+                    chunk_id=item["chunk_id"],
+                    text=item["text"],
+                    metadata=item["metadata"],
+                    score=float(item["keyword_score"]),
+                )
+                for item in matched
+            ]
+        except Exception as exc:
+            logger.warning(f"关键词父块检索失败: {exc}")
+            return []
+
+    @staticmethod
+    def _parse_metadata(raw_metadata: Optional[str]) -> dict:
+        if not raw_metadata:
+            return {}
+        try:
+            value = json.loads(raw_metadata)
+            return value if isinstance(value, dict) else {}
+        except (TypeError, ValueError):
+            return {}
+
+    @staticmethod
+    def _result_key(result: IndexResult) -> tuple:
+        metadata = result.metadata or {}
+        document_id = metadata.get("document_id")
+        parent_id = metadata.get("parent_id")
+        if document_id is not None and parent_id:
+            return ("parent", int(document_id), str(parent_id))
+        return ("chunk", result.chunk_id)
+
+    def _rrf_merge(
         self,
         vector_results: list[IndexResult],
-        keyword_results: list[dict],
-        vector_weight: float = 0.7,
-        keyword_weight: float = 0.3,
+        keyword_results: list[IndexResult],
+        vector_weight: float = 0.45,
+        keyword_weight: float = 0.55,
     ) -> list[IndexResult]:
-        """
-        融合向量检索和关键词检索结果 —— 加权合并去重
+        """用 RRF 融合不同量纲的排名，避免直接混合距离与词频分数。"""
+        result_map: dict[tuple, IndexResult] = {}
+        scores: dict[tuple, float] = {}
+        rrf_k = 60
 
-        Args:
-            vector_results: 向量检索结果
-            keyword_results: 关键词检索结果
-            vector_weight: 向量检索权重
-            keyword_weight: 关键词检索权重
+        for ranked_results, weight in (
+            (vector_results, vector_weight),
+            (keyword_results, keyword_weight),
+        ):
+            for rank, result in enumerate(ranked_results, start=1):
+                key = self._result_key(result)
+                result_map.setdefault(key, result)
+                scores[key] = scores.get(key, 0.0) + weight / (rrf_k + rank)
 
-        Returns:
-            融合后的结果（按综合分数降序）
-        """
-        # 构建 chunk_id → 结果 的映射
-        result_map: dict[str, IndexResult] = {}
-
-        # 向量检索结果
-        for r in vector_results:
-            result_map[r.chunk_id] = IndexResult(
-                chunk_id=r.chunk_id,
-                text=r.text,
-                metadata=r.metadata,
-                score=r.score * vector_weight,
-            )
-
-        # 关键词检索结果 —— 归一化分数后合并
-        if keyword_results:
-            # 归一化关键词分数（0-1）
-            max_kw_score = max(r["keyword_score"] for r in keyword_results) if keyword_results else 1
-            max_kw_score = max(max_kw_score, 1)
-
-            for r in keyword_results:
-                chunk_id = r.get("chunk_id", "")
-                normalized_score = r["keyword_score"] / max_kw_score
-
-                if chunk_id in result_map:
-                    # 已存在，加权合并
-                    result_map[chunk_id].score += normalized_score * keyword_weight
-                else:
-                    # 新结果
-                    result_map[chunk_id] = IndexResult(
-                        chunk_id=chunk_id,
-                        text=r["text"],
-                        metadata=r.get("metadata", {}),
-                        score=normalized_score * keyword_weight,
-                    )
-
-        # 按综合分数排序
-        merged = sorted(result_map.values(), key=lambda x: x.score, reverse=True)
-
-        # 对分数四舍五入
-        for r in merged:
-            r.score = round(r.score, 4)
+        ordered_keys = sorted(scores, key=scores.get, reverse=True)
+        max_score = scores[ordered_keys[0]] if ordered_keys else 1.0
+        merged = []
+        for key in ordered_keys:
+            result = result_map[key]
+            result.score = round(scores[key] / max_score, 4)
+            merged.append(result)
 
         logger.debug(
-            f"混合检索融合: 向量={len(vector_results)}, "
+            f"RRF 混合检索: 向量父块={len(vector_results)}, "
             f"关键词={len(keyword_results)}, 合并={len(merged)}"
         )
 

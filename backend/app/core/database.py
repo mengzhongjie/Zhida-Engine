@@ -126,6 +126,7 @@ async def init_db():
 async def _run_compatible_migrations(conn):
     migrations = [
         "ALTER TABLE agents ADD COLUMN is_public BOOLEAN NOT NULL DEFAULT 0",
+        "ALTER TABLE documents ADD COLUMN content_hash VARCHAR(64)",
         "ALTER TABLE miniapp_users ADD COLUMN daily_question_limit INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE invitation_claims ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT 1",
         "ALTER TABLE qa_history ADD COLUMN input_tokens INTEGER NOT NULL DEFAULT 0",
@@ -176,6 +177,10 @@ async def _create_indexes(conn):
         "CREATE INDEX IF NOT EXISTS idx_knowledge_bases_agent ON knowledge_bases(agent_id)",
         "CREATE INDEX IF NOT EXISTS idx_documents_kb ON documents(knowledge_base_id)",
         "CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status)",
+        "CREATE INDEX IF NOT EXISTS idx_documents_kb_content_hash ON documents(knowledge_base_id, content_hash)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_documents_kb_content_hash ON documents(knowledge_base_id, content_hash) WHERE content_hash IS NOT NULL",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_document_chunks_document_parent ON document_chunks(document_id, parent_id)",
+        "CREATE INDEX IF NOT EXISTS idx_document_chunks_kb_parent ON document_chunks(knowledge_base_id, parent_id)",
 
         # 问答历史索引
         "CREATE INDEX IF NOT EXISTS idx_qa_history_agent_time ON qa_history(agent_id, created_at)",

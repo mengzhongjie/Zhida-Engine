@@ -415,7 +415,8 @@ class TextSplitter:
             if not restored_text.strip():
                 continue
 
-            parent_id = f"parent_{i}"
+            document_id = (metadata or {}).get("document_id")
+            parent_id = f"doc_{document_id}_parent_{i}" if document_id is not None else f"parent_{i}"
             content_type = self._detect_content_type(restored_text)
 
             parent_chunks.append(TextChunk(

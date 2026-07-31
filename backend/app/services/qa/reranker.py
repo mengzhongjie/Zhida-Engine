@@ -11,7 +11,7 @@
 模块开关：settings.ENABLE_RERANK
 """
 
-from typing import Optional
+import asyncio
 from loguru import logger
 
 from app.core.config import settings

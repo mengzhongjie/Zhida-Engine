@@ -67,6 +67,7 @@ class DocumentOut(BaseModel):
     parse_time_ms: float = 0.0
     created_at: datetime
     updated_at: datetime
+    duplicate: bool = False  # 本次上传是否命中已有相同文件
 
     model_config = {"from_attributes": True}
 

@@ -6,8 +6,9 @@
 """
 
 import uuid
-from typing import Optional, AsyncIterator
-from dataclasses import dataclass, field
+import re
+from typing import Optional
+from dataclasses import dataclass
 
 from loguru import logger
 import chromadb
@@ -57,7 +58,17 @@ class IndexManager:
         )
         self._collections: dict[str, chromadb.Collection] = {}
 
-    def _get_collection(self, knowledge_base_id: str) -> chromadb.Collection:
+    @staticmethod
+    def normalize_knowledge_base_id(knowledge_base_id: str | int) -> str:
+        """接受 ``5``/``kb_5``，拒绝嵌套前缀和任意集合名。"""
+        raw_id = str(knowledge_base_id).strip()
+        if raw_id.startswith("kb_"):
+            raw_id = raw_id[3:]
+        if not re.fullmatch(r"[1-9]\d*", raw_id):
+            raise ValueError(f"无效的知识库 ID: {knowledge_base_id}")
+        return raw_id
+
+    def _get_collection(self, knowledge_base_id: str | int) -> chromadb.Collection:
         """
         获取或创建 Collection
 
@@ -67,31 +78,27 @@ class IndexManager:
         Returns:
             ChromaDB Collection
         """
-        if knowledge_base_id not in self._collections:
-            # Collection 名称需要合法化：
-            # 1. 加前缀 kb_（确保至少3个字符，ChromaDB 要求）
-            # 2. 替换非法字符为下划线
-            safe_name = f"kb_{knowledge_base_id}"
-            safe_name = safe_name.replace("-", "_").replace(" ", "_")
-            # 确保只包含合法字符
-            import re
-            safe_name = re.sub(r'[^a-zA-Z0-9._-]', '_', safe_name)
-            # 确保开头和结尾是字母或数字
-            safe_name = safe_name.strip('._-')
-            if len(safe_name) < 3:
-                safe_name = safe_name.ljust(3, '0')
+        canonical_id = self.normalize_knowledge_base_id(knowledge_base_id)
+        if canonical_id not in self._collections:
+            safe_name = f"kb_{canonical_id}"
 
             try:
                 collection = self._client.get_collection(name=safe_name)
             except Exception:
                 collection = self._client.create_collection(
                     name=safe_name,
-                    metadata={"kb_id": knowledge_base_id},
+                    metadata={
+                        "kb_id": canonical_id,
+                        "hnsw:space": "cosine",
+                        "hnsw:M": 16,
+                        "hnsw:construction_ef": 200,
+                        "hnsw:search_ef": 64,
+                    },
                 )
 
-            self._collections[knowledge_base_id] = collection
+            self._collections[canonical_id] = collection
 
-        return self._collections[knowledge_base_id]
+        return self._collections[canonical_id]
 
     # ================================================================
     # 索引操作
@@ -159,7 +166,7 @@ class IndexManager:
     async def remove_document_chunks(
         self,
         knowledge_base_id: str,
-        document_id: str,
+        document_id: str | int,
     ):
         """
         删除文档的所有切片
@@ -184,7 +191,8 @@ class IndexManager:
         try:
             collection = self._get_collection(knowledge_base_id)
             self._client.delete_collection(name=collection.name)
-            self._collections.pop(knowledge_base_id, None)
+            canonical_id = self.normalize_knowledge_base_id(knowledge_base_id)
+            self._collections.pop(canonical_id, None)
             logger.info(f"已清空知识库索引: {knowledge_base_id}")
         except Exception as e:
             logger.warning(f"清空知识库索引失败: {e}")
@@ -198,7 +206,7 @@ class IndexManager:
         knowledge_base_id: str,
         query: str,
         top_k: int = 5,
-        score_threshold: float = 0.0,
+        score_threshold: Optional[float] = None,
     ) -> list[IndexResult]:
         """
         向量检索 —— 查询最相似的切片
@@ -215,7 +223,7 @@ class IndexManager:
         collection = self._get_collection(knowledge_base_id)
 
         # 向量化查询文本
-        query_embedding = await embedding_service.embed_text(query)
+        query_embedding = await embedding_service.embed_query(query)
 
         # ChromaDB 检索
         results = collection.query(
@@ -229,10 +237,12 @@ class IndexManager:
         if results["ids"] and results["ids"][0]:
             for i, chunk_id in enumerate(results["ids"][0]):
                 distance = results["distances"][0][i] if results["distances"] else 0.0
-                # 距离转相似度（余弦距离 → 相似度）
-                score = 1.0 - distance
+                # 新索引使用 cosine；兼容旧 L2 索引中已归一化的向量。
+                space = (collection.metadata or {}).get("hnsw:space", "l2")
+                score = 1.0 - distance if space == "cosine" else 1.0 - (distance / 2.0)
+                score = max(-1.0, min(1.0, score))
 
-                if score < score_threshold:
+                if score_threshold is not None and score < score_threshold:
                     continue
 
                 search_results.append(IndexResult(

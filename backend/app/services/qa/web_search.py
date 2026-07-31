@@ -1,6 +1,7 @@
-"""轻量网络检索：默认接入 Tavily，仅在显式启用且 RAG 未命中时调用。"""
+"""轻量网络检索：支持 Tavily 与无需密钥的 Bing RSS 实验通道。"""
 
 from dataclasses import dataclass
+from xml.etree import ElementTree
 
 import httpx
 from loguru import logger
@@ -19,26 +20,66 @@ class WebSearchService:
     async def search(self, query: str) -> list[WebSearchResult]:
         if not settings.WEB_SEARCH_ENABLED:
             return []
-        if settings.WEB_SEARCH_PROVIDER != "tavily":
-            logger.warning(f"不支持的网络检索服务: {settings.WEB_SEARCH_PROVIDER}")
+        provider = settings.WEB_SEARCH_PROVIDER
+        try:
+            if provider == "tavily":
+                return await self._search_tavily(query)
+            if provider == "bing_rss":
+                return await self._search_bing_rss(query)
+            logger.warning(f"不支持的网络检索服务: {provider}")
             return []
+        except Exception as exc:
+            logger.warning(f"网络检索失败 ({provider}): {exc}")
+            return []
+
+    async def _search_tavily(self, query: str) -> list[WebSearchResult]:
         if not settings.WEB_SEARCH_API_KEY:
             logger.warning("网络检索已启用但未配置 Tavily API Key")
             return []
-        try:
-            async with httpx.AsyncClient(timeout=12.0) as client:
-                response = await client.post("https://api.tavily.com/search", json={
-                    "api_key": settings.WEB_SEARCH_API_KEY,
-                    "query": query,
-                    "search_depth": "basic",
-                    "max_results": settings.WEB_SEARCH_MAX_RESULTS,
-                    "include_answer": False,
-                })
-                response.raise_for_status()
-            return [WebSearchResult(title=item.get("title", "网络来源"), url=item.get("url", ""), content=item.get("content", "")) for item in response.json().get("results", []) if item.get("content")]
-        except Exception as exc:
-            logger.warning(f"网络检索失败: {exc}")
-            return []
+        async with httpx.AsyncClient(timeout=12.0) as client:
+            response = await client.post("https://api.tavily.com/search", json={
+                "api_key": settings.WEB_SEARCH_API_KEY,
+                "query": query,
+                "search_depth": "basic",
+                "max_results": settings.WEB_SEARCH_MAX_RESULTS,
+                "include_answer": False,
+            })
+            response.raise_for_status()
+        return [
+            WebSearchResult(
+                title=item.get("title", "网络来源"),
+                url=item.get("url", ""),
+                content=item.get("content", ""),
+            )
+            for item in response.json().get("results", [])
+            if item.get("content")
+        ]
+
+    async def _search_bing_rss(self, query: str) -> list[WebSearchResult]:
+        """读取 Bing 公开 RSS；适合个人/非商业试验，正式部署优先 Tavily。"""
+        async with httpx.AsyncClient(
+            timeout=12.0,
+            follow_redirects=True,
+            headers={"User-Agent": "ZhiDaEngine/0.1 RSS Reader"},
+        ) as client:
+            response = await client.get(
+                "https://www.bing.com/search",
+                params={"format": "rss", "q": query},
+            )
+            response.raise_for_status()
+
+        root = ElementTree.fromstring(response.content)
+        results = []
+        for item in root.findall("./channel/item"):
+            title = (item.findtext("title") or "网络来源").strip()
+            url = (item.findtext("link") or "").strip()
+            content = (item.findtext("description") or "").strip()
+            if not content or not url:
+                continue
+            results.append(WebSearchResult(title=title, url=url, content=content))
+            if len(results) >= settings.WEB_SEARCH_MAX_RESULTS:
+                break
+        return results
 
 
 web_search_service = WebSearchService()

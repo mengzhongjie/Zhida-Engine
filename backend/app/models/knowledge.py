@@ -6,7 +6,7 @@
 """
 
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, DateTime, Text, Float, ForeignKey, Boolean, Enum as SAEnum
+from sqlalchemy import Column, Integer, String, DateTime, Text, Float, ForeignKey, Boolean, Enum as SAEnum, UniqueConstraint
 from sqlalchemy.orm import relationship
 
 from app.core.database import Base
@@ -42,6 +42,9 @@ class Document(Base):
     """文档表 —— 上传到知识库的文档"""
 
     __tablename__ = "documents"
+    __table_args__ = (
+        UniqueConstraint("knowledge_base_id", "content_hash", name="uq_documents_kb_content_hash"),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     knowledge_base_id = Column(Integer, ForeignKey("knowledge_bases.id", ondelete="CASCADE"), nullable=False)
@@ -49,6 +52,7 @@ class Document(Base):
     file_type = Column(String(20), nullable=False, comment="文件类型: pdf/docx/xlsx/txt/md")
     file_path = Column(String(1000), nullable=False, comment="文件存储路径")
     file_size = Column(Integer, default=0, comment="文件大小（字节）")
+    content_hash = Column(String(64), nullable=True, index=True, comment="文件 SHA-256，用于同知识库去重")
 
     # 处理状态
     status = Column(String(20), default="pending", comment="处理状态: pending/processing/completed/failed")
@@ -73,6 +77,9 @@ class DocumentChunk(Base):
     """
 
     __tablename__ = "document_chunks"
+    __table_args__ = (
+        UniqueConstraint("document_id", "parent_id", name="uq_document_chunks_document_parent"),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     document_id = Column(Integer, ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True)
