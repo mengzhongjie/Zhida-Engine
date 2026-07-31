@@ -13,6 +13,7 @@
 
 import time
 import asyncio
+import hashlib
 from typing import Optional, AsyncIterator
 from dataclasses import dataclass, field
 
@@ -106,6 +107,7 @@ class AnswerGenerator:
         agent_id: Optional[int] = None,
         enable_memory: bool = True,
         reply_mode: str = "auto",
+        conversation_history: Optional[list[dict[str, str]]] = None,
     ) -> AnswerResult:
         """
         生成回答 —— 端到端流程
@@ -123,7 +125,15 @@ class AnswerGenerator:
         total_start = time.time()
 
         # 缓存必须按 Agent 和用户隔离，避免不同知识库或记忆上下文互相泄漏。
-        cache_query = f"agent:{agent_id if agent_id is not None else 'global'}:user:{user_id or 'shared'}:{question}"
+        history_text = "\n".join(
+            f"{item.get('role', '')}:{item.get('content', '')}"
+            for item in (conversation_history or [])[-12:]
+        )
+        history_key = hashlib.sha256(history_text.encode("utf-8")).hexdigest()[:16] if history_text else "none"
+        cache_query = (
+            f"agent:{agent_id if agent_id is not None else 'global'}:"
+            f"user:{user_id or 'shared'}:history:{history_key}:{question}"
+        )
         if cached := await query_cache.get(cache_query):
             return AnswerResult(
                 answer=cached,
@@ -211,6 +221,11 @@ class AnswerGenerator:
 
         # 5. 构建 Prompt（注入记忆上下文）
         full_context = context + memory_context if memory_context else context
+        conversation_context = "\n".join(
+            f"{'用户' if item.get('role') == 'user' else '助手'}：{item.get('content', '')[:1000]}"
+            for item in (conversation_history or [])[-12:]
+            if item.get("content")
+        )
 
         if system_prompt:
             prompt = system_prompt.format(context=full_context, question=question)
@@ -220,6 +235,7 @@ class AnswerGenerator:
                 context=full_context,
                 source_info=source_info,
                 include_sources=include_sources and settings.ENABLE_SOURCE_CITATION,
+                conversation_context=conversation_context,
             )
 
         generation_start = time.time()

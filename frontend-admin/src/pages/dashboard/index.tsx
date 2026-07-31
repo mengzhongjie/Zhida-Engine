@@ -6,15 +6,16 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  Row, Col, Card, Statistic, Button, Tag, Space, Modal, message, Typography, Progress, Tooltip,
+  Row, Col, Card, Statistic, Button, Tag, Space, Modal, message, Typography, Progress, Tooltip, DatePicker,
 } from 'antd'
 import {
   RobotOutlined, MessageOutlined, CheckCircleOutlined,
   PlayCircleOutlined, PauseCircleOutlined, DeleteOutlined, EyeOutlined,
-  DashboardOutlined, ApiOutlined,
+  DashboardOutlined, ApiOutlined, GlobalOutlined,
 } from '@ant-design/icons'
 import { api } from '../../services/api'
 import zhidaLogo from '../../assets/zhida-logo.png'
+import dayjs from 'dayjs'
 
 const { Title, Text } = Typography
 
@@ -41,7 +42,9 @@ interface DashboardStats {
   total_knowledge_chunks: number
   total_documents: number
   cache_hit_rate: number
+  web_search_count: number
 }
+interface ModelHealth { chat_models: { name: string; role: string; available: boolean; message: string }[]; embedding: { name: string; available: boolean } }
 
 // LLM 使用统计
 interface LLMUsage {
@@ -64,6 +67,8 @@ export default function Dashboard() {
   const [stats, setStats] = useState<DashboardStats | null>(null)
   const [agents, setAgents] = useState<AgentItem[]>([])
   const [llmUsages, setLlmUsages] = useState<LLMUsage[]>([])
+  const [modelHealth, setModelHealth] = useState<ModelHealth | null>(null)
+  const [dateRange, setDateRange] = useState<any>([dayjs(), dayjs()])
   const [loading, setLoading] = useState(true)
   const refreshTimer = useRef<ReturnType<typeof setInterval> | null>(null)
 
@@ -71,20 +76,23 @@ export default function Dashboard() {
   const loadData = useCallback(async () => {
     try {
       setLoading(true)
-      const [dashboardData, agentData, llmData] = await Promise.all([
-        api.get<DashboardStats>('/admin/dashboard'),
+      const params = dateRange?.[0] ? `?start_date=${dateRange[0].format('YYYY-MM-DD')}&end_date=${dateRange[1].format('YYYY-MM-DD')}` : ''
+      const [dashboardData, agentData, llmData, healthData] = await Promise.all([
+        api.get<DashboardStats>(`/admin/dashboard${params}`),
         api.get<{ items: AgentItem[] }>('/agents'),
         api.get<LLMUsage[]>('/admin/llm-usage'),
+        api.get<ModelHealth>('/admin/model-health'),
       ])
       setStats(dashboardData)
       setAgents(agentData.items || [])
       setLlmUsages(llmData as any)
+      setModelHealth(healthData)
     } catch (err) {
       console.error('加载仪表盘数据失败:', err)
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [dateRange])
 
   useEffect(() => {
     loadData()
@@ -115,7 +123,7 @@ export default function Dashboard() {
   const deleteAgent = (agent: AgentItem) => {
     Modal.confirm({
       title: '确认删除',
-      content: `确定要删除 Agent "${agent.name}" 吗？关联的知识库与配置也会被删除。`,
+      content: `确定要删除 Agent "${agent.name}" 吗？关联的知识库会自动解绑变为独立知识库，不会丢失。`,
       okText: '删除',
       okType: 'danger',
       cancelText: '取消',
@@ -149,9 +157,7 @@ export default function Dashboard() {
           <DashboardOutlined style={{ marginRight: 8 }} />
           仪表盘
         </Title>
-        <Button type="primary" icon={<RobotOutlined />} onClick={() => navigate('/agents')}>
-          进入 Agent 管理
-        </Button>
+        <Space><DatePicker.RangePicker value={dateRange} onChange={(value) => setDateRange(value)} /><Button type="primary" icon={<RobotOutlined />} onClick={() => navigate('/agents')}>进入 Agent 管理</Button></Space>
       </div>
 
       {/* 统计卡片 */}
@@ -198,10 +204,20 @@ export default function Dashboard() {
             />
           </Card>
         </Col>
+        <Col xs={12} sm={6}>
+          <Card hoverable>
+            <Statistic title="网络检索" value={stats?.web_search_count || 0} suffix="次" prefix={<GlobalOutlined />} valueStyle={{ color: '#23b7ff' }} />
+          </Card>
+        </Col>
+      </Row>
+
+      <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
+        <Col xs={24} sm={12}><Card title="问答模型"><Space direction="vertical">{modelHealth?.chat_models?.length ? modelHealth.chat_models.map((model) => <Space key={`${model.role}-${model.name}`}><Tag color={model.available ? 'green' : 'red'}>{model.available ? '可用' : '不可用'}</Tag><Text>{model.role} · {model.name}</Text></Space>) : <Text type="secondary">未配置</Text>}</Space></Card></Col>
+        <Col xs={24} sm={12}><Card title="当前向量化模型"><Space><Tag color={modelHealth?.embedding.available ? 'green' : 'red'}>{modelHealth?.embedding.available ? '可用' : '不可用'}</Tag><Text>{modelHealth?.embedding.name || '检测中'}</Text></Space></Card></Col>
       </Row>
 
       {/* LLM 配置监控 —— 每 30s 自动刷新 */}
-      {llmUsages.length > 0 && (
+      {false && llmUsages.length > 0 && (
         <>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
             <Title level={4} style={{ margin: 0 }}>

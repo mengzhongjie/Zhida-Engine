@@ -34,6 +34,10 @@ Page({
     wx.navigateTo({ url: `/pages/chat/index?agentId=${id}&name=${encodeURIComponent(name)}` })
   },
 
+  openHistory() {
+    wx.navigateTo({ url: '/pages/sessions/index' })
+  },
+
   onInviteInput(event) {
     this.setData({ inviteCode: event.detail.value })
   },

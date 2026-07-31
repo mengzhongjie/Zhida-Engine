@@ -11,6 +11,7 @@ const routes = {
   claimInvite: { method: 'POST', path: '/api/v1/miniapp/invite/claim' },
   agents: { method: 'GET', path: '/api/v1/miniapp/agents' },
   sessions: { method: 'GET', path: '/api/v1/miniapp/sessions' },
+  sessionMessages: { method: 'GET', path: (data) => `/api/v1/miniapp/sessions/${encodeURIComponent(data.session_id)}/messages` },
   createSession: { method: 'POST', path: '/api/v1/miniapp/sessions' },
   ask: { method: 'POST', path: '/api/v1/miniapp/ask' },
   adminConfirm: { method: 'POST', path: '/api/v1/admin/auth/confirm' },
@@ -22,7 +23,8 @@ function requestBackend(route, openid, body) {
   if (!baseUrl || !secret) throw new Error('CloudBase 网关环境变量未配置')
   const timestamp = String(Math.floor(Date.now() / 1000))
   const signature = crypto.createHmac('sha256', secret).update(`${timestamp}.${openid}`).digest('hex')
-  const url = new URL(route.path, baseUrl)
+  const path = typeof route.path === 'function' ? route.path(body || {}) : route.path
+  const url = new URL(path, baseUrl)
   const payload = route.method === 'GET' ? null : JSON.stringify(body || {})
   return new Promise((resolve, reject) => {
     const client = url.protocol === 'http:' ? http : https

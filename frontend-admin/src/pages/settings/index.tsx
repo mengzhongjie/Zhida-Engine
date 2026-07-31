@@ -733,7 +733,7 @@ export default function SettingsPage() {
                           enable_rerank: '重排序',
                           enable_streaming: '流式输出',
                           enable_auto_learning: '自动学习',
-                          enable_source_citation: '来源引用',
+                          enable_source_citation: '返回结构化来源',
                           enable_auto_mention: '自动 @ 指定用户',
                           enable_rate_limit: '请求限流',
                           enable_local_only: '仅本地访问',

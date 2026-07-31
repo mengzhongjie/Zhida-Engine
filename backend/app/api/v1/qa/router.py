@@ -4,6 +4,7 @@
 提供问答测试、问答历史、用户反馈等接口。
 """
 
+import json
 import time
 from datetime import datetime
 from typing import Optional
@@ -26,6 +27,7 @@ from app.schemas.qa import (
 )
 from app.services.cache.query_cache import query_cache
 from app.services.cache.idempotency import single_flight
+from app.services.qa.generator import answer_generator
 
 router = APIRouter(prefix="/qa", tags=["问答"])
 
@@ -111,7 +113,7 @@ async def ask_question(
             agent_id=request.agent_id,
             question=request.question,
             answer=answer.answer,
-            sources=str(sources),
+            sources=json.dumps([source.model_dump() for source in sources], ensure_ascii=False),
             total_time_ms=elapsed_ms,
             is_cache_hit=answer.is_cache_hit,
             channel="web",

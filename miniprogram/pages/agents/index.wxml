@@ -1,7 +1,10 @@
 <view class="page">
   <view style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20rpx;">
     <view class="muted">仅显示管理员向受邀用户公开的助手</view>
-    <view style="padding: 8rpx 16rpx; color: #1677ff; font-size: 26rpx;" bindtap="loadAgents">⟳ 刷新</view>
+    <view style="display: flex; align-items: center; color: #1677ff; font-size: 26rpx;">
+      <view style="padding: 8rpx 16rpx;" bindtap="openHistory">历史对话</view>
+      <view style="padding: 8rpx 16rpx;" bindtap="loadAgents">⟳ 刷新</view>
+    </view>
   </view>
   <view class="card" style="margin-bottom: 20rpx;">
     <view style="font-weight: 600; margin-bottom: 14rpx;">兑换新邀请码</view>

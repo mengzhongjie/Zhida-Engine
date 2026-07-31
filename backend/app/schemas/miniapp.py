@@ -19,6 +19,10 @@ class InvitationCreate(BaseModel):
         return value.astimezone(timezone.utc).replace(tzinfo=None)
 
 
+class InvitationDailyLimitUpdate(BaseModel):
+    daily_question_limit: int = Field(..., ge=1, le=1000)
+
+
 class InvitationOut(BaseModel):
     id: int
     code_hint: str

@@ -12,7 +12,7 @@ import time
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, delete
 from loguru import logger
 
 from app.core.config import settings
@@ -22,7 +22,7 @@ from app.models.agent import Agent
 from app.models.knowledge import KnowledgeBase, Document
 from app.models.qa import QAHistory
 from app.models.llm_config import LLMConfig
-from app.models.miniapp import AdminLoginTicket, AdminSession, Invitation, InvitationClaim, MiniAppDailyUsage, MiniAppUser
+from app.models.miniapp import AdminLoginTicket, AdminSession, Invitation, InvitationClaim, InvitationDailyUsage, MiniAppUser
 from app.models.web_search_config import WebSearchConfig
 from app.schemas.admin import (
     DashboardStatsOut,
@@ -46,6 +46,7 @@ from app.schemas.miniapp import (
     AdminTicketPollOut,
     InvitationCreate,
     InvitationCreateOut,
+    InvitationDailyLimitUpdate,
     InvitationOut,
 )
 from app.services.cache.query_cache import query_cache
@@ -105,12 +106,12 @@ async def _invitation_out(db: AsyncSession, invitation: Invitation) -> Invitatio
     usage_today = 0
     if claim:
         usage_result = await db.execute(
-            select(MiniAppDailyUsage.question_count).where(
-                MiniAppDailyUsage.user_id == claim.user_id,
-                MiniAppDailyUsage.usage_date == date.today(),
+            select(InvitationDailyUsage.question_count).where(
+                InvitationDailyUsage.claim_id == claim.id,
+                InvitationDailyUsage.usage_date == date.today(),
             )
         )
-        usage_today = usage_result.scalar() or 0
+        usage_today = min(max(usage_result.scalar() or 0, 0), invitation.daily_question_limit)
     return InvitationOut(
         id=invitation.id,
         code_hint=invitation.code_hint,
@@ -241,16 +242,36 @@ async def list_invitations(db: AsyncSession = Depends(get_db)):
 
 @router.delete("/invitations/{invitation_id}")
 async def delete_invitation(invitation_id: int, db: AsyncSession = Depends(get_db)):
-    """删除未领取的邀请码；已领取的邀请码须保留记录以维持访问审计。"""
+    """删除邀请码；显式清理关联记录以兼容旧版 SQLite 的外键定义。"""
     invitation = await db.get(Invitation, invitation_id)
     if invitation is None:
         raise HTTPException(status_code=404, detail="邀请码不存在")
-    claim_result = await db.execute(select(InvitationClaim.id).where(InvitationClaim.invitation_id == invitation.id))
-    if claim_result.scalar_one_or_none() is not None:
-        raise HTTPException(status_code=409, detail="邀请码已领取，不能删除；请撤销用户访问权限")
+    # 显式删除领取记录，兼容旧版 SQLite 的外键定义。
+    await db.execute(delete(InvitationClaim).where(InvitationClaim.invitation_id == invitation.id))
     await db.delete(invitation)
     await db.flush()
     return {"message": "邀请码已删除", "id": invitation_id}
+
+
+@router.put("/invitations/{invitation_id}/daily-limit", response_model=InvitationOut)
+async def update_invitation_daily_limit(
+    invitation_id: int,
+    request: InvitationDailyLimitUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    """修改一张邀请码的每日问答次数，不影响其他邀请码。"""
+    invitation = await db.get(Invitation, invitation_id)
+    if invitation is None:
+        raise HTTPException(status_code=404, detail="邀请码不存在")
+    output = await _invitation_out(db, invitation)
+    if request.daily_question_limit < output.usage_today:
+        raise HTTPException(
+            status_code=400,
+            detail=f"不能低于该邀请码今日已使用的 {output.usage_today} 次；请明天再下调",
+        )
+    invitation.daily_question_limit = request.daily_question_limit
+    await db.flush()
+    return await _invitation_out(db, invitation)
 
 
 @router.post("/invitations/{invitation_id}/revoke", response_model=InvitationOut)
@@ -354,15 +375,19 @@ async def get_dashboard_stats(
 
 @router.get("/model-health")
 async def get_model_health(db: AsyncSession = Depends(get_db)):
-    configs = (await db.execute(select(LLMConfig).where(LLMConfig.is_active == True).order_by(LLMConfig.is_primary.desc()))).scalars().all()  # noqa: E712
-    primary = next((item for item in configs if item.is_primary), configs[0] if configs else None)
-    llm = {"name": primary.model_name if primary else "未配置", "available": False, "message": "未配置"}
-    if primary:
-        from app.services.llm.gateway import llm_gateway
-        test = await llm_gateway.test_connection(primary.base_url, decrypt_api_key(primary.api_key), primary.model_name)
-        llm.update(available=test["success"], message=test["message"])
+    configs = (await db.execute(select(LLMConfig).where(LLMConfig.is_active == True).order_by(LLMConfig.is_primary.desc(), LLMConfig.is_fallback.desc()))).scalars().all()  # noqa: E712
+    from app.services.llm.gateway import llm_gateway
+    chat_models = []
+    for config in configs:
+        test = await llm_gateway.test_connection(config.base_url, decrypt_api_key(config.api_key), config.model_name)
+        chat_models.append({
+            "name": config.model_name,
+            "role": "默认问答模型" if config.is_primary else "兜底问答模型" if config.is_fallback else "问答模型",
+            "available": test["success"],
+            "message": test["message"],
+        })
     from app.services.knowledge.embedder import embedding_service
-    return {"llm": llm, "embedding": {"name": embedding_service.model_name, "available": await embedding_service.is_ready()}}
+    return {"chat_models": chat_models, "embedding": {"name": embedding_service.model_name, "available": await embedding_service.is_ready()}}
 
 
 # ============================================================

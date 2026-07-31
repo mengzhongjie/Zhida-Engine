@@ -1,10 +1,16 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Button, Card, DatePicker, Form, Input, InputNumber, message, Modal, Popconfirm, Space, Table, Tag, Typography } from 'antd'
-import { DeleteOutlined, PlusOutlined, ReloadOutlined, StopOutlined } from '@ant-design/icons'
+import { DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined, StopOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { api } from '@/services/api'
 
 const { Title, Text } = Typography
+
+const inviteCodeStyle = {
+  color: '#56b6ff',
+  background: 'rgba(22, 119, 255, 0.14)',
+  borderColor: 'rgba(86, 182, 255, 0.42)',
+}
 
 interface Invitation {
   id: number
@@ -27,7 +33,9 @@ export default function Invitations() {
   const [items, setItems] = useState<Invitation[]>([])
   const [loading, setLoading] = useState(false)
   const [creating, setCreating] = useState(false)
+  const [editing, setEditing] = useState<Invitation | null>(null)
   const [form] = Form.useForm()
+  const [limitForm] = Form.useForm()
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -51,9 +59,14 @@ export default function Invitations() {
         expires_at: values.expires_at ? values.expires_at.format('YYYY-MM-DDTHH:mm:ss') : undefined,
         note: values.note || undefined,
       })
-      Modal.success({
+      Modal.info({
         title: '邀请码已创建',
-        content: <Space direction="vertical"><Text>此邀请码仅显示一次，请立即复制：</Text><Text code copyable>{created.invite_code}</Text></Space>,
+        icon: null,
+        okText: '已复制，关闭',
+        content: <div style={{ textAlign: 'center', padding: '16px 0' }}>
+          <div style={{ marginBottom: 8 }}>此邀请码仅显示一次，请立即复制：</div>
+          <Input value={created.invite_code} readOnly style={{ ...inviteCodeStyle, fontWeight: 700, fontSize: 20, textAlign: 'center', letterSpacing: 2, userSelect: 'all' }} />
+        </div>,
       })
       form.resetFields()
       setCreating(false)
@@ -83,26 +96,43 @@ export default function Invitations() {
     }
   }
 
+  const openLimitEditor = (record: Invitation) => {
+    limitForm.setFieldsValue({ daily_question_limit: record.daily_question_limit })
+    setEditing(record)
+  }
+
+  const saveDailyLimit = async () => {
+    if (!editing) return
+    const values = await limitForm.validateFields()
+    try {
+      await api.put(`/admin/invitations/${editing.id}/daily-limit`, values)
+      message.success('每日问答次数已修改')
+      setEditing(null)
+      load()
+    } catch (err: any) {
+      message.error(err?.response?.data?.detail || '修改失败')
+    }
+  }
+
   const columns = [
-    { title: '邀请码', dataIndex: 'code_hint', render: (v: string) => <Text code>******{v}</Text> },
+    { title: '邀请码', dataIndex: 'code_hint', render: (v: string) => <Text code style={inviteCodeStyle}>******{v}</Text> },
     { title: '状态', dataIndex: 'status', render: (v: Invitation['status']) => <Tag color={{ active: 'green', claimed: 'blue', revoked: 'red', expired: 'default' }[v]}>{({ active: '待领取', claimed: '已领取', revoked: '已撤销', expired: '已过期' }[v])}</Tag> },
-    { title: '每日问答', dataIndex: 'daily_question_limit', render: (v: number, r: Invitation) => `${r.usage_today} / ${v}` },
+    { title: '每日问答', dataIndex: 'daily_question_limit', render: (v: number, r: Invitation) => `${Math.min(Math.max(r.usage_today, 0), v)} / ${v}` },
     { title: '失效时间', dataIndex: 'expires_at', render: (v: string | null) => v ? dayjs(v).format('YYYY-MM-DD HH:mm') : '不失效' },
     { title: '备注', dataIndex: 'note', render: (v: string | null) => v || '-' },
     { title: '领取', dataIndex: 'claimed_at', render: (v: string | null) => v ? dayjs(v).format('YYYY-MM-DD HH:mm') : '-' },
     {
       title: '操作', key: 'action', render: (_: unknown, r: Invitation) => (
         <Space size="small">
+          <Button type="link" icon={<EditOutlined />} onClick={() => openLimitEditor(r)}>改次数</Button>
           {(r.status === 'active' || r.status === 'claimed') && (
             <Popconfirm title={r.status === 'claimed' ? '撤销后该用户将无法再使用小程序，确认继续？' : '确认使邀请码失效？'} onConfirm={() => revoke(r, r.status === 'claimed')}>
               <Button danger type="link" icon={<StopOutlined />}>{r.status === 'claimed' ? '撤销用户' : '失效'}</Button>
             </Popconfirm>
           )}
-          {!r.claimed_by_user_id && (
-            <Popconfirm title="确认永久删除该未领取的邀请码？" onConfirm={() => remove(r)}>
+          <Popconfirm title={r.claimed_by_user_id ? '确认删除该邀请码额度池？若该用户还有其他邀请码，访问权限不会受影响。' : '确认永久删除该未领取的邀请码？'} onConfirm={() => remove(r)}>
               <Button danger type="link" icon={<DeleteOutlined />}>删除</Button>
-            </Popconfirm>
-          )}
+          </Popconfirm>
         </Space>
       )
     },
@@ -121,7 +151,22 @@ export default function Invitations() {
       <Form form={form} layout="vertical" initialValues={{ daily_question_limit: 2 }}>
         <Form.Item name="daily_question_limit" label="每日问答次数" rules={[{ required: true }]}><InputNumber min={1} max={1000} style={{ width: '100%' }} /></Form.Item>
         <Form.Item name="expires_at" label="失效时间"><DatePicker showTime style={{ width: '100%' }} /></Form.Item>
+        <Form.Item label="快捷有效期">
+          <Space>
+            <Button htmlType="button" size="small" onClick={() => form.setFieldsValue({ expires_at: dayjs().add(1, 'day').endOf('day') })}>1 天</Button>
+            <Button htmlType="button" size="small" onClick={() => form.setFieldsValue({ expires_at: dayjs().add(7, 'day').endOf('day') })}>7 天</Button>
+            <Button htmlType="button" size="small" onClick={() => form.setFieldsValue({ expires_at: dayjs().add(30, 'day').endOf('day') })}>30 天</Button>
+          </Space>
+        </Form.Item>
         <Form.Item name="note" label="备注"><Input.TextArea maxLength={500} rows={3} /></Form.Item>
+      </Form>
+    </Modal>
+    <Modal title="修改每日问答次数" open={!!editing} onCancel={() => setEditing(null)} onOk={saveDailyLimit} okText="保存">
+      <Text type="secondary">仅修改此邀请码，不影响同一用户领取的其他邀请码。不能低于该邀请码今天已使用的次数。</Text>
+      <Form form={limitForm} layout="vertical" style={{ marginTop: 16 }}>
+        <Form.Item name="daily_question_limit" label="每日问答次数" rules={[{ required: true }]}>
+          <InputNumber min={1} max={1000} style={{ width: '100%' }} />
+        </Form.Item>
       </Form>
     </Modal>
   </div>

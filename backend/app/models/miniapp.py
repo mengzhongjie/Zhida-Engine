@@ -44,7 +44,20 @@ class InvitationClaim(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     invitation_id = Column(Integer, ForeignKey("invitations.id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
     user_id = Column(Integer, ForeignKey("miniapp_users.id", ondelete="CASCADE"), nullable=False, index=True)
+    is_active = Column(Boolean, default=True, nullable=False)
     claimed_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class InvitationDailyUsage(Base):
+    """每张已领取邀请码当天独立的问答消耗。"""
+
+    __tablename__ = "invitation_daily_usage"
+    __table_args__ = (UniqueConstraint("claim_id", "usage_date", name="uq_invitation_usage_claim_date"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    claim_id = Column(Integer, ForeignKey("invitation_claims.id", ondelete="CASCADE"), nullable=False, index=True)
+    usage_date = Column(Date, nullable=False)
+    question_count = Column(Integer, default=0, nullable=False)
 
 
 class MiniAppSession(Base):

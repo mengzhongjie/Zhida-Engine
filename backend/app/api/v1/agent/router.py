@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, update
 
 from loguru import logger
 
@@ -196,6 +196,13 @@ async def delete_agent(
     agent = result.scalar_one_or_none()
     if agent is None:
         raise HTTPException(status_code=404, detail="Agent 不存在")
+
+    # 将关联知识库解绑（设为独立知识库），避免级联删除
+    await db.execute(
+        update(KnowledgeBase).where(
+            KnowledgeBase.agent_id == agent_id
+        ).values(agent_id=None)
+    )
 
     await db.delete(agent)
     await db.flush()

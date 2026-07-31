@@ -22,7 +22,7 @@ class KnowledgeBase(Base):
     __tablename__ = "knowledge_bases"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    agent_id = Column(Integer, ForeignKey("agents.id", ondelete="CASCADE"), nullable=True, comment="所属 Agent ID（可空，表示独立知识库）")
+    agent_id = Column(Integer, ForeignKey("agents.id", ondelete="SET NULL"), nullable=True, comment="所属 Agent ID（可空，表示独立知识库）")
     name = Column(String(200), nullable=False, comment="知识库名称")
     description = Column(Text, nullable=True, comment="知识库描述")
     is_active = Column(Boolean, default=True, comment="是否启用")

@@ -56,6 +56,9 @@ Page({
     messages: [],
     scrollToId: '',
     loadingAnswer: false,
+    loadingHistory: true,
+    remainingToday: null,
+    initialSessionId: '',
     typingIndex: 0,
   },
   typingTimer: null,
@@ -65,8 +68,10 @@ Page({
     this.setData({
       agentId: Number(query.agentId),
       navTitle: name,
+      initialSessionId: query.sessionId || '',
     })
     wx.setNavigationBarTitle({ title: name })
+    this.restoreLatestSession()
   },
 
   onUnload() {
@@ -78,15 +83,55 @@ Page({
       wx.showToast({ title: '正在生成回答，请稍候', icon: 'none' })
       return
     }
-    if (!this.data.messages.length) return wx.navigateBack()
+    wx.navigateBack()
+  },
+
+  async restoreLatestSession() {
+    try {
+      const [sessions, user] = await Promise.all([
+        callGateway('sessions'),
+        callGateway('me'),
+      ])
+      const session = this.data.initialSessionId
+        ? sessions.find((item) => item.id === this.data.initialSessionId && Number(item.agent_id) === this.data.agentId)
+        : sessions.find((item) => Number(item.agent_id) === this.data.agentId)
+      if (!session) {
+        this.setData({ loadingHistory: false, remainingToday: user.remaining_today })
+        return
+      }
+      const history = await callGateway('sessionMessages', { session_id: session.id })
+      const messages = []
+      history.forEach((item) => {
+        messages.push({ role: 'user', content: item.question })
+        messages.push({
+          role: 'assistant',
+          content: item.answer || '',
+          blocks: parseMarkdown(item.answer || ''),
+          sources: Array.isArray(item.sources) ? item.sources : [],
+        })
+      })
+      this.setData({
+        sessionId: session.id,
+        messages,
+        remainingToday: user.remaining_today,
+        loadingHistory: false,
+      })
+      this.scrollToBottom()
+    } catch (error) {
+      this.setData({ loadingHistory: false })
+      wx.showToast({ title: error.message || '历史会话加载失败', icon: 'none' })
+    }
+  },
+
+  startNewChat() {
+    if (this.data.loadingAnswer) return
+    const reset = () => this.setData({ sessionId: '', initialSessionId: '', messages: [], question: '' })
+    if (!this.data.messages.length) return reset()
     wx.showModal({
-      title: '确认退出对话？',
-      content: '当前版本为轻量会话，返回后不会自动恢复本次对话上下文。',
-      confirmText: '仍要退出',
-      cancelText: '继续对话',
-      success: (result) => {
-        if (result.confirm) wx.navigateBack()
-      },
+      title: '开始新对话？',
+      content: '当前对话会保留在历史记录中。',
+      confirmText: '新对话',
+      success: (result) => { if (result.confirm) reset() },
     })
   },
 
@@ -95,6 +140,7 @@ Page({
   },
 
   async ask() {
+    if (this.data.loadingAnswer || this.data.loadingHistory) return
     const question = this.data.question.trim()
     if (!question) return
 
@@ -118,7 +164,10 @@ Page({
       const idx = this.data.messages.length - 1
 
       // 更新 sessionId
-      this.setData({ sessionId: data.session_id || this.data.sessionId })
+      this.setData({
+        sessionId: data.session_id || this.data.sessionId,
+        remainingToday: data.remaining_today,
+      })
 
       // 打字机效果
       this.startTyping(idx, answer, data.sources || [])
@@ -132,7 +181,9 @@ Page({
 
   startTyping(msgIndex, fullText, sources = []) {
     if (!fullText) {
-      this.setData({ loadingAnswer: false })
+      const msgs = [...this.data.messages]
+      msgs[msgIndex].content = '暂时没有生成有效回答，请稍后重试。'
+      this.setData({ messages: msgs, loadingAnswer: false })
       return
     }
     this.setData({ loadingAnswer: false })

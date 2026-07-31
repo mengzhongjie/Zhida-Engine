@@ -5,11 +5,16 @@
       <text>‹ 返回</text>
     </view>
     <text class="nav-title">{{navTitle}}</text>
-    <view class="nav-placeholder"></view>
+    <view class="nav-action" bindtap="startNewChat">新对话</view>
   </view>
 
   <!-- 消息列表 -->
   <scroll-view class="message-list" scroll-y="true" scroll-into-view="{{scrollToId}}" scroll-with-animation="true">
+    <view wx:if="{{loadingHistory}}" class="history-status">正在恢复历史会话…</view>
+    <view wx:elif="{{!messages.length}}" class="empty-chat">
+      <view class="empty-title">有什么想了解的？</view>
+      <view class="empty-desc">我会优先根据已部署的知识为你回答。</view>
+    </view>
     <block wx:for="{{messages}}" wx:key="index">
       <view class="msg-row {{item.role === 'user' ? 'msg-row-user' : 'msg-row-assistant'}}" id="msg-{{index}}">
         <view class="msg-avatar {{item.role === 'user' ? 'avatar-user' : 'avatar-assistant'}}">
@@ -49,7 +54,10 @@
 
   <!-- 底部输入区（fixed） -->
   <view class="input-area">
-    <textarea class="input-textarea" value="{{question}}" bindinput="onInput" placeholder="输入问题..." maxlength="1000" auto-height bindconfirm="ask" confirm-type="send" />
-    <view class="send-btn {{question ? 'send-active' : ''}}" bindtap="ask">发送</view>
+    <view class="input-main">
+      <view wx:if="{{remainingToday !== null}}" class="quota-text">今日剩余 {{remainingToday}} 次</view>
+      <textarea class="input-textarea" disabled="{{loadingHistory}}" value="{{question}}" bindinput="onInput" placeholder="输入问题..." maxlength="1000" auto-height bindconfirm="ask" confirm-type="send" />
+    </view>
+    <view class="send-btn {{question && !loadingAnswer && !loadingHistory ? 'send-active' : ''}}" bindtap="ask">发送</view>
   </view>
 </view>

@@ -5,6 +5,8 @@
 
 import hashlib
 import hmac
+import ast
+import json
 import secrets
 import time
 import uuid
@@ -12,14 +14,14 @@ from datetime import date, datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import get_db
 from app.models.agent import Agent
 from app.models.knowledge import KnowledgeBase
-from app.models.miniapp import Invitation, InvitationClaim, MiniAppDailyUsage, MiniAppSession, MiniAppUser
+from app.models.miniapp import Invitation, InvitationClaim, InvitationDailyUsage, MiniAppSession, MiniAppUser
 from app.models.qa import QAHistory
 from app.schemas.miniapp import (
     InviteClaimRequest,
@@ -32,6 +34,19 @@ from app.schemas.miniapp import (
 from app.services.qa.generator import answer_generator
 
 router = APIRouter(prefix="/miniapp", tags=["小程序"])
+
+
+def _decode_sources(value: Optional[str]) -> list[dict]:
+    """兼容新 JSON 数据和旧版本写入的 Python 字面量字符串。"""
+    if not value:
+        return []
+    for loader in (json.loads, ast.literal_eval):
+        try:
+            parsed = loader(value)
+            return parsed if isinstance(parsed, list) else []
+        except (ValueError, TypeError, SyntaxError, json.JSONDecodeError):
+            continue
+    return []
 
 
 def _code_hash(code: str) -> str:
@@ -83,33 +98,66 @@ async def _get_user_or_reject(
         raise HTTPException(status_code=403, detail="请先使用邀请码激活")
     if not user.is_active:
         raise HTTPException(status_code=403, detail="邀请资格已被撤销")
+    if not await _active_claims(db, user.id):
+        raise HTTPException(status_code=403, detail="没有可用的邀请码额度")
     return user
 
 
-async def _get_usage(db: AsyncSession, user_id: int, create: bool = False) -> Optional[MiniAppDailyUsage]:
-    today = date.today()
+async def _active_claims(db: AsyncSession, user_id: int):
     result = await db.execute(
-        select(MiniAppDailyUsage).where(
-            MiniAppDailyUsage.user_id == user_id,
-            MiniAppDailyUsage.usage_date == today,
+        select(InvitationClaim, Invitation)
+        .join(Invitation, Invitation.id == InvitationClaim.invitation_id)
+        .where(
+            InvitationClaim.user_id == user_id,
+            InvitationClaim.is_active == True,  # noqa: E712
+            Invitation.status == "claimed",
         )
+        .order_by(Invitation.daily_question_limit.asc(), InvitationClaim.claimed_at.asc())
     )
-    usage = result.scalar_one_or_none()
-    if usage is None and create:
-        usage = MiniAppDailyUsage(user_id=user_id, usage_date=today, question_count=0)
-        db.add(usage)
-        await db.flush()
-    return usage
+    return result.all()
+
+
+async def _claim_usage(db: AsyncSession, claim_id: int):
+    return (await db.execute(
+        select(InvitationDailyUsage).where(
+            InvitationDailyUsage.claim_id == claim_id,
+            InvitationDailyUsage.usage_date == date.today(),
+        )
+    )).scalar_one_or_none()
+
+
+async def _consume_invitation_quota(db: AsyncSession, claim_id: int, daily_limit: int) -> bool:
+    """原子消耗单张邀请码额度，避免并发请求超额。"""
+    today = date.today()
+    await db.execute(
+        text(
+            "INSERT OR IGNORE INTO invitation_daily_usage "
+            "(claim_id, usage_date, question_count) VALUES (:claim_id, :usage_date, 0)"
+        ),
+        {"claim_id": claim_id, "usage_date": today},
+    )
+    result = await db.execute(
+        text(
+            "UPDATE invitation_daily_usage SET question_count = question_count + 1 "
+            "WHERE claim_id = :claim_id AND usage_date = :usage_date "
+            "AND question_count < :daily_limit"
+        ),
+        {"claim_id": claim_id, "usage_date": today, "daily_limit": daily_limit},
+    )
+    return result.rowcount == 1
 
 
 async def _user_out(db: AsyncSession, user: MiniAppUser) -> MiniAppUserOut:
-    usage = await _get_usage(db, user.id)
-    used = usage.question_count if usage else 0
+    limits, used = 0, 0
+    for claim, invitation in await _active_claims(db, user.id):
+        limits += invitation.daily_question_limit
+        usage = await _claim_usage(db, claim.id)
+        used += usage.question_count if usage else 0
     return MiniAppUserOut(
         id=user.id,
-        daily_question_limit=user.daily_question_limit,
+        daily_question_limit=limits,
         usage_today=used,
-        remaining_today=max(user.daily_question_limit - used, 0),
+        remaining_today=max(limits - used, 0),
     )
 
 
@@ -133,7 +181,7 @@ async def claim_invitation(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    """领取一次性邀请码；同一 OpenID 可领取新码，最新额度覆盖旧额度。"""
+    """领取一次性邀请码；同一用户可领取多张码，每张码独立计算额度。"""
     openid = _validate_gateway_signature(request)
     user_result = await db.execute(select(MiniAppUser).where(MiniAppUser.openid == openid))
     existing_user = user_result.scalar_one_or_none()
@@ -156,7 +204,7 @@ async def claim_invitation(
     if existing_user is None:
         db.add(user)
         await db.flush()
-    user.daily_question_limit = invitation.daily_question_limit
+
     user.is_active = True
     user.revoked_at = None
     db.add(InvitationClaim(invitation_id=invitation.id, user_id=user.id))
@@ -221,7 +269,13 @@ async def list_session_messages(
         ).order_by(QAHistory.created_at.asc())
     )
     return [
-        {"id": item.id, "question": item.question, "answer": item.answer, "sources": item.sources, "created_at": item.created_at}
+        {
+            "id": item.id,
+            "question": item.question,
+            "answer": item.answer,
+            "sources": _decode_sources(item.sources),
+            "created_at": item.created_at,
+        }
         for item in result.scalars()
     ]
 
@@ -246,8 +300,12 @@ async def ask(
         await db.flush()
         session_id = session.id
 
-    usage = await _get_usage(db, user.id, create=True)
-    if usage.question_count >= user.daily_question_limit:
+    quota_consumed = False
+    for claim, invitation in await _active_claims(db, user.id):
+        if await _consume_invitation_quota(db, claim.id, invitation.daily_question_limit):
+            quota_consumed = True
+            break
+    if not quota_consumed:
         raise HTTPException(status_code=429, detail="今日问答次数已用完")
 
     kb_result = await db.execute(
@@ -260,21 +318,35 @@ async def ask(
     agent_result = await db.execute(select(Agent.reply_mode).where(Agent.id == payload.agent_id))
     agent_mode = agent_result.scalar_one_or_none() or "auto"
 
-    # 在真正调用模型前落库计数，确保任何并发请求都不会突破邀请额度。
-    usage.question_count += 1
+    # 在真正调用模型前原子落库计数，确保并发请求不会突破邀请码额度。
     await db.flush()
+    recent_result = await db.execute(
+        select(QAHistory).where(
+            QAHistory.channel == "miniprogram",
+            QAHistory.chat_id == session_id,
+            QAHistory.user_id == user.openid,
+        ).order_by(QAHistory.created_at.desc()).limit(6)
+    )
+    recent_history = list(reversed(recent_result.scalars().all()))
+    conversation_history = [
+        {"role": role, "content": content}
+        for item in recent_history
+        for role, content in (("user", item.question), ("assistant", item.answer or ""))
+    ]
     answer = await answer_generator.generate(
         knowledge_base_ids=knowledge_base_ids,
         question=payload.question,
         user_id=user.openid,
         agent_id=payload.agent_id,
         reply_mode=agent_mode,
+        conversation_history=conversation_history,
     )
+    session.updated_at = datetime.utcnow()
     history = QAHistory(
         agent_id=payload.agent_id,
         question=payload.question,
         answer=answer.answer,
-        sources=str(answer.sources),
+        sources=json.dumps(answer.sources, ensure_ascii=False),
         total_time_ms=answer.retrieval_time_ms + answer.generation_time_ms,
         channel="miniprogram",
         chat_id=session_id,
@@ -292,5 +364,5 @@ async def ask(
         "answer": answer.answer,
         "sources": answer.sources,
         "from_cache": answer.is_cache_hit,
-        "remaining_today": user.daily_question_limit - usage.question_count,
+        "remaining_today": (await _user_out(db, user)).remaining_today,
     }

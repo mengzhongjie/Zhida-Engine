@@ -127,6 +127,7 @@ async def _run_compatible_migrations(conn):
     migrations = [
         "ALTER TABLE agents ADD COLUMN is_public BOOLEAN NOT NULL DEFAULT 0",
         "ALTER TABLE miniapp_users ADD COLUMN daily_question_limit INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE invitation_claims ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT 1",
         "ALTER TABLE qa_history ADD COLUMN input_tokens INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE qa_history ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE qa_history ADD COLUMN is_degraded BOOLEAN NOT NULL DEFAULT 0",
@@ -144,11 +145,6 @@ async def _run_compatible_migrations(conn):
             "INSERT OR IGNORE INTO invitation_claims (invitation_id, user_id, claimed_at) "
             "SELECT id, claimed_by_user_id, COALESCE(claimed_at, created_at) "
             "FROM invitations WHERE claimed_by_user_id IS NOT NULL"
-        ))
-        await conn.execute(text(
-            "UPDATE miniapp_users SET daily_question_limit = COALESCE("
-            "(SELECT daily_question_limit FROM invitations WHERE invitations.id = miniapp_users.invitation_id), 0) "
-            "WHERE daily_question_limit = 0"
         ))
     except Exception:
         # 首次建库或旧库尚未创建邀请表时，下一次启动会补齐。

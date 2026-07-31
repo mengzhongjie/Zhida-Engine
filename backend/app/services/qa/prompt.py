@@ -39,6 +39,8 @@ class PromptTemplate:
 ## 参考内容
 {context}
 
+{conversation_section}
+
 ## 用户问题
 {question}
 
@@ -132,6 +134,7 @@ class PromptTemplate:
         context: str,
         source_info: str = "",
         include_sources: bool = False,
+        conversation_context: str = "",
     ) -> str:
         """
         构建问答 Prompt
@@ -147,21 +150,18 @@ class PromptTemplate:
         """
         current_time = datetime.now().strftime("%Y年%m月%d日 %H:%M")
 
-        if include_sources and source_info:
-            prompt = self.SOURCE_CITATION_PROMPT.format(
-                current_time=current_time,
-                context=context,
-                question=question,
-                source=source_info,
-            )
-        else:
-            prompt = self.DEFAULT_SYSTEM_PROMPT.format(
-                current_time=current_time,
-                context=context,
-                question=question,
-            )
-
-        return prompt
+        # 来源以结构化 sources 字段交给前端展示，正文不要求模型重复生成引用。
+        # 保留参数是为了兼容既有调用方。
+        conversation_section = (
+            f"## 最近对话\n{conversation_context}\n"
+            if conversation_context else ""
+        )
+        return self.DEFAULT_SYSTEM_PROMPT.format(
+            current_time=current_time,
+            context=context,
+            conversation_section=conversation_section,
+            question=question,
+        )
 
     def build_ecommerce_prompt(
         self,
