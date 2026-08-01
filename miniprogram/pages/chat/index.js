@@ -60,7 +60,6 @@ Page({
     remainingToday: null,
     initialSessionId: '',
     typingIndex: 0,
-    streaming: false,
   },
   typingTimer: null,
 
@@ -159,7 +158,6 @@ Page({
         agent_id: this.data.agentId,
         question,
         session_id: this.data.sessionId || undefined,
-        stream: true,
       })
 
       const answer = data.answer || ''
@@ -171,40 +169,12 @@ Page({
         remainingToday: data.remaining_today,
       })
 
-      if (data.stream_id) {
-        this.setData({ streaming: true })
-        this.pollStream(data.stream_id, idx)
-      } else {
-        // 服务端关闭流式输出时保留原有完整回答与打字机降级体验。
-        this.startTyping(idx, answer, data.sources || [])
-      }
+      this.startTyping(idx, answer, data.sources || [])
     } catch (error) {
       const idx = this.data.messages.length - 1
       const msgs = this.data.messages
       msgs[idx].content = error.message || '回答失败，请稍后重试'
-      this.setData({ messages: msgs, loadingAnswer: false, streaming: false })
-    }
-  },
-
-  async pollStream(streamId, msgIndex, cursor = 0) {
-    try {
-      const data = await callGateway('streamPoll', { stream_id: streamId, cursor })
-      const msgs = [...this.data.messages]
-      if (data.delta) msgs[msgIndex].content = (msgs[msgIndex].content || '') + data.delta
-      msgs[msgIndex].showCursor = !data.done
-      if (data.done) {
-        if (data.error) msgs[msgIndex].content = msgs[msgIndex].content || data.error
-        msgs[msgIndex].blocks = parseMarkdown(msgs[msgIndex].content)
-        msgs[msgIndex].sources = data.sources || []
-      }
-      this.setData({ messages: msgs, loadingAnswer: !data.done, streaming: !data.done })
-      this.scrollToBottom()
-      if (!data.done) setTimeout(() => this.pollStream(streamId, msgIndex, data.cursor), 300)
-    } catch (error) {
-      const msgs = [...this.data.messages]
-      msgs[msgIndex].content = msgs[msgIndex].content || error.message || '回答连接中断，请稍后重试'
-      msgs[msgIndex].showCursor = false
-      this.setData({ messages: msgs, loadingAnswer: false, streaming: false })
+      this.setData({ messages: msgs, loadingAnswer: false })
     }
   },
 
@@ -212,7 +182,7 @@ Page({
     if (!fullText) {
       const msgs = [...this.data.messages]
       msgs[msgIndex].content = '暂时没有生成有效回答，请稍后重试。'
-      this.setData({ messages: msgs, loadingAnswer: false, streaming: false })
+      this.setData({ messages: msgs, loadingAnswer: false })
       return
     }
     this.setData({ loadingAnswer: false })
