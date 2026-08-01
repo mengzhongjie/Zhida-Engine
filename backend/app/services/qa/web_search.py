@@ -19,11 +19,15 @@ class WebSearchResult:
 class WebSearchService:
     async def search(self, query: str) -> list[WebSearchResult]:
         if not settings.WEB_SEARCH_ENABLED:
+            logger.info(f"联网检索未执行：功能开关关闭，query={query[:120]}")
             return []
         provider = settings.WEB_SEARCH_PROVIDER
-        return await self.search_with_config(
+        logger.info(f"开始联网检索：provider={provider}, query={query[:180]}")
+        results = await self.search_with_config(
             query, provider, settings.WEB_SEARCH_API_KEY, settings.WEB_SEARCH_MAX_RESULTS
         )
+        logger.info(f"联网检索完成：provider={provider}, results={len(results)}, query={query[:120]}")
+        return results
 
     async def search_with_config(
         self, query: str, provider: str, api_key: str, max_results: int

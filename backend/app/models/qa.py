@@ -49,6 +49,7 @@ class QAHistory(Base):
     output_tokens = Column(Integer, default=0, comment="回答 Token 数")
     # 降级标记（LLM 调用失败/离线模式）
     is_degraded = Column(Boolean, default=False, comment="是否使用了降级策略")
+    web_search_count = Column(Integer, default=0, nullable=False, comment="本次回答实际发起的网络检索次数")
 
     created_at = Column(DateTime, default=datetime.utcnow)
 

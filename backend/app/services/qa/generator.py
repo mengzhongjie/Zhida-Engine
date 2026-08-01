@@ -29,6 +29,7 @@ from app.services.cache.degradation import degradation_manager
 from app.services.knowledge.indexer import IndexResult
 from app.services.memory.memory_service import memory_service
 from app.services.qa.web_search import web_search_service
+from app.services.qa.langfuse_observer import observe_qa
 
 
 @dataclass
@@ -43,6 +44,7 @@ class AnswerResult:
     degraded: bool = False  # 是否使用了降级策略
     input_tokens: int = 0   # 请求 Token 数
     output_tokens: int = 0  # 回答 Token 数
+    web_search_count: int = 0  # 实际发起网络检索次数（不等同于返回结果数）
 
 
 class AnswerGenerator:
@@ -94,25 +96,64 @@ class AnswerGenerator:
         return sources
 
     @staticmethod
-    def _needs_web_supplement(question: str, results: list[IndexResult]) -> bool:
-        """本地有命中时，身份/别名类问题仍需要联网核实缺失字段。"""
-        if not results:
-            return True
+    def _explicitly_requests_web(question: str) -> bool:
+        """用户明确要求联网时，不能因本地已有命中而跳过网络检索。"""
         return bool(re.search(
-            r"(是谁|什么人|哪位|全名|真名|真实姓名|本名|又名|别名|身份)",
+            r"(上网|联网|网络|网上|网页|互联网).{0,8}(搜|搜索|查|检索|查一下|查查)|"
+            r"(搜一下|搜索一下|查一下|帮我查|帮忙查).{0,8}(网上|网络|网页|互联网)|"
+            r"\b(web\s*search|search\s*(the\s*)?web)\b",
             question,
             flags=re.IGNORECASE,
         ))
 
     @staticmethod
+    def _local_information_gap(question: str, results: list[IndexResult]) -> bool:
+        """用可解释的轻量规则判断本地证据是否覆盖问题，而非仅看是否命中。"""
+        if not results:
+            return True
+        cleaned = re.sub(r"请|帮我|帮忙|上网|联网|网络|网上|网页|互联网|搜索|搜一下|搜|查一下|查|检索", " ", question)
+        english_entities = re.findall(r"\b[A-Za-z][A-Za-z0-9_-]{1,30}\b", cleaned)
+        chinese_entities = re.findall(r"[\u4e00-\u9fff]{2,}", re.sub(r"[的和与及跟有关于、，,。？！?：:]", " ", cleaned))
+        ignored = {"什么", "怎么", "如何", "有关", "关系", "什么关系", "一下", "信息", "资料", "相关", "这个", "那个", "是否", "什么特点", "有什么特点", "怎么样", "好不好", "看法", "感想", "特点"}
+        entities = list(dict.fromkeys(
+            term for term in [*english_entities, *chinese_entities]
+            if term.lower() not in ignored
+        ))
+        corpus = "\n".join(result.text for result in results).lower()
+        if any(entity.lower() not in corpus for entity in entities):
+            return True
+
+        # 关系问题必须有一条证据同时提到所有实体；分别命中 Tim 与潘天鸿并不能证明二者有关联。
+        relation_question = bool(re.search(r"(关系|关联|联系|认识|合作|同事|同学|搭档)", question))
+        if relation_question and len(entities) >= 2:
+            return not any(all(entity.lower() in result.text.lower() for entity in entities) for result in results)
+
+        # 用户明确授权联网时，单一资料来源通常不足以补全人物/事件背景，允许网络进行交叉补充。
+        source_keys = {
+            str((result.metadata or {}).get("document_id") or (result.metadata or {}).get("filename") or result.chunk_id)
+            for result in results
+        }
+        return AnswerGenerator._explicitly_requests_web(question) and len(source_keys) < 2
+
+    @staticmethod
+    def _needs_web_supplement(question: str, results: list[IndexResult]) -> bool:
+        """联网仅用于补足本地证据缺口；明确指令代表授权，而不是无条件搜索。"""
+        return AnswerGenerator._local_information_gap(question, results)
+
+    @staticmethod
     def _build_web_search_query(question: str, results: list[IndexResult]) -> str:
         """从本地上下文提取消歧词，避免直接搜索 Tim 等歧义短词。"""
+        # 指令不是实体，不应污染实际搜索词；保留用户问题的其余部分。
+        cleaned_question = re.sub(
+            r"(?:请|帮我|帮忙)?(?:上网|联网|网络|网上|网页|互联网)?(?:搜(?:索)?|查(?:一下|查)?|检索)(?:一下)?(?:相关)?(?:信息|资料)?[：:，,\s]*",
+            "", question, flags=re.IGNORECASE,
+        ).strip() or question
         if not results:
-            return question
+            return cleaned_question
 
         identity_match = re.match(
             r"\s*(.+?)(?:是谁|是什么人|是哪位|的?全名|的?真名|的?真实姓名|的?本名|的?身份)",
-            question,
+            cleaned_question,
             flags=re.IGNORECASE,
         )
         exact_terms: list[str] = []
@@ -178,7 +219,7 @@ class AnswerGenerator:
             return " ".join(exact_terms[:3])[:240]
         if exact_terms:
             return " ".join([*exact_terms, *selected[:4]])[:240]
-        return " ".join([question, *selected])[:240]
+        return " ".join([cleaned_question, *selected])[:240]
 
     @staticmethod
     def _web_context_and_sources(web_results) -> tuple[str, list[dict]]:
@@ -235,7 +276,7 @@ class AnswerGenerator:
         )
         history_key = hashlib.sha256(history_text.encode("utf-8")).hexdigest()[:16] if history_text else "none"
         cache_query = (
-            f"pipeline:web-gap-v4:agent:{agent_id if agent_id is not None else 'global'}:"
+            f"pipeline:web-intent-v5:agent:{agent_id if agent_id is not None else 'global'}:"
             f"user:{user_id or 'shared'}:history:{history_key}:{question}"
         )
         if cached := await query_cache.get(cache_query):
@@ -281,6 +322,7 @@ class AnswerGenerator:
         # 3. 构建上下文 + RAG 无结果降级策略
         source_info = ""
         supplemental_sources: list[dict] = []
+        web_search_count = 0
         if results:
             context = prompt_template.build_context_from_results(results)
             source_list = self._unique_sources(results)
@@ -291,6 +333,8 @@ class AnswerGenerator:
 
             if self._needs_web_supplement(question, results):
                 search_query = self._build_web_search_query(question, results)
+                logger.info(f"本地信息存在缺口，触发联网补充（显式授权={self._explicitly_requests_web(question)}）: {search_query}")
+                web_search_count += 1
                 web_results = await web_search_service.search(search_query)
                 web_context, supplemental_sources = self._web_context_and_sources(web_results)
                 if web_context:
@@ -313,7 +357,8 @@ class AnswerGenerator:
                     generation_time_ms=0,
                 )
             # 自动/混合模式：让 LLM 用自身知识回答
-            web_results = await web_search_service.search(question)
+            web_search_count += 1
+            web_results = await web_search_service.search(self._build_web_search_query(question, results))
             if web_results:
                 context, supplemental_sources = self._web_context_and_sources(web_results)
                 source_info = "; ".join(item.title for item in web_results)
@@ -404,6 +449,13 @@ class AnswerGenerator:
             f"模型={model_used}"
         )
 
+        # 观测异步上报，Langfuse 网络异常不会阻塞或影响用户回答。
+        asyncio.create_task(observe_qa(
+            question=question, answer=answer_text, user_id=user_id,
+            model=model_used, input_tokens=input_tokens, output_tokens=output_tokens,
+            metadata={"agent_id": agent_id, "retrieval_time_ms": round(retrieval_time), "generation_time_ms": round(generation_time), "web_search_count": web_search_count, "degraded": degraded},
+        ))
+
         return AnswerResult(
             answer=answer_text,
             sources=(self._unique_sources(results) if results else []) + supplemental_sources,
@@ -413,6 +465,7 @@ class AnswerGenerator:
             degraded=degraded,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
+            web_search_count=web_search_count,
         )
 
     async def generate_stream(
@@ -422,6 +475,7 @@ class AnswerGenerator:
         top_k: int = 5,
         include_sources: bool = True,
         temperature: float = 0.7,
+        agent_id: Optional[int] = None,
     ) -> AsyncIterator[str]:
         """
         流式生成回答 —— 逐 token 返回
@@ -456,6 +510,7 @@ class AnswerGenerator:
         context = prompt_template.build_context_from_results(results) if results else "知识库中暂无相关内容"
         if self._needs_web_supplement(question, results):
             search_query = self._build_web_search_query(question, results)
+            logger.info(f"流式回答本地信息存在缺口，触发联网补充（显式授权={self._explicitly_requests_web(question)}）: {search_query}")
             web_results = await web_search_service.search(search_query)
             web_context, _ = self._web_context_and_sources(web_results)
             if web_context:
@@ -470,11 +525,13 @@ class AnswerGenerator:
 
         # 流式调用 LLM
         try:
-            async for chunk in llm_gateway.chat_stream(
-                prompt=prompt,
-                temperature=temperature,
-            ):
-                yield chunk
+            async with self._llm_lock:
+                await llm_gateway.initialize(agent_id)
+                async for chunk in llm_gateway.chat_stream(
+                    prompt=prompt,
+                    temperature=temperature,
+                ):
+                    yield chunk
         except Exception as e:
             logger.error(f"流式生成失败: {e}")
             yield degradation_manager.get_llm_offline_response()

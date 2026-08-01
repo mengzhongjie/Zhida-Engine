@@ -122,6 +122,7 @@ async def ask_question(
             input_tokens=answer.input_tokens,
             output_tokens=answer.output_tokens,
             is_degraded=answer.degraded,
+            web_search_count=answer.web_search_count,
         )
         db.add(qa_record)
         await db.flush()

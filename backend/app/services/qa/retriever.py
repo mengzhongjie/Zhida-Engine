@@ -331,7 +331,7 @@ class HybridRetriever:
         fetched: dict[tuple[int, str], dict] = {}
         try:
             from app.core.database import async_session_factory
-            from app.models.knowledge import DocumentChunk
+            from app.models.knowledge import Document, DocumentChunk
             from sqlalchemy import select
 
             kb_ids = [int(index_manager.normalize_knowledge_base_id(kb_id)) for kb_id in knowledge_base_ids]
@@ -340,7 +340,8 @@ class HybridRetriever:
             wanted = set(parent_keys)
             async with async_session_factory() as db:
                 result = await db.execute(
-                    select(DocumentChunk).where(
+                    select(DocumentChunk).join(Document).where(
+                        Document.status == "completed",
                         DocumentChunk.knowledge_base_id.in_(kb_ids),
                         DocumentChunk.document_id.in_(document_ids),
                         DocumentChunk.parent_id.in_(parent_ids),
@@ -377,13 +378,16 @@ class HybridRetriever:
         """扫描父块语料做独立关键词召回；轻量规模下无需额外搜索服务。"""
         try:
             from app.core.database import async_session_factory
-            from app.models.knowledge import DocumentChunk
+            from app.models.knowledge import Document, DocumentChunk
             from sqlalchemy import select
 
             kb_ids = [int(index_manager.normalize_knowledge_base_id(kb_id)) for kb_id in knowledge_base_ids]
             async with async_session_factory() as db:
                 result = await db.execute(
-                    select(DocumentChunk).where(DocumentChunk.knowledge_base_id.in_(kb_ids))
+                    select(DocumentChunk).join(Document).where(
+                        Document.status == "completed",
+                        DocumentChunk.knowledge_base_id.in_(kb_ids),
+                    )
                 )
                 chunks = result.scalars().all()
 
