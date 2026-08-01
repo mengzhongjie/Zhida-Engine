@@ -42,7 +42,7 @@
         </view>
       </view>
     </block>
-    <view wx:if="{{loadingAnswer}}" class="msg-row msg-row-assistant">
+    <view wx:if="{{loadingAnswer && !streaming}}" class="msg-row msg-row-assistant">
       <view class="msg-avatar avatar-assistant"><text>AI</text></view>
       <view class="msg-bubble bubble-assistant">
         <text class="typing-dots">思考中<span class="dot-anim">...</span></text>

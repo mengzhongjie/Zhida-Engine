@@ -70,6 +70,7 @@ class MiniAppAskRequest(BaseModel):
     agent_id: int
     question: str = Field(..., min_length=1, max_length=1000)
     session_id: Optional[str] = None
+    stream: bool = Field(False, description="是否使用小程序分段输出")
 
 
 class MiniAppUserOut(BaseModel):

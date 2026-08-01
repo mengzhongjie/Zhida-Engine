@@ -18,7 +18,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.database import get_db
+from app.core.database import async_session_factory, get_db
 from app.models.agent import Agent
 from app.models.knowledge import KnowledgeBase
 from app.models.miniapp import Invitation, InvitationClaim, InvitationDailyUsage, MiniAppSession, MiniAppUser
@@ -32,6 +32,7 @@ from app.schemas.miniapp import (
     MiniAppUserOut,
 )
 from app.services.qa.generator import answer_generator
+from app.services.qa.miniapp_stream import MiniAppStreamJob, miniapp_stream_manager
 
 router = APIRouter(prefix="/miniapp", tags=["小程序"])
 
@@ -333,6 +334,41 @@ async def ask(
         for item in recent_history
         for role, content in (("user", item.question), ("assistant", item.answer or ""))
     ]
+    if payload.stream and settings.ENABLE_STREAMING:
+        # CloudBase 普通云函数会缓冲 SSE；这里启动后由小程序轮询增量片段。
+        session.updated_at = datetime.utcnow()
+
+        async def persist_stream(job: MiniAppStreamJob) -> None:
+            async with async_session_factory() as stream_db:
+                stream_db.add(QAHistory(
+                    agent_id=payload.agent_id,
+                    question=payload.question,
+                    answer=job.text,
+                    sources=json.dumps(job.sources, ensure_ascii=False),
+                    channel="miniprogram",
+                    chat_id=session_id,
+                    user_id=user.openid,
+                    is_cache_hit=False,
+                    is_degraded=bool(job.error),
+                    web_search_count=0,
+                ))
+                await stream_db.commit()
+
+        job = miniapp_stream_manager.start(
+            user.openid,
+            answer_generator.generate_stream(
+                knowledge_base_ids=knowledge_base_ids,
+                question=payload.question,
+                agent_id=payload.agent_id,
+            ),
+            persist_stream,
+        )
+        return {
+            "stream_id": job.id,
+            "session_id": session_id,
+            "remaining_today": (await _user_out(db, user)).remaining_today,
+        }
+
     answer = await answer_generator.generate(
         knowledge_base_ids=knowledge_base_ids,
         question=payload.question,
@@ -355,6 +391,7 @@ async def ask(
         input_tokens=answer.input_tokens,
         output_tokens=answer.output_tokens,
         is_degraded=answer.degraded,
+        web_search_count=answer.web_search_count,
     )
     db.add(history)
     await db.flush()
@@ -366,3 +403,17 @@ async def ask(
         "from_cache": answer.is_cache_hit,
         "remaining_today": (await _user_out(db, user)).remaining_today,
     }
+
+
+@router.get("/streams/{stream_id}")
+async def read_stream(
+    stream_id: str,
+    request: Request,
+    cursor: int = 0,
+):
+    """返回指定小程序用户尚未读取的回答增量。"""
+    openid = _validate_gateway_signature(request)
+    try:
+        return miniapp_stream_manager.read(stream_id, openid, cursor)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="流式回答不存在或已过期")

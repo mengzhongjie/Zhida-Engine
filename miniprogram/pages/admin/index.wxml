@@ -1,7 +1,0 @@
-<view class="page">
-  <view class="card">
-    <view style="font-size: 36rpx; font-weight: 600;">管理员网页登录确认</view>
-    <view class="muted" style="margin-top: 16rpx;">请扫描网页后台显示的二维码。只有管理员白名单中的微信账号可以确认。</view>
-    <view class="primary" style="margin-top: 32rpx;" bindtap="scan">扫描二维码</view>
-  </view>
-</view>

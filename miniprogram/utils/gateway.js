@@ -6,6 +6,7 @@ const routes = {
   sessionMessages: { method: 'GET', path: (data) => `/api/v1/miniapp/sessions/${encodeURIComponent(data.session_id)}/messages` },
   createSession: { method: 'POST', path: '/api/v1/miniapp/sessions' },
   ask: { method: 'POST', path: '/api/v1/miniapp/ask' },
+  streamPoll: { method: 'GET', path: (data) => `/api/v1/miniapp/streams/${encodeURIComponent(data.stream_id)}?cursor=${encodeURIComponent(data.cursor || 0)}` },
 }
 
 function callLocalGateway(action, data) {
