@@ -5,7 +5,7 @@
  */
 import { useState } from 'react'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
-import { Layout, Menu, Typography } from 'antd'
+import { Layout, Menu, Typography, Tag } from 'antd'
 import {
   DashboardOutlined,
   RobotOutlined,
@@ -56,57 +56,43 @@ export default function MainLayout() {
   const selectedKey = '/' + location.pathname.split('/')[1]
 
   return (
-    <Layout style={{ height: '100vh' }}>
+    <Layout className="app-shell">
       {/* 侧边栏 */}
       <Sider
         collapsible
         collapsed={collapsed}
         onCollapse={setCollapsed}
-        width={220}
-        style={{
-          background: 'linear-gradient(180deg, #0a1b32, #07111f)',
-          borderRight: '1px solid rgba(119,177,255,0.16)',
-        }}
+        width={232}
+        className="app-sider"
       >
         {/* Logo 区域 */}
-        <div style={{
-          height: 64,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          borderBottom: '1px solid rgba(119,177,255,0.16)',
-        }}>
+        <div className="app-brand">
           <img
             src={zhidaLogo}
             alt="智答引擎"
             title="智答引擎"
-            style={{ width: collapsed ? 34 : 42, height: collapsed ? 34 : 42, borderRadius: 10, objectFit: 'cover' }}
+            style={{ width: collapsed ? 32 : 38, height: collapsed ? 32 : 38, borderRadius: 10, objectFit: 'cover' }}
           />
-          {!collapsed && <Text strong style={{ color: '#fff', fontSize: 20, marginLeft: 10, whiteSpace: 'nowrap' }}>智答引擎</Text>}
+          {!collapsed && <Text strong className="app-brand-text">智答引擎</Text>}
         </div>
 
         {/* 导航菜单 */}
         <Menu
-          theme="dark"
           mode="inline"
           selectedKeys={[selectedKey === '/' ? '/' : selectedKey]}
           items={menuItems}
           onClick={({ key }) => navigate(key)}
-          style={{
-            background: 'transparent',
-            borderRight: 'none',
-            marginTop: 8,
-          }}
+          className="app-menu"
         />
 
       </Sider>
 
       {/* 内容区 */}
-      <Content style={{
-        overflow: 'auto',
-        padding: 24,
-        background: 'transparent',
-      }}>
+      <Content className="app-content">
+        <header className="app-topbar">
+          <div><Text type="secondary">智答引擎 / 管理台</Text></div>
+          <Tag color="success">本地服务</Tag>
+        </header>
         <Outlet />
       </Content>
     </Layout>

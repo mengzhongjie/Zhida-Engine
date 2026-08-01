@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Button, Card, DatePicker, Form, Input, InputNumber, message, Modal, Popconfirm, Space, Table, Tag, Typography } from 'antd'
-import { DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined, StopOutlined } from '@ant-design/icons'
+import { CopyOutlined, DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined, StopOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { api } from '@/services/api'
 
@@ -66,6 +66,7 @@ export default function Invitations() {
         content: <div style={{ textAlign: 'center', padding: '16px 0' }}>
           <div style={{ marginBottom: 8 }}>此邀请码仅显示一次，请立即复制：</div>
           <Input value={created.invite_code} readOnly style={{ ...inviteCodeStyle, fontWeight: 700, fontSize: 20, textAlign: 'center', letterSpacing: 2, userSelect: 'all' }} />
+          <Button type="primary" icon={<CopyOutlined />} style={{ marginTop: 14 }} onClick={async () => { await navigator.clipboard.writeText(created.invite_code); message.success('邀请码已复制') }}>复制邀请码</Button>
         </div>,
       })
       form.resetFields()
@@ -138,11 +139,11 @@ export default function Invitations() {
     },
   ]
 
-  return <div>
-    <Space style={{ marginBottom: 24, width: '100%', justifyContent: 'space-between' }}>
-      <Title level={3} style={{ margin: 0 }}>邀请码</Title>
+  return <div className="content-page">
+    <div className="page-header">
+      <div><Title level={3}>邀请码</Title><Text type="secondary" className="page-header-copy">为微信用户分配一次性的访问权限与每日额度。</Text></div>
       <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
-    </Space>
+    </div>
     <Card title="创建一次性邀请码" style={{ marginBottom: 16 }} extra={<Button type="primary" icon={<PlusOutlined />} onClick={() => setCreating(true)}>创建邀请码</Button>}>
       <Text type="secondary">邀请码首次领取后会绑定一个微信账号。创建成功后，明文仅展示一次。</Text>
     </Card>

@@ -17,7 +17,7 @@ import {
 import { api } from '@/services/api'
 import styles from './index.module.css'
 
-const { Text } = Typography
+const { Title, Text } = Typography
 
 interface ProviderTemplate {
   provider_id: string
@@ -88,6 +88,7 @@ interface EmbeddingConfig {
 }
 
 interface WebSearchConfig { enabled: boolean; provider: string; api_key: string; max_results: number }
+interface LangfuseConfig { enabled: boolean; host: string; public_key: string; secret_key: string }
 
 export default function SettingsPage() {
   const [templates, setTemplates] = useState<{
@@ -116,6 +117,9 @@ export default function SettingsPage() {
   const [webSearchForm] = Form.useForm()
   const [webSearchSaving, setWebSearchSaving] = useState(false)
   const [webSearchTesting, setWebSearchTesting] = useState(false)
+  const [langfuseConfig, setLangfuseConfig] = useState<LangfuseConfig | null>(null)
+  const [langfuseForm] = Form.useForm()
+  const [langfuseSaving, setLangfuseSaving] = useState(false)
 
   const loadWebSearchConfig = useCallback(async () => {
     try {
@@ -175,6 +179,18 @@ export default function SettingsPage() {
   }, [loadData])
 
   useEffect(() => { loadWebSearchConfig() }, [loadWebSearchConfig])
+
+  const loadLangfuseConfig = useCallback(async () => {
+    try { const config = await api.get<LangfuseConfig>('/admin/langfuse'); setLangfuseConfig(config); langfuseForm.setFieldsValue({ ...config, public_key: '', secret_key: '' }) }
+    catch { message.error('加载 Langfuse 配置失败') }
+  }, [langfuseForm])
+  useEffect(() => { loadLangfuseConfig() }, [loadLangfuseConfig])
+  const saveLangfuseConfig = async () => {
+    const values = await langfuseForm.validateFields(); setLangfuseSaving(true)
+    try { const saved = await api.put<LangfuseConfig>('/admin/langfuse', values); setLangfuseConfig(saved); langfuseForm.setFieldsValue({ ...saved, public_key: '', secret_key: '' }); message.success('Langfuse 配置已保存') }
+    catch (error: any) { message.error(error?.response?.data?.detail || '保存失败') }
+    finally { setLangfuseSaving(false) }
+  }
 
   const saveWebSearchConfig = async () => {
     const values = await webSearchForm.validateFields()
@@ -560,8 +576,8 @@ export default function SettingsPage() {
       children: (
         <Space direction="vertical" size="large" style={{ width: '100%' }}>
           {embeddingConfig && (
-            <Card>
-              <Row gutter={16}>
+            <Card className="embedding-status-card">
+              <Row gutter={[20, 16]}>
                 <Col span={8}>
                   <Statistic
                     title="就绪状态"
@@ -579,16 +595,16 @@ export default function SettingsPage() {
             </Card>
           )}
 
-          <Card title="配置">
+          <Card title="向量化方案" className="settings-config-card">
             <Form form={embeddingForm} layout="vertical">
               <Form.Item
                 name="mode"
                 label="模式"
                 rules={[{ required: true, message: '请选择模式' }]}
               >
-                <Radio.Group>
-                  <Radio value="local">本地模型</Radio>
-                  <Radio value="cloud">云端 API</Radio>
+                <Radio.Group className="settings-mode-picker">
+                  <Radio value="local">本地模型 <Text type="secondary">无需 API Key</Text></Radio>
+                  <Radio value="cloud">云端 API <Text type="secondary">更轻量，按服务商计费</Text></Radio>
                 </Radio.Group>
               </Form.Item>
 
@@ -716,17 +732,33 @@ export default function SettingsPage() {
       key: 'web-search',
       label: '网络检索',
       children: (
-        <Card title="网络检索补充">
-          <Alert type="info" showIcon style={{ marginBottom: 20 }} message="仅在知识库未命中时调用网络检索；网络内容会作为补充来源，不会覆盖知识库结论。" />
+        <Card title="网络检索补充" className="web-search-card" extra={<Tag color={webSearchConfig?.enabled ? 'success' : 'default'}>{webSearchConfig?.enabled ? '已启用' : '未启用'}</Tag>}>
+          <Alert type="info" showIcon style={{ marginBottom: 20 }} message="仅在本地知识存在信息缺口时补充网络检索；网络内容会作为补充来源，不会覆盖知识库结论。" />
           <Form form={webSearchForm} layout="vertical" style={{ maxWidth: 620 }}>
             <Form.Item name="enabled" label="启用网络检索" valuePropName="checked"><Switch /></Form.Item>
             <Form.Item name="provider" label="搜索服务" rules={[{ required: true }]}><Select options={[{ label: 'Tavily（推荐，有免费额度）', value: 'tavily' }, { label: 'Bing RSS（实验，无需密钥）', value: 'bing_rss' }]} /></Form.Item>
-            <Form.Item name="api_key" label="搜索 API Key" extra={webSearchConfig?.api_key ? `当前：${webSearchConfig.api_key}；留空表示不修改` : 'Tavily 需要 API Key；Bing RSS 实验模式无需填写'}><Input.Password autoComplete="new-password" placeholder="Bing RSS 可留空" /></Form.Item>
+            <Form.Item noStyle shouldUpdate={(prev, cur) => prev.provider !== cur.provider}>{({ getFieldValue }) => getFieldValue('provider') === 'bing_rss' ? <Alert className="provider-note" type="success" showIcon message="Bing RSS 无需 API Key" description="适合个人测试和低频补充检索；正式稳定使用建议选择 Tavily。" /> : <Form.Item name="api_key" label="搜索 API Key" extra={webSearchConfig?.api_key ? `当前：${webSearchConfig.api_key}；留空表示不修改` : 'Tavily 需要 API Key'}><Input.Password autoComplete="new-password" placeholder="输入 Tavily API Key" /></Form.Item>}</Form.Item>
             <Form.Item name="max_results" label="每次最多返回结果" rules={[{ required: true }]}><InputNumber min={1} max={10} style={{ width: '100%' }} /></Form.Item>
             <Space>
               <Button onClick={testWebSearchConfig} loading={webSearchTesting}>测试连接</Button>
               <Button type="primary" onClick={saveWebSearchConfig} loading={webSearchSaving}>保存网络检索配置</Button>
             </Space>
+          </Form>
+        </Card>
+      ),
+    },
+    {
+      key: 'langfuse',
+      label: 'Langfuse 观测',
+      children: (
+        <Card title="Langfuse Cloud" className="web-search-card" extra={<Tag color={langfuseConfig?.enabled ? 'success' : 'default'}>{langfuseConfig?.enabled ? '采集中' : '未启用'}</Tag>}>
+          <Alert type="info" showIcon style={{ marginBottom: 20 }} message="可选的问答链路观测" description="启用后会将问题、回答、模型、Token、检索/生成耗时与降级状态发送到 Langfuse Cloud。请仅在允许上传这些问答内容时启用。" />
+          <Form form={langfuseForm} layout="vertical" style={{ maxWidth: 620 }} initialValues={{ host: 'https://cloud.langfuse.com' }}>
+            <Form.Item name="enabled" label="启用 Langfuse Cloud" valuePropName="checked"><Switch /></Form.Item>
+            <Form.Item name="host" label="服务地址" rules={[{ required: true }]}><Input placeholder="https://cloud.langfuse.com" /></Form.Item>
+            <Form.Item name="public_key" label="Public Key" extra={langfuseConfig?.public_key ? `当前：${langfuseConfig.public_key}；留空表示不修改` : ''}><Input.Password autoComplete="new-password" placeholder="pk-lf-..." /></Form.Item>
+            <Form.Item name="secret_key" label="Secret Key" extra={langfuseConfig?.secret_key ? `当前：${langfuseConfig.secret_key}；留空表示不修改` : ''}><Input.Password autoComplete="new-password" placeholder="sk-lf-..." /></Form.Item>
+            <Button type="primary" onClick={saveLangfuseConfig} loading={langfuseSaving}>保存 Langfuse 配置</Button>
           </Form>
         </Card>
       ),
@@ -804,6 +836,7 @@ export default function SettingsPage() {
 
   return (
     <div className={styles.container}>
+      <div className="page-header"><div><Title level={3}>系统设置</Title><Text type="secondary" className="page-header-copy">管理模型、向量化、联网补充与本地运行参数。</Text></div></div>
       <Tabs
         defaultActiveKey="llm"
         items={tabItems}

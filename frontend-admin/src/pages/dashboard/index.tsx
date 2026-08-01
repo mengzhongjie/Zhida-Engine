@@ -11,11 +11,12 @@ import {
 import {
   RobotOutlined, MessageOutlined, CheckCircleOutlined,
   PlayCircleOutlined, PauseCircleOutlined, DeleteOutlined, EyeOutlined,
-  DashboardOutlined, ApiOutlined, GlobalOutlined,
+  DashboardOutlined, ApiOutlined,
 } from '@ant-design/icons'
 import { api } from '../../services/api'
 import zhidaLogo from '../../assets/zhida-logo.png'
 import dayjs from 'dayjs'
+import './index.css'
 
 const { Title, Text } = Typography
 
@@ -42,7 +43,6 @@ interface DashboardStats {
   total_knowledge_chunks: number
   total_documents: number
   cache_hit_rate: number
-  web_search_count: number
 }
 interface ModelHealth { chat_models: { name: string; role: string; available: boolean; message: string }[]; embedding: { name: string; available: boolean } }
 
@@ -151,19 +151,26 @@ export default function Dashboard() {
   }
 
   return (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
-        <Title level={3} style={{ margin: 0 }}>
-          <DashboardOutlined style={{ marginRight: 8 }} />
-          仪表盘
-        </Title>
-        <Space><DatePicker.RangePicker value={dateRange} onChange={(value) => setDateRange(value)} /><Button type="primary" icon={<RobotOutlined />} onClick={() => navigate('/agents')}>进入 Agent 管理</Button></Space>
-      </div>
+    <div className="dashboard-page">
+      <section className="dashboard-hero">
+        <div>
+          <Text className="dashboard-kicker">WORKSPACE OVERVIEW</Text>
+          <Title level={2} className="dashboard-title"><DashboardOutlined /> 智答概览</Title>
+          <Text type="secondary">查看 Agent、知识库与今日问答的运行情况。</Text>
+        </div>
+        <Space wrap><DatePicker.RangePicker value={dateRange} onChange={(value) => setDateRange(value)} /><Button type="primary" icon={<RobotOutlined />} onClick={() => navigate('/agents')}>管理 Agent</Button></Space>
+      </section>
+
+      <section className="dashboard-summary">
+        <div><span>知识库文档</span><strong>{stats?.total_documents || 0}</strong><small>份已管理资料</small></div>
+        <div><span>知识切片</span><strong>{stats?.total_knowledge_chunks || 0}</strong><small>条可检索内容</small></div>
+        <div><span>缓存命中率</span><strong>{stats?.cache_hit_rate || 0}%</strong><small>减少重复调用</small></div>
+      </section>
 
       {/* 统计卡片 */}
-      <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
+      <Row gutter={[16, 16]} className="dashboard-metrics">
         <Col xs={12} sm={6}>
-          <Card hoverable>
+          <Card hoverable className="metric-card metric-green">
             <Statistic
               title="运行中 Agent"
               value={stats?.running_agents || 0}
@@ -174,7 +181,7 @@ export default function Dashboard() {
           </Card>
         </Col>
         <Col xs={12} sm={6}>
-          <Card hoverable>
+          <Card hoverable className="metric-card metric-blue">
             <Statistic
               title="今日消息"
               value={stats?.today_messages || 0}
@@ -184,7 +191,7 @@ export default function Dashboard() {
           </Card>
         </Col>
         <Col xs={12} sm={6}>
-          <Card hoverable>
+          <Card hoverable className="metric-card metric-amber">
             <Statistic
               title="今日回答"
               value={stats?.today_answers || 0}
@@ -194,7 +201,7 @@ export default function Dashboard() {
           </Card>
         </Col>
         <Col xs={12} sm={6}>
-          <Card hoverable>
+          <Card hoverable className="metric-card metric-purple">
             <Statistic
               title="响应成功率"
               value={stats?.success_rate || 0}
@@ -204,16 +211,11 @@ export default function Dashboard() {
             />
           </Card>
         </Col>
-        <Col xs={12} sm={6}>
-          <Card hoverable>
-            <Statistic title="网络检索" value={stats?.web_search_count || 0} suffix="次" prefix={<GlobalOutlined />} valueStyle={{ color: '#23b7ff' }} />
-          </Card>
-        </Col>
       </Row>
 
-      <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
-        <Col xs={24} sm={12}><Card title="问答模型"><Space direction="vertical">{modelHealth?.chat_models?.length ? modelHealth.chat_models.map((model) => <Space key={`${model.role}-${model.name}`}><Tag color={model.available ? 'green' : 'red'}>{model.available ? '可用' : '不可用'}</Tag><Text>{model.role} · {model.name}</Text></Space>) : <Text type="secondary">未配置</Text>}</Space></Card></Col>
-        <Col xs={24} sm={12}><Card title="当前向量化模型"><Space><Tag color={modelHealth?.embedding.available ? 'green' : 'red'}>{modelHealth?.embedding.available ? '可用' : '不可用'}</Tag><Text>{modelHealth?.embedding.name || '检测中'}</Text></Space></Card></Col>
+      <Row gutter={[16, 16]} className="dashboard-health">
+        <Col xs={24} sm={15}><Card title="问答模型"><Space direction="vertical" size={12}>{modelHealth?.chat_models?.length ? modelHealth.chat_models.map((model) => <div className="model-line" key={`${model.role}-${model.name}`}><Tag color={model.available ? 'success' : 'error'}>{model.available ? '可用' : '不可用'}</Tag><Text type="secondary">{model.role}</Text><Text strong>{model.name}</Text></div>) : <Text type="secondary">未配置</Text>}</Space></Card></Col>
+        <Col xs={24} sm={9}><Card title="当前向量化模型"><div className="embedding-health"><Tag color={modelHealth?.embedding.available ? 'success' : 'error'}>{modelHealth?.embedding.available ? '可用' : '不可用'}</Tag><Text strong>{modelHealth?.embedding.name || '检测中'}</Text></div></Card></Col>
       </Row>
 
       {/* LLM 配置监控 —— 每 30s 自动刷新 */}
@@ -289,12 +291,13 @@ export default function Dashboard() {
       )}
 
       {/* Agent 列表 */}
-      <Title level={4} style={{ marginBottom: 16 }}>Agent 列表</Title>
+      <div className="dashboard-section-title"><div><Title level={4}>Agent</Title><Text type="secondary">已接入的知识问答实例</Text></div><Text type="secondary">{agents.length} 个实例</Text></div>
       <Row gutter={[16, 16]}>
         {agents.map((agent) => (
           <Col xs={24} sm={12} lg={8} key={agent.id}>
             <Card
               hoverable
+              className="agent-overview-card"
               loading={loading}
               actions={[
                 <EyeOutlined key="view" onClick={() => navigate(`/agents/${agent.id}`)} />,

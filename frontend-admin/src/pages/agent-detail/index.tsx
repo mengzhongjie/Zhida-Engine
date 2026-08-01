@@ -173,8 +173,8 @@ export default function AgentDetail() {
   ]
 
   return (
-    <div style={{ padding: 24 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 20 }}>
+    <div className="content-page">
+      <div className="page-header">
         <Space>
           <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(-1)}>返回</Button>
           <img src={zhidaLogo} alt="智答引擎" style={{ width: 36, height: 36, borderRadius: 9, objectFit: 'cover' }} />

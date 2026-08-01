@@ -3,9 +3,7 @@
  *
  * 使用 HashRouter，所有路由通过 # 后的 hash 管理。
  */
-import { Navigate, Routes, Route } from 'react-router-dom'
-import type { ReactNode } from 'react'
-import { useEffect, useState } from 'react'
+import { Routes, Route } from 'react-router-dom'
 import MainLayout from './layouts/MainLayout'
 import Dashboard from './pages/dashboard'
 import AgentDetail from './pages/agent-detail'
@@ -15,25 +13,11 @@ import KnowledgeDetail from './pages/knowledge/detail'
 import Settings from './pages/settings'
 import Knowledge from './pages/knowledge'
 import Invitations from './pages/invitations'
-import AdminLogin from './pages/admin-login'
-import { api } from './services/api'
-
-function AdminGuard({ children }: { children: ReactNode }) {
-  const [required, setRequired] = useState<boolean | null>(null)
-  useEffect(() => {
-    api.get<{ required: boolean }>('/admin/auth/status')
-      .then((data) => setRequired(data.required))
-      .catch(() => setRequired(true))
-  }, [])
-  if (required === null) return null
-  return required && !localStorage.getItem('zhida_admin_token') ? <Navigate to="/login" replace /> : children
-}
 
 function App() {
   return (
     <Routes>
-      <Route path="/login" element={<AdminLogin />} />
-      <Route path="/" element={<AdminGuard><MainLayout /></AdminGuard>}>
+      <Route path="/" element={<MainLayout />}>
         <Route index element={<Dashboard />} />
         <Route path="agents" element={<AgentList />} />
         <Route path="agents/:id" element={<AgentDetail />} />

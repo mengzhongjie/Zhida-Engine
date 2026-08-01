@@ -7,7 +7,7 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { HashRouter } from 'react-router-dom'
-import { ConfigProvider, theme } from 'antd'
+import { ConfigProvider } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
 import App from './App'
 import './index.css'
@@ -17,12 +17,11 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     <ConfigProvider
       locale={zhCN}
       theme={{
-        algorithm: theme.darkAlgorithm,  // 暗色主题
         token: {
-          colorPrimary: '#1677ff',
-          borderRadius: 8,
-          colorBgContainer: '#1a1a2e',
-          colorBgLayout: '#0f0f1a',
+          colorPrimary: '#4f46e5',
+          borderRadius: 12,
+          colorBgContainer: '#ffffff',
+          colorBgLayout: '#f7f8fc',
         },
       }}
     >

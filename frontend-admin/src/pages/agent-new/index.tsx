@@ -238,12 +238,12 @@ export default function AgentNew() {
   }
 
   return (
-    <div>
+    <div className="content-page">
       <div style={{ marginBottom: 24 }}>
         <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/')}>返回</Button>
       </div>
 
-      <Card>
+      <Card className="agent-new-card">
         <Title level={3} style={{ textAlign: 'center', marginBottom: 32 }}>
           <RobotOutlined style={{ marginRight: 8 }} />
           新建 Agent
