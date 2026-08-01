@@ -1,5 +1,7 @@
 # 智答引擎（ZhiDa Engine）API 文档
 
+> 当前交付范围为管理后台与微信小程序。本文中 QQ、Wechaty、NapCat、群聊自动学习相关章节为历史设计，不属于当前部署功能；以 `README.md` 和 `docs/MINIAPP_DEPLOYMENT.md` 为准。
+
 Base URL: `/api/v1`
 
 ---

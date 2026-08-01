@@ -1,14 +1,12 @@
 """
 智答引擎（ZhiDa Engine）—— 回答生成器
 
-组合检索、重排序、Prompt 构建和 LLM 调用，生成最终回答。
+组合检索、Prompt 构建和 LLM 调用，生成最终回答。
 支持流式输出和普通输出。
 
 模块开关：
-- ENABLE_RERANK: 是否启用重排序
 - ENABLE_STREAMING: 是否启用流式输出
 - ENABLE_SOURCE_CITATION: 是否附带来源引用
-- ENABLE_AUTO_MENTION: 回答不了时是否 @ 指定用户
 """
 
 import time
@@ -23,7 +21,6 @@ from loguru import logger
 
 from app.core.config import settings
 from app.services.qa.retriever import hybrid_retriever
-from app.services.qa.reranker import reranker
 from app.services.qa.prompt import prompt_template
 from app.services.llm.gateway import llm_gateway
 from app.services.cache.query_cache import query_cache
@@ -209,7 +206,6 @@ class AnswerGenerator:
         top_k: int = 5,
         system_prompt: Optional[str] = None,
         include_sources: bool = True,
-        auto_mention_users: Optional[str] = None,
         temperature: float = 0.7,
         user_id: Optional[str] = None,
         agent_id: Optional[int] = None,
@@ -271,10 +267,10 @@ class AnswerGenerator:
 
         # 2. 混合检索（含降级）
         try:
-            results = await hybrid_retriever.retrieve_with_graph(
+            results = await hybrid_retriever.retrieve(
                 knowledge_base_ids=knowledge_base_ids,
                 query=question,
-                top_k=top_k * 2,  # 多取一些给重排序
+                top_k=top_k,
             )
         except Exception as e:
             logger.warning(f"混合检索失败: {e}，使用降级策略")
@@ -282,11 +278,7 @@ class AnswerGenerator:
 
         retrieval_time = (time.time() - retrieval_start) * 1000
 
-        # 3. 重排序
-        if results and settings.ENABLE_RERANK:
-            results = await reranker.rerank(question, results, top_k=top_k)
-
-        # 4. 构建上下文 + RAG 无结果降级策略
+        # 3. 构建上下文 + RAG 无结果降级策略
         source_info = ""
         supplemental_sources: list[dict] = []
         if results:
@@ -373,16 +365,7 @@ class AnswerGenerator:
         except Exception as e:
             logger.warning(f"LLM 生成失败: {e}")
 
-            # 如果配置了自动 @，返回 @ 消息
-            if auto_mention_users and settings.ENABLE_AUTO_MENTION:
-                answer_text = prompt_template.build_auto_mention(
-                    question=question,
-                    mention_users=auto_mention_users,
-                    source_info=source_info,
-                    failed_attempt=True,
-                )
-            else:
-                answer_text = degradation_manager.get_llm_offline_response()
+            answer_text = degradation_manager.get_llm_offline_response()
 
             model_used = "offline"
             degraded = True
@@ -461,17 +444,13 @@ class AnswerGenerator:
 
         # 检索
         try:
-            results = await hybrid_retriever.retrieve_with_graph(
+            results = await hybrid_retriever.retrieve(
                 knowledge_base_ids=knowledge_base_ids,
                 query=question,
-                top_k=top_k * 2,
+                top_k=top_k,
             )
         except Exception:
             results = []
-
-        # 重排序
-        if results and settings.ENABLE_RERANK:
-            results = await reranker.rerank(question, results, top_k=top_k)
 
         # 构建上下文；无结果或身份类问题信息不完整时补充网络资料。
         context = prompt_template.build_context_from_results(results) if results else "知识库中暂无相关内容"

@@ -3,10 +3,10 @@
 ## 低成本部署
 
 1. 在阿里云轻量服务器安装 Docker 与 Docker Compose，将仓库上传至服务器。
-2. 复制 `.env.example` 为 `.env`，填写随机网关密钥和管理员 OpenID；不要将此文件提交到 Git。
+2. 复制 `.env.example` 为 `.env`，填写随机网关密钥、管理员 OpenID、HTTPS 域名对应的 `ZHIDA_TRUSTED_HOSTS` 和 `ZHIDA_CORS_ORIGINS`；不要将此文件提交到 Git。
 3. 配置云端 Embedding 和 LLM：首次用管理员扫码登录后台，在“设置”中填写 API Key。低配服务器不要启用本地 embedding 模型。
 4. 执行 `docker compose up -d --build`。应用数据位于 `./data`，包含 SQLite、Chroma、缓存和日志。
-5. 使用 Nginx/Caddy 为 `18900` 提供 HTTPS 反向代理。CloudBase 云函数的 `BACKEND_BASE_URL` 必须是该 HTTPS 域名。
+5. 使用 Nginx/Caddy 为 `18900` 提供 HTTPS 反向代理，应用端口保持绑定到 `127.0.0.1`，不要在安全组中直接暴露。CloudBase 云函数的 `BACKEND_BASE_URL` 必须是该 HTTPS 域名。
 
 ## CloudBase
 
@@ -23,4 +23,4 @@
 
 ## 安全边界
 
-生产环境必须保持 `ZHIDA_ADMIN_AUTH_REQUIRED=true`。管理 API 由短期管理员令牌保护；小程序 API 要求 CloudBase 签名。服务器端口应只由 HTTPS 反向代理暴露，必要时在安全组中限制来源。
+生产环境必须保持 `ZHIDA_ADMIN_AUTH_REQUIRED=true`。除 `/api/v1/miniapp/*` 和管理员登录握手外，所有 `/api/v1/*` 都要求管理员短期令牌；小程序 API 仍要求 CloudBase 签名。服务会校验请求 Host 与浏览器 Origin，需与 `.env` 中的域名配置一致。服务器端口只应由 HTTPS 反向代理暴露，必要时在安全组中限制来源。

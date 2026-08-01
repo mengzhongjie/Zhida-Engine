@@ -22,7 +22,6 @@ from typing import Optional
 import jieba
 from loguru import logger
 
-from app.core.config import settings
 from app.services.knowledge.indexer import index_manager, IndexResult
 from app.services.knowledge.text_normalizer import normalize_text
 
@@ -159,8 +158,6 @@ class HybridRetriever:
     1. 向量检索（语义相似）
     2. 关键词检索（精确匹配）
     3. 结果融合去重 + 重排序
-
-    模块开关：settings.ENABLE_GRAPH_RETRIEVAL（图检索）
 
     Usage:
         retriever = HybridRetriever()
@@ -473,30 +470,6 @@ class HybridRetriever:
         )
 
         return merged
-
-    async def retrieve_with_graph(
-        self,
-        knowledge_base_ids: list[str],
-        query: str,
-        top_k: int = 5,
-    ) -> list[IndexResult]:
-        """
-        带图检索的混合检索 —— 三路融合
-
-        如果模块开关 ENABLE_GRAPH_RETRIEVAL 关闭，等同于普通混合检索。
-        """
-        # 基础混合检索
-        results = await self.retrieve(knowledge_base_ids, query, top_k=top_k)
-
-        # 图检索（可选）
-        if settings.ENABLE_GRAPH_RETRIEVAL:
-            # TODO: 实现图检索
-            # graph_results = await self._graph_retrieve(query, top_k)
-            # results = self._merge_results(results, graph_results)
-            pass
-
-        return results
-
 
 # 全局混合检索器实例
 hybrid_retriever = HybridRetriever()

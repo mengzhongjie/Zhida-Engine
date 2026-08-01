@@ -39,6 +39,8 @@ from app.schemas.admin import (
     MemoryStatsOut,
     WebSearchConfigOut,
     WebSearchConfigUpdate,
+    WebSearchTestRequest,
+    WebSearchTestResponse,
 )
 from app.schemas.miniapp import (
     AdminTicketConfirm,
@@ -90,6 +92,21 @@ async def update_web_search_config(request: WebSearchConfigUpdate, db: AsyncSess
     settings.WEB_SEARCH_API_KEY = decrypt_api_key(config.api_key)
     await db.flush()
     return await get_web_search_config(db)
+
+
+@router.post("/web-search/test", response_model=WebSearchTestResponse)
+async def test_web_search_config(request: WebSearchTestRequest, db: AsyncSession = Depends(get_db)):
+    config = await db.get(WebSearchConfig, 1)
+    saved_key = decrypt_api_key(config.api_key) if config else ""
+    api_key = request.api_key or saved_key
+    from app.services.qa.web_search import web_search_service
+
+    results = await web_search_service.search_with_config(
+        request.query, request.provider, api_key, request.max_results
+    )
+    if not results:
+        return WebSearchTestResponse(success=False, message="未获取到结果，请检查搜索服务、网络或 API Key")
+    return WebSearchTestResponse(success=True, message="网络检索可用", result_count=len(results))
 
 
 def _invite_code_hash(code: str) -> str:
@@ -403,14 +420,9 @@ async def get_module_switches():
     """
     return ModuleSwitchesOut(
         enable_single_flight=settings.ENABLE_SINGLE_FLIGHT,
-        enable_graph_retrieval=settings.ENABLE_GRAPH_RETRIEVAL,
-        enable_rerank=settings.ENABLE_RERANK,
         enable_streaming=settings.ENABLE_STREAMING,
-        enable_auto_learning=settings.ENABLE_AUTO_LEARNING,
         enable_source_citation=settings.ENABLE_SOURCE_CITATION,
-        enable_auto_mention=settings.ENABLE_AUTO_MENTION,
         enable_rate_limit=settings.ENABLE_RATE_LIMIT,
-        enable_local_only=settings.ENABLE_LOCAL_ONLY,
     )
 
 

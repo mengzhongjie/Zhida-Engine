@@ -1,5 +1,7 @@
 # 智答引擎（ZhiDa Engine）架构图
 
+> 当前交付范围为管理后台与微信小程序。本文中 QQ、Wechaty、NapCat、群聊自动学习、图检索和重排序相关内容为历史设计，不属于当前部署功能；以 `README.md` 和 `docs/MINIAPP_DEPLOYMENT.md` 为准。
+
 ## 一、整体架构
 
 ```

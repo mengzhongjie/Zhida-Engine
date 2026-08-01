@@ -57,6 +57,7 @@ def create_app():
     """创建 FastAPI 应用实例"""
     from fastapi import FastAPI
     from fastapi.middleware.cors import CORSMiddleware
+    from fastapi.middleware.trustedhost import TrustedHostMiddleware
     from fastapi.staticfiles import StaticFiles
     from fastapi.responses import FileResponse
     from contextlib import asynccontextmanager
@@ -101,13 +102,15 @@ def create_app():
         lifespan=lifespan,
     )
 
-    # CORS 中间件 —— 允许前端跨域请求(本地应用安全)
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.trusted_hosts)
+
+    # CORS 只允许明确声明的管理台开发地址或正式域名。
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],  # 本地应用，允许所有来源
+        allow_origins=settings.cors_origins,
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type"],
     )
 
     # 安全中间件 —— 请求来源校验 + 安全响应头 + 请求大小限制

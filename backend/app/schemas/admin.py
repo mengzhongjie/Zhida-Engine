@@ -42,6 +42,19 @@ class WebSearchConfigUpdate(BaseModel):
     max_results: int = Field(3, ge=1, le=10)
 
 
+class WebSearchTestRequest(BaseModel):
+    provider: str = "tavily"
+    api_key: Optional[str] = None
+    max_results: int = Field(3, ge=1, le=10)
+    query: str = "智答引擎"
+
+
+class WebSearchTestResponse(BaseModel):
+    success: bool
+    message: str
+    result_count: int = 0
+
+
 # ============================================================
 # 模块开关 Schema
 # ============================================================
@@ -49,25 +62,16 @@ class WebSearchConfigUpdate(BaseModel):
 class ModuleSwitchesOut(BaseModel):
     """模块开关输出"""
     enable_single_flight: bool = Field(..., description="Single-Flight 幂等合并")
-    enable_graph_retrieval: bool = Field(..., description="图检索增强")
-    enable_rerank: bool = Field(..., description="重排序")
     enable_streaming: bool = Field(..., description="流式输出")
-    enable_auto_learning: bool = Field(..., description="自动学习群聊知识")
     enable_source_citation: bool = Field(..., description="回答后附带消息来源")
-    enable_auto_mention: bool = Field(..., description="回答不了时自动 @ 指定用户")
     enable_rate_limit: bool = Field(..., description="限流总开关")
-    enable_local_only: bool = Field(..., description="仅允许本地请求")
 
 
 class ModuleSwitchesUpdate(BaseModel):
     """模块开关更新请求"""
     enable_single_flight: Optional[bool] = Field(None, description="Single-Flight 幂等合并")
-    enable_graph_retrieval: Optional[bool] = Field(None, description="图检索增强")
-    enable_rerank: Optional[bool] = Field(None, description="重排序")
     enable_streaming: Optional[bool] = Field(None, description="流式输出")
-    enable_auto_learning: Optional[bool] = Field(None, description="自动学习群聊知识")
     enable_source_citation: Optional[bool] = Field(None, description="回答后附带消息来源")
-    enable_auto_mention: Optional[bool] = Field(None, description="回答不了时自动 @ 指定用户")
     enable_rate_limit: Optional[bool] = Field(None, description="限流总开关")
 
 

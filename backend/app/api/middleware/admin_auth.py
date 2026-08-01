@@ -14,25 +14,19 @@ from app.core.config import settings
 class AdminAuthMiddleware(BaseHTTPMiddleware):
     """仅在部署时开启，保护后台配置、知识库与邀请码管理接口。"""
 
-    PROTECTED_PREFIXES = (
-        "/api/v1/admin",
-        "/api/v1/agents",
-        "/api/v1/knowledge",
-        "/api/v1/config",
-        "/api/v1/embedding",
-        "/api/v1/qa",
-    )
     PUBLIC_PREFIXES = (
-        "/api/v1/miniapp/",
+        "/api/v1/miniapp",
         "/api/v1/admin/auth/",
         "/health",
     )
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
-        if not settings.ADMIN_AUTH_REQUIRED or path.startswith(self.PUBLIC_PREFIXES):
+        if not settings.ADMIN_AUTH_REQUIRED:
             return await call_next(request)
-        if not path.startswith(self.PROTECTED_PREFIXES):
+        if any(path.startswith(prefix) for prefix in self.PUBLIC_PREFIXES):
+            return await call_next(request)
+        if not path.startswith("/api/v1/"):
             return await call_next(request)
 
         authorization = request.headers.get("Authorization", "")

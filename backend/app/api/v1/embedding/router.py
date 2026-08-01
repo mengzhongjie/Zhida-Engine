@@ -326,17 +326,21 @@ async def test_embedding_connection(
 
     try:
         if request.mode == "cloud":
-            # 测试云端 API
-            if not request.cloud_base_url or not request.cloud_api_key or not request.cloud_model:
+            base_url = request.cloud_base_url or getattr(settings, "EMBEDDING_CLOUD_BASE_URL", "")
+            api_key = request.cloud_api_key or decrypt_api_key(
+                getattr(settings, "EMBEDDING_CLOUD_API_KEY", "")
+            )
+            model_name = request.cloud_model or getattr(settings, "EMBEDDING_CLOUD_MODEL", "")
+            if not base_url or not api_key or not model_name:
                 return EmbeddingTestResponse(
                     success=False,
-                    message="请填写完整的云端配置（地址、API Key、模型名称）",
+                    message="请填写完整的云端配置，或先保存一组可复用的配置",
                 )
 
             test_service = CloudEmbedding(
-                base_url=request.cloud_base_url,
-                api_key=request.cloud_api_key,
-                model_name=request.cloud_model,
+                base_url=base_url,
+                api_key=api_key,
+                model_name=model_name,
             )
 
             # 发送测试请求

@@ -1,6 +1,6 @@
 # 智答引擎（ZhiDa Engine）
 
-> 基于 RAG 架构的个人 AI 知识助手。Windows 桌面应用，接入微信群/QQ 群，支持从聊天记录中持续自动学习知识。
+> 基于 RAG 架构的个人 AI 知识助手，通过微信小程序提供个人知识问答。
 
 ---
 
@@ -21,8 +21,7 @@
 - **📚 知识库管理** — 上传 PDF/DOCX/Excel/MD/TXT/CSV/JSON 等文档，自动解析、切分、向量化
 - **🔍 RAG 问答** — 基于混合检索（向量 + 关键词）的智能问答，支持来源引用
 - **🤖 Agent 管理** — 创建 AI 助手，绑定知识库和 LLM 配置
-- **💬 渠道接入** — 支持 QQ（NapCat）和微信（Wechaty）群聊/私聊消息监听
-- **♻️ 自动学习** — 从聊天记录中自动提取问答对，持续丰富知识库
+- **📱 微信小程序** — 邀请码激活、公开 Agent、会话历史与问答来源展示
 - **🧠 长期记忆** — 基于 Mem0 的跨会话个性化记忆
 - **🔒 格式校验** — 上传文件自动检测真实类型，防止扩展名伪装，确保数据安全
 - **⚡ 可选 MinerU 解析** — 可选集成 MinerU 引擎，支持复杂 PDF 布局/OCR/公式识别
@@ -135,16 +134,13 @@ docker compose up -d
 │   │       │   ├── file_validator.py # magic bytes 检测
 │   │       │   ├── precheck.py     # 上传前预检
 │   │       │   └── quality_checker.py # 解析后质检
-│   │       ├── channel/            # 渠道适配
 │   │       ├── llm/                # LLM 网关
 │   │       ├── qa/                 # 问答服务
-│   │       ├── learning/           # 自动学习
 │   │       ├── memory/             # Mem0 记忆层
 │   │       └── cache/              # 缓存服务
 │   └── tests/
 ├── frontend-admin/                 # React 管理后台
 ├── miniprogram/                    # 微信小程序
-├── bots/                           # 机器人启动脚本（空）
 ├── cloudfunctions/                 # CloudBase 云函数
 ├── docs/
 ├── API_DOCS.md
@@ -182,10 +178,7 @@ docker compose up -d
 
 ```python
 ENABLE_SINGLE_FLIGHT      # 幂等请求合并
-ENABLE_GRAPH_RETRIEVAL    # 图检索增强
-ENABLE_RERANK             # 重排序
 ENABLE_STREAMING          # 流式输出
-ENABLE_AUTO_LEARNING      # 自动学习
 ENABLE_SOURCE_CITATION    # 来源引用
 ```
 
@@ -208,7 +201,7 @@ ENABLE_SOURCE_CITATION    # 来源引用
 | `/api/v1/channels/{type}/login/qrcode` | POST | 生成登录二维码 |
 | `/api/v1/qa/ask` | POST | 提问 |
 | `/api/v1/admin/settings` | GET/PUT | 系统设置 |
-| `/api/v1/admin/modules` | GET | 模块开关 |
+| `/api/v1/miniapp/*` | GET/POST | CloudBase 签名的小程序接口 |
 
 ---
 

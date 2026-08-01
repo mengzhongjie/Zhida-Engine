@@ -72,16 +72,6 @@ class PromptTemplate:
 请回答，并在回答末尾附上信息来源："""
 
     # ================================================================
-    # 自动 @ 指定用户的模板（回答不了时）
-    # ================================================================
-
-    AUTO_MENTION_TEMPLATE = """抱歉，关于「{question}」这个问题，我暂时无法从知识库中找到准确答案。
-
-已经 @ {mention_users} 来帮你解答，请稍等~ 🙏
-
-{source_info}"""
-
-    # ================================================================
     # 电商客服模板
     # ================================================================
 
@@ -174,37 +164,6 @@ class PromptTemplate:
         return self.ECOMMERCE_SYSTEM_PROMPT.format(
             context=context,
             question=question,
-        )
-
-    def build_auto_mention(
-        self,
-        question: str,
-        mention_users: str,
-        source_info: str = "",
-        failed_attempt: bool = False,
-    ) -> str:
-        """
-        构建自动 @ 消息
-
-        Args:
-            question: 原始问题
-            mention_users: 要 @ 的用户名称
-            source_info: 部分匹配到的来源信息
-            failed_attempt: 是否所有模型都失败
-
-        Returns:
-            @ 消息文本
-        """
-        if failed_attempt:
-            return (
-                f"抱歉，AI 助手暂时无法提供服务 😢\n\n"
-                f"已经 @ {mention_users} 来帮你解答，请稍等~"
-            )
-
-        return self.AUTO_MENTION_TEMPLATE.format(
-            question=question[:100],
-            mention_users=mention_users,
-            source_info=f"\n💡 部分相关内容：{source_info}" if source_info else "",
         )
 
     def build_qa_extraction_prompt(self, chat_context: str) -> str:

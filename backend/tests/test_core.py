@@ -31,11 +31,8 @@ try:
 
     # 模块开关
     print(f"  ✅ ENABLE_SINGLE_FLIGHT: {settings.ENABLE_SINGLE_FLIGHT}")
-    print(f"  ✅ ENABLE_RERANK: {settings.ENABLE_RERANK}")
     print(f"  ✅ ENABLE_STREAMING: {settings.ENABLE_STREAMING}")
-    print(f"  ✅ ENABLE_AUTO_LEARNING: {settings.ENABLE_AUTO_LEARNING}")
     print(f"  ✅ ENABLE_SOURCE_CITATION: {settings.ENABLE_SOURCE_CITATION}")
-    print(f"  ✅ ENABLE_AUTO_MENTION: {settings.ENABLE_AUTO_MENTION}")
 
     print("  ✅ 配置模块测试通过")
 except Exception as e:
@@ -461,15 +458,6 @@ try:
     assert "来源" in prompt_with_source
     print(f"  ✅ 来源引用 Prompt: {len(prompt_with_source)} 字符")
 
-    # 自动 @ 消息
-    mention = prompt_template.build_auto_mention(
-        question="退换货政策是什么？",
-        mention_users="张三",
-    )
-    assert "退换货政策" in mention
-    assert "张三" in mention
-    print(f"  ✅ 自动 @ 消息: {mention[:50]}...")
-
     # 电商客服 Prompt
     ecom = prompt_template.build_ecommerce_prompt(
         question="这件衣服是什么材质？",
@@ -504,110 +492,11 @@ except Exception as e:
     import traceback; traceback.print_exc()
 
 # ================================================================
-# 测试 10: Q&A 提取器
-# ================================================================
-print("\n" + "=" * 60)
-print("测试 10: Q&A 提取器 (qa_extractor)")
-print("=" * 60)
-
-try:
-    from app.services.learning.qa_extractor import (
-        QuestionDetector,
-        QualityFilter,
-        QAExtractor,
-        ChatMessage,
-        QAPair,
-    )
-
-    # 问题检测器
-    detector = QuestionDetector()
-
-    # 明显的问题
-    msg_q = ChatMessage(
-        message_id="1", chat_id="g1", user_id="u1", user_name="用户A",
-        content="退换货政策是什么？",
-        timestamp=0, is_group=True,
-    )
-    is_q, q_type, conf = detector.is_question(msg_q)
-    assert is_q, "包含问号应为问题"
-    assert conf > 0.5
-    print(f"  ✅ 问题识别（问号）: is_question={is_q}, type={q_type.value}, confidence={conf}")
-
-    # 求助类
-    msg_help = ChatMessage(
-        message_id="2", chat_id="g1", user_id="u1", user_name="用户A",
-        content="请问怎么退货",
-        timestamp=0, is_group=True,
-    )
-    is_q2, q_type2, conf2 = detector.is_question(msg_help)
-    assert is_q2, "包含'请问'应为问题"
-    print(f"  ✅ 问题识别（求助）: is_question={is_q2}, type={q_type2.value}, confidence={conf2}")
-
-    # 非问题（闲聊）
-    msg_chat = ChatMessage(
-        message_id="3", chat_id="g1", user_id="u1", user_name="用户A",
-        content="今天天气真好",
-        timestamp=0, is_group=True,
-    )
-    is_q3, q_type3, conf3 = detector.is_question(msg_chat)
-    assert not is_q3, "闲聊不应识别为问题"
-    print(f"  ✅ 问题识别（闲聊）: is_question={is_q3}, confidence={conf3}")
-
-    # 纯表情
-    msg_emoji = ChatMessage(
-        message_id="4", chat_id="g1", user_id="u1", user_name="用户A",
-        content="😂😂😂",
-        timestamp=0, is_group=True,
-    )
-    is_q4, _, _ = detector.is_question(msg_emoji)
-    assert not is_q4, "纯表情不应识别为问题"
-    print(f"  ✅ 问题识别（表情）: is_question={is_q4}")
-
-    # 质量过滤器
-    qf = QualityFilter()
-
-    # 合格 QA
-    good_qa = QAPair(
-        question="退换货政策是什么？",
-        answer="支持7天无理由退换货，需保持商品完好。",
-        source_chat_id="g1", source_user_id="u1", answer_user_id="u2",
-        confidence=0.9,
-    )
-    is_valid, reason = qf.filter(good_qa)
-    assert is_valid, f"应合格，实际: {reason}"
-    print(f"  ✅ 质量过滤（合格）: {reason}")
-
-    # 回答太短
-    short_qa = QAPair(
-        question="你好", answer="嗯",
-        source_chat_id="g1", source_user_id="u1", answer_user_id="u2",
-        confidence=0.8,
-    )
-    is_valid2, reason2 = qf.filter(short_qa)
-    assert not is_valid2
-    print(f"  ✅ 质量过滤（太短）: {reason2}")
-
-    # 纯表情
-    emoji_qa = QAPair(
-        question="怎么样", answer="😂😂😂",
-        source_chat_id="g1", source_user_id="u1", answer_user_id="u2",
-        confidence=0.7,
-    )
-    is_valid3, reason3 = qf.filter(emoji_qa)
-    assert not is_valid3
-    print(f"  ✅ 质量过滤（表情）: {reason3}")
-
-    print("  ✅ Q&A 提取器测试通过")
-except Exception as e:
-    print(f"  ❌ Q&A 提取器测试失败: {e}")
-    import traceback; traceback.print_exc()
-
-# ================================================================
 # 总结
 # ================================================================
 print("\n" + "=" * 60)
 print("测试总结")
 print("=" * 60)
 print("所有核心模块测试完成！")
-print("测试覆盖: 配置/厂商模板/限流器/降级/Single-Flight/缓存/文档解析/切片/Prompt/Q&A提取")
-print("未测试（需要外部依赖）: LLM网关/向量化/索引/检索器/重排序/生成器")
+print("测试覆盖: 配置/厂商模板/限流器/降级/Single-Flight/缓存/文档解析/切片/Prompt")
+print("未测试（需要外部依赖）: LLM网关/向量化/索引/检索器/生成器")

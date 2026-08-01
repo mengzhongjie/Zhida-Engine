@@ -87,6 +87,16 @@ class Settings(BaseSettings):
     # ---- 服务端口 ----
     API_HOST: str = "127.0.0.1"
     API_PORT: int = 18900  # 本地回环，不对外暴露
+    CORS_ORIGINS: str = "http://localhost:5173,http://127.0.0.1:5173"
+    TRUSTED_HOSTS: str = "localhost,127.0.0.1,::1"
+
+    @property
+    def cors_origins(self) -> list[str]:
+        return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
+
+    @property
+    def trusted_hosts(self) -> list[str]:
+        return [host.strip() for host in self.TRUSTED_HOSTS.split(",") if host.strip()]
 
     # ---- Embedding 模型 ----
     # 默认使用本地 BGE 模型，无需 API Key
@@ -115,19 +125,14 @@ class Settings(BaseSettings):
     # ---- 模块开关 ----
     # 所有重功能均有开关，用户根据实际需求自由组合
     ENABLE_SINGLE_FLIGHT: bool = True  # 幂等请求合并
-    ENABLE_GRAPH_RETRIEVAL: bool = True  # 图检索增强
-    ENABLE_RERANK: bool = False  # 重排序（需从 HuggingFace 下载模型，默认关闭避免联网阻塞）
     ENABLE_STREAMING: bool = True  # 流式输出
-    ENABLE_AUTO_LEARNING: bool = True  # 自动学习群聊知识
     ENABLE_SOURCE_CITATION: bool = True  # 回答后附带消息来源
-    ENABLE_AUTO_MENTION: bool = True  # 回答不了时自动 @ 指定用户
     ENABLE_AUDIO_PARSE: bool = False  # 音频解析（实验性，默认关闭）
     ENABLE_IMAGE_PARSE: bool = False  # 图片解析（实验性，默认关闭）
     ENABLE_MINERU: bool = False  # MinerU 文档解析（可选，需安装 magic-pdf）
 
     # ---- 安全配置 ----
     ENABLE_RATE_LIMIT: bool = True  # 限流总开关
-    ENABLE_LOCAL_ONLY: bool = True  # 仅允许本地请求
     MAX_UPLOAD_SIZE_MB: int = 100  # 最大上传文件大小
     MAX_REQUEST_SIZE_MB: int = 10  # 最大请求体大小
     API_KEY_ENCRYPT_ENABLED: bool = True  # API Key 加密存储

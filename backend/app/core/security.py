@@ -212,23 +212,6 @@ def sanitize_input(text: str, max_length: int = 2000) -> str:
 
 
 # ============================================================
-# 请求来源校验
-# ============================================================
-
-def validate_local_request(client_host: str) -> bool:
-    """
-    校验请求是否来自本地
-
-    本地桌面应用只接受 127.0.0.1 / ::1 的请求。
-    """
-    if not settings.ENABLE_LOCAL_ONLY:
-        return True
-
-    allowed_hosts = {"127.0.0.1", "::1", "localhost"}
-    return client_host in allowed_hosts
-
-
-# ============================================================
 # 日志脱敏 Filter
 # ============================================================
 

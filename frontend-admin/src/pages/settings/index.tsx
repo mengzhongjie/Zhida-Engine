@@ -54,14 +54,9 @@ interface LLMConfig {
 
 interface ModuleSettings {
   enable_single_flight: boolean
-  enable_graph_retrieval: boolean
-  enable_rerank: boolean
   enable_streaming: boolean
-  enable_auto_learning: boolean
   enable_source_citation: boolean
-  enable_auto_mention: boolean
   enable_rate_limit: boolean
-  enable_local_only: boolean
 }
 
 interface EmbeddingProviderModel {
@@ -120,6 +115,7 @@ export default function SettingsPage() {
   const [webSearchConfig, setWebSearchConfig] = useState<WebSearchConfig | null>(null)
   const [webSearchForm] = Form.useForm()
   const [webSearchSaving, setWebSearchSaving] = useState(false)
+  const [webSearchTesting, setWebSearchTesting] = useState(false)
 
   const loadWebSearchConfig = useCallback(async () => {
     try {
@@ -190,6 +186,17 @@ export default function SettingsPage() {
       message.success('网络检索配置已保存')
     } catch (error: any) { message.error(error?.response?.data?.detail || '保存失败') }
     finally { setWebSearchSaving(false) }
+  }
+
+  const testWebSearchConfig = async () => {
+    const values = await webSearchForm.validateFields()
+    setWebSearchTesting(true)
+    try {
+      const result = await api.post<{ success: boolean; message: string; result_count: number }>('/admin/web-search/test', values)
+      if (result.success) message.success(`${result.message}，返回 ${result.result_count} 条结果`)
+      else message.error(result.message)
+    } catch { message.error('网络检索测试失败') }
+    finally { setWebSearchTesting(false) }
   }
 
   const handleCreate = () => {
@@ -286,6 +293,16 @@ export default function SettingsPage() {
 
     setTesting(true)
     try {
+      if (editingId && !values.api_key) {
+        const res = await api.post<{
+          success: boolean
+          message: string
+          latency_ms: number
+        }>(`/llm/configs/${editingId}/test`)
+        if (res.success) message.success(`连接成功！延迟 ${res.latency_ms.toFixed(0)}ms`)
+        else message.error(`连接失败: ${res.message}`)
+        return
+      }
       const res = await api.post<{
         success: boolean
         message: string
@@ -706,7 +723,10 @@ export default function SettingsPage() {
             <Form.Item name="provider" label="搜索服务" rules={[{ required: true }]}><Select options={[{ label: 'Tavily（推荐，有免费额度）', value: 'tavily' }, { label: 'Bing RSS（实验，无需密钥）', value: 'bing_rss' }]} /></Form.Item>
             <Form.Item name="api_key" label="搜索 API Key" extra={webSearchConfig?.api_key ? `当前：${webSearchConfig.api_key}；留空表示不修改` : 'Tavily 需要 API Key；Bing RSS 实验模式无需填写'}><Input.Password autoComplete="new-password" placeholder="Bing RSS 可留空" /></Form.Item>
             <Form.Item name="max_results" label="每次最多返回结果" rules={[{ required: true }]}><InputNumber min={1} max={10} style={{ width: '100%' }} /></Form.Item>
-            <Button type="primary" onClick={saveWebSearchConfig} loading={webSearchSaving}>保存网络检索配置</Button>
+            <Space>
+              <Button onClick={testWebSearchConfig} loading={webSearchTesting}>测试连接</Button>
+              <Button type="primary" onClick={saveWebSearchConfig} loading={webSearchSaving}>保存网络检索配置</Button>
+            </Space>
           </Form>
         </Card>
       ),
@@ -729,14 +749,9 @@ export default function SettingsPage() {
                       <Text strong>{
                         {
                           enable_single_flight: '幂等 Single-Flight',
-                          enable_graph_retrieval: '图检索增强',
-                          enable_rerank: '重排序',
                           enable_streaming: '流式输出',
-                          enable_auto_learning: '自动学习',
                           enable_source_citation: '返回结构化来源',
-                          enable_auto_mention: '自动 @ 指定用户',
                           enable_rate_limit: '请求限流',
-                          enable_local_only: '仅本地访问',
                         }[key]
                       }</Text>
                     </div>
@@ -868,7 +883,7 @@ export default function SettingsPage() {
           <Form.Item
             name="api_key"
             label="API Key"
-            extra={editingId ? '留空表示不修改原有 API Key' : ''}
+            extra={editingId ? '留空表示不修改；测试会复用已保存的 API Key' : ''}
           >
             <Input.Password placeholder="请输入 API Key" autoComplete="new-password" />
           </Form.Item>
