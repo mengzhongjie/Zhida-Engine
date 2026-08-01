@@ -60,6 +60,8 @@ class LangfuseConfigOut(BaseModel):
     host: str = "https://cloud.langfuse.com"
     public_key: str = ""
     secret_key: str = ""
+    evaluator_enabled: bool = False
+    evaluator_model_config_id: Optional[int] = None
 
 
 class LangfuseConfigUpdate(BaseModel):
@@ -67,6 +69,8 @@ class LangfuseConfigUpdate(BaseModel):
     host: str = "https://cloud.langfuse.com"
     public_key: Optional[str] = None
     secret_key: Optional[str] = None
+    evaluator_enabled: bool = False
+    evaluator_model_config_id: Optional[int] = None
 
 
 # ============================================================

@@ -158,6 +158,8 @@ class Settings(BaseSettings):
     LANGFUSE_HOST: str = "https://cloud.langfuse.com"
     LANGFUSE_PUBLIC_KEY: str = ""
     LANGFUSE_SECRET_KEY: str = ""
+    LANGFUSE_EVALUATOR_ENABLED: bool = False
+    LANGFUSE_EVALUATOR_MODEL_CONFIG_ID: int | None = None
 
     # ---- 限流配置 ----
     RATE_LIMIT_TOKEN_RATE: float = 10.0  # 令牌桶速率（令牌/秒）

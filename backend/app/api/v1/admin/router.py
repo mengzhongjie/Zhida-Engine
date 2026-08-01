@@ -78,6 +78,8 @@ async def load_langfuse_config(db: AsyncSession) -> None:
     settings.LANGFUSE_HOST = config.host
     settings.LANGFUSE_PUBLIC_KEY = decrypt_api_key(config.public_key)
     settings.LANGFUSE_SECRET_KEY = decrypt_api_key(config.secret_key)
+    settings.LANGFUSE_EVALUATOR_ENABLED = config.evaluator_enabled
+    settings.LANGFUSE_EVALUATOR_MODEL_CONFIG_ID = config.evaluator_model_config_id
 
 
 @router.get("/langfuse", response_model=LangfuseConfigOut)
@@ -85,7 +87,7 @@ async def get_langfuse_config(db: AsyncSession = Depends(get_db)):
     config = await db.get(LangfuseConfig, 1)
     if config is None:
         return LangfuseConfigOut(enabled=settings.LANGFUSE_ENABLED, host=settings.LANGFUSE_HOST)
-    return LangfuseConfigOut(enabled=config.enabled, host=config.host, public_key=mask_api_key(decrypt_api_key(config.public_key)), secret_key=mask_api_key(decrypt_api_key(config.secret_key)))
+    return LangfuseConfigOut(enabled=config.enabled, host=config.host, public_key=mask_api_key(decrypt_api_key(config.public_key)), secret_key=mask_api_key(decrypt_api_key(config.secret_key)), evaluator_enabled=config.evaluator_enabled, evaluator_model_config_id=config.evaluator_model_config_id)
 
 
 @router.put("/langfuse", response_model=LangfuseConfigOut)
@@ -94,11 +96,23 @@ async def update_langfuse_config(request: LangfuseConfigUpdate, db: AsyncSession
     if config is None:
         config = LangfuseConfig(id=1)
         db.add(config)
+    if request.evaluator_enabled:
+        if request.evaluator_model_config_id is None:
+            raise HTTPException(status_code=422, detail="请选择独立评测模型")
+        evaluator = await db.get(LLMConfig, request.evaluator_model_config_id)
+        if evaluator is None or not evaluator.is_active:
+            raise HTTPException(status_code=422, detail="评测模型不存在或未启用")
+        if "deepseek" in f"{evaluator.provider_id} {evaluator.model_name}".lower():
+            raise HTTPException(status_code=422, detail="评测模型不能使用 DeepSeek，请选择独立的非 DeepSeek 模型")
     config.enabled, config.host = request.enabled, request.host.rstrip("/")
+    config.evaluator_enabled = request.evaluator_enabled
+    config.evaluator_model_config_id = request.evaluator_model_config_id
     if request.public_key: config.public_key = encrypt_api_key(request.public_key)
     if request.secret_key: config.secret_key = encrypt_api_key(request.secret_key)
     settings.LANGFUSE_ENABLED, settings.LANGFUSE_HOST = config.enabled, config.host
     settings.LANGFUSE_PUBLIC_KEY, settings.LANGFUSE_SECRET_KEY = decrypt_api_key(config.public_key), decrypt_api_key(config.secret_key)
+    settings.LANGFUSE_EVALUATOR_ENABLED = config.evaluator_enabled
+    settings.LANGFUSE_EVALUATOR_MODEL_CONFIG_ID = config.evaluator_model_config_id
     await db.flush()
     return await get_langfuse_config(db)
 

@@ -9,3 +9,5 @@ class LangfuseConfig(Base):
     host = Column(String(500), default="https://cloud.langfuse.com", nullable=False)
     public_key = Column(Text, default="", nullable=False)
     secret_key = Column(Text, default="", nullable=False)
+    evaluator_enabled = Column(Boolean, default=False, nullable=False)
+    evaluator_model_config_id = Column(Integer, nullable=True)

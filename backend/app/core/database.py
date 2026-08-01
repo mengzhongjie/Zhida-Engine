@@ -133,6 +133,8 @@ async def _run_compatible_migrations(conn):
         "ALTER TABLE documents ADD COLUMN total_time_ms FLOAT NOT NULL DEFAULT 0",
         "ALTER TABLE documents ADD COLUMN processing_stage VARCHAR(30)",
         "ALTER TABLE documents ADD COLUMN failed_stage VARCHAR(30)",
+        "ALTER TABLE langfuse_configs ADD COLUMN evaluator_enabled BOOLEAN NOT NULL DEFAULT 0",
+        "ALTER TABLE langfuse_configs ADD COLUMN evaluator_model_config_id INTEGER",
         "ALTER TABLE documents ADD COLUMN processing_attempts INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE knowledge_bases ADD COLUMN embedding_model VARCHAR(300)",
         "ALTER TABLE knowledge_bases ADD COLUMN embedding_dimension INTEGER",

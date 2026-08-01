@@ -87,7 +87,10 @@ interface EmbeddingConfig {
 }
 
 interface WebSearchConfig { enabled: boolean; provider: string; api_key: string; max_results: number }
-interface LangfuseConfig { enabled: boolean; host: string; public_key: string; secret_key: string }
+interface LangfuseConfig {
+  enabled: boolean; host: string; public_key: string; secret_key: string
+  evaluator_enabled: boolean; evaluator_model_config_id: number | null
+}
 
 export default function SettingsPage() {
   const [templates, setTemplates] = useState<{
@@ -757,6 +760,10 @@ export default function SettingsPage() {
             <Form.Item name="host" label="服务地址" rules={[{ required: true }]}><Input placeholder="https://cloud.langfuse.com" /></Form.Item>
             <Form.Item name="public_key" label="Public Key" extra={langfuseConfig?.public_key ? `当前：${langfuseConfig.public_key}；留空表示不修改` : ''}><Input.Password autoComplete="new-password" placeholder="pk-lf-..." /></Form.Item>
             <Form.Item name="secret_key" label="Secret Key" extra={langfuseConfig?.secret_key ? `当前：${langfuseConfig.secret_key}；留空表示不修改` : ''}><Input.Password autoComplete="new-password" placeholder="sk-lf-..." /></Form.Item>
+            <Divider>RAG 自动评测（独立模型）</Divider>
+            <Alert type="warning" showIcon style={{ marginBottom: 16 }} message="评测模型不继承用户对话或主模型上下文" description="每轮只读取当前问题、召回父块和最终回答；DeepSeek 不可选。评分会写回对应 Langfuse Trace。" />
+            <Form.Item name="evaluator_enabled" label="启用自动 RAG 评测" valuePropName="checked"><Switch /></Form.Item>
+            <Form.Item noStyle shouldUpdate={(prev, cur) => prev.evaluator_enabled !== cur.evaluator_enabled}>{({ getFieldValue }) => getFieldValue('evaluator_enabled') && <Form.Item name="evaluator_model_config_id" label="独立评测模型" rules={[{ required: true, message: '请选择非 DeepSeek 的评测模型' }]} extra="先在 LLM 配置中新增模型；该模型不需要设为主模型或降级模型。"><Select placeholder="选择评测模型" options={configs.filter(item => item.is_active && !`${item.provider_id} ${item.model_name}`.toLowerCase().includes('deepseek')).map(item => ({ value: item.id, label: `${item.provider_name} / ${item.model_name}` }))} /></Form.Item>}</Form.Item>
             <Button type="primary" onClick={saveLangfuseConfig} loading={langfuseSaving}>保存 Langfuse 配置</Button>
           </Form>
         </Card>
