@@ -476,6 +476,7 @@ class AnswerGenerator:
         include_sources: bool = True,
         temperature: float = 0.7,
         agent_id: Optional[int] = None,
+        user_id: Optional[str] = None,
     ) -> AsyncIterator[str]:
         """
         流式生成回答 —— 逐 token 返回
@@ -492,9 +493,14 @@ class AnswerGenerator:
                 top_k=top_k,
                 include_sources=include_sources,
                 temperature=temperature,
+                agent_id=agent_id,
+                user_id=user_id,
             )
             yield result.answer
             return
+
+        total_start = time.time()
+        retrieval_start = time.time()
 
         # 检索
         try:
@@ -505,12 +511,15 @@ class AnswerGenerator:
             )
         except Exception:
             results = []
+        retrieval_time = (time.time() - retrieval_start) * 1000
 
         # 构建上下文；无结果或身份类问题信息不完整时补充网络资料。
         context = prompt_template.build_context_from_results(results) if results else "知识库中暂无相关内容"
+        web_search_count = 0
         if self._needs_web_supplement(question, results):
             search_query = self._build_web_search_query(question, results)
             logger.info(f"流式回答本地信息存在缺口，触发联网补充（显式授权={self._explicitly_requests_web(question)}）: {search_query}")
+            web_search_count = 1
             web_results = await web_search_service.search(search_query)
             web_context, _ = self._web_context_and_sources(web_results)
             if web_context:
@@ -523,18 +532,47 @@ class AnswerGenerator:
             include_sources=include_sources and settings.ENABLE_SOURCE_CITATION,
         )
 
-        # 流式调用 LLM
+        # 流式调用 LLM。完整答案在结束后异步上报 Langfuse；不影响每个片段即时返回。
+        answer_parts: list[str] = []
+        model_used = "unknown"
+        degraded = False
+        generation_start = time.time()
         try:
             async with self._llm_lock:
                 await llm_gateway.initialize(agent_id)
+                model_used = llm_gateway.primary_model_name or "unknown"
                 async for chunk in llm_gateway.chat_stream(
                     prompt=prompt,
                     temperature=temperature,
                 ):
+                    answer_parts.append(chunk)
                     yield chunk
         except Exception as e:
             logger.error(f"流式生成失败: {e}")
-            yield degradation_manager.get_llm_offline_response()
+            degraded = True
+            model_used = "offline"
+            fallback = degradation_manager.get_llm_offline_response()
+            answer_parts.append(fallback)
+            yield fallback
+        finally:
+            generation_time = (time.time() - generation_start) * 1000
+            answer_text = "".join(answer_parts)
+            if answer_text:
+                asyncio.create_task(observe_qa(
+                    question=question,
+                    answer=answer_text,
+                    user_id=user_id,
+                    model=model_used,
+                    metadata={
+                        "source": "stream",
+                        "agent_id": agent_id,
+                        "retrieval_time_ms": round(retrieval_time),
+                        "generation_time_ms": round(generation_time),
+                        "total_time_ms": round((time.time() - total_start) * 1000),
+                        "web_search_count": web_search_count,
+                        "degraded": degraded,
+                    },
+                ))
 
 
 # 全局回答生成器实例

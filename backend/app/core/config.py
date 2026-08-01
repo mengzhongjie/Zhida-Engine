@@ -125,7 +125,7 @@ class Settings(BaseSettings):
     # ---- 模块开关 ----
     # 所有重功能均有开关，用户根据实际需求自由组合
     ENABLE_SINGLE_FLIGHT: bool = True  # 幂等请求合并
-    ENABLE_STREAMING: bool = True  # 流式输出
+    ENABLE_STREAMING: bool = True  # 预留给内部调用的模型流式能力
     ENABLE_SOURCE_CITATION: bool = True  # 回答后附带消息来源
     ENABLE_AUDIO_PARSE: bool = False  # 音频解析（实验性，默认关闭）
     ENABLE_IMAGE_PARSE: bool = False  # 图片解析（实验性，默认关闭）

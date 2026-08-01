@@ -76,7 +76,6 @@ class LangfuseConfigUpdate(BaseModel):
 class ModuleSwitchesOut(BaseModel):
     """模块开关输出"""
     enable_single_flight: bool = Field(..., description="Single-Flight 幂等合并")
-    enable_streaming: bool = Field(..., description="流式输出")
     enable_source_citation: bool = Field(..., description="回答后附带消息来源")
     enable_rate_limit: bool = Field(..., description="限流总开关")
 
@@ -84,7 +83,6 @@ class ModuleSwitchesOut(BaseModel):
 class ModuleSwitchesUpdate(BaseModel):
     """模块开关更新请求"""
     enable_single_flight: Optional[bool] = Field(None, description="Single-Flight 幂等合并")
-    enable_streaming: Optional[bool] = Field(None, description="流式输出")
     enable_source_citation: Optional[bool] = Field(None, description="回答后附带消息来源")
     enable_rate_limit: Optional[bool] = Field(None, description="限流总开关")
 

@@ -54,7 +54,6 @@ interface LLMConfig {
 
 interface ModuleSettings {
   enable_single_flight: boolean
-  enable_streaming: boolean
   enable_source_citation: boolean
   enable_rate_limit: boolean
 }
@@ -781,7 +780,6 @@ export default function SettingsPage() {
                       <Text strong>{
                         {
                           enable_single_flight: '幂等 Single-Flight',
-                          enable_streaming: '流式输出',
                           enable_source_citation: '返回结构化来源',
                           enable_rate_limit: '请求限流',
                         }[key]

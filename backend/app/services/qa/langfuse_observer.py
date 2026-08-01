@@ -12,5 +12,6 @@ async def observe_qa(**data) -> None:
         trace = client.trace(name="rag-answer", user_id=data.get("user_id"), session_id=data.get("session_id"), input={"question": data.get("question", "")})
         trace.generation(name="answer", model=data.get("model", "unknown"), output=data.get("answer", ""), metadata=data.get("metadata", {}), usage={"input": data.get("input_tokens", 0), "output": data.get("output_tokens", 0)})
         client.flush()
+        logger.info("Langfuse 观测已上报：model={}, source={}", data.get("model", "unknown"), data.get("metadata", {}).get("source", "sync"))
     except Exception as exc:
         logger.warning(f"Langfuse 观测写入失败（不影响问答）: {exc}")
