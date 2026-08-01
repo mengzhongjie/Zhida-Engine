@@ -6,6 +6,7 @@
 
 from datetime import datetime, date, timedelta, time as dt_time
 import hashlib
+import json
 import secrets
 import hmac
 import time
@@ -22,8 +23,9 @@ from app.models.agent import Agent
 from app.models.knowledge import KnowledgeBase, Document
 from app.models.qa import QAHistory
 from app.models.llm_config import LLMConfig
-from app.models.miniapp import AdminLoginTicket, AdminSession, Invitation, InvitationClaim, InvitationDailyUsage, MiniAppUser
+from app.models.miniapp import Invitation, InvitationClaim, InvitationDailyUsage, MiniAppUser
 from app.models.web_search_config import WebSearchConfig
+from app.models.langfuse_config import LangfuseConfig
 from app.schemas.admin import (
     DashboardStatsOut,
     ModuleSwitchesOut,
@@ -41,11 +43,10 @@ from app.schemas.admin import (
     WebSearchConfigUpdate,
     WebSearchTestRequest,
     WebSearchTestResponse,
+    LangfuseConfigOut,
+    LangfuseConfigUpdate,
 )
 from app.schemas.miniapp import (
-    AdminTicketConfirm,
-    AdminTicketOut,
-    AdminTicketPollOut,
     InvitationCreate,
     InvitationCreateOut,
     InvitationDailyLimitUpdate,
@@ -67,6 +68,39 @@ async def load_web_search_config(db: AsyncSession) -> None:
     settings.WEB_SEARCH_PROVIDER = config.provider
     settings.WEB_SEARCH_MAX_RESULTS = config.max_results
     settings.WEB_SEARCH_API_KEY = decrypt_api_key(config.api_key)
+
+
+async def load_langfuse_config(db: AsyncSession) -> None:
+    config = await db.get(LangfuseConfig, 1)
+    if config is None:
+        return
+    settings.LANGFUSE_ENABLED = config.enabled
+    settings.LANGFUSE_HOST = config.host
+    settings.LANGFUSE_PUBLIC_KEY = decrypt_api_key(config.public_key)
+    settings.LANGFUSE_SECRET_KEY = decrypt_api_key(config.secret_key)
+
+
+@router.get("/langfuse", response_model=LangfuseConfigOut)
+async def get_langfuse_config(db: AsyncSession = Depends(get_db)):
+    config = await db.get(LangfuseConfig, 1)
+    if config is None:
+        return LangfuseConfigOut(enabled=settings.LANGFUSE_ENABLED, host=settings.LANGFUSE_HOST)
+    return LangfuseConfigOut(enabled=config.enabled, host=config.host, public_key=mask_api_key(decrypt_api_key(config.public_key)), secret_key=mask_api_key(decrypt_api_key(config.secret_key)))
+
+
+@router.put("/langfuse", response_model=LangfuseConfigOut)
+async def update_langfuse_config(request: LangfuseConfigUpdate, db: AsyncSession = Depends(get_db)):
+    config = await db.get(LangfuseConfig, 1)
+    if config is None:
+        config = LangfuseConfig(id=1)
+        db.add(config)
+    config.enabled, config.host = request.enabled, request.host.rstrip("/")
+    if request.public_key: config.public_key = encrypt_api_key(request.public_key)
+    if request.secret_key: config.secret_key = encrypt_api_key(request.secret_key)
+    settings.LANGFUSE_ENABLED, settings.LANGFUSE_HOST = config.enabled, config.host
+    settings.LANGFUSE_PUBLIC_KEY, settings.LANGFUSE_SECRET_KEY = decrypt_api_key(config.public_key), decrypt_api_key(config.secret_key)
+    await db.flush()
+    return await get_langfuse_config(db)
 
 
 @router.get("/web-search", response_model=WebSearchConfigOut)
@@ -162,69 +196,6 @@ def _validate_miniapp_gateway(request: Request) -> str:
     if not hmac.compare_digest(expected, signature):
         raise HTTPException(status_code=401, detail="无效的小程序网关签名")
     return openid
-
-
-# ============================================================
-# 管理员小程序扫码登录
-# ============================================================
-
-@router.get("/auth/status")
-async def get_admin_auth_status():
-    """供网页前端判断当前部署是否需要管理员扫码登录。"""
-    return {"required": settings.ADMIN_AUTH_REQUIRED}
-
-@router.post("/auth/tickets", response_model=AdminTicketOut)
-async def create_admin_login_ticket(db: AsyncSession = Depends(get_db)):
-    """浏览器创建一次性二维码票据，小程序扫描后确认管理员身份。"""
-    ticket_id = secrets.token_urlsafe(24)
-    ticket = AdminLoginTicket(id=ticket_id, expires_at=datetime.utcnow() + timedelta(minutes=2))
-    db.add(ticket)
-    await db.flush()
-    return AdminTicketOut(ticket_id=ticket_id, qr_payload=f"zhida-admin:{ticket_id}", expires_at=ticket.expires_at)
-
-
-@router.post("/auth/confirm", response_model=AdminTicketPollOut)
-async def confirm_admin_login(
-    payload: AdminTicketConfirm,
-    request: Request,
-    db: AsyncSession = Depends(get_db),
-):
-    """由 CloudBase 云函数调用，只有配置的管理员 OpenID 可以确认二维码。"""
-    openid = _validate_miniapp_gateway(request)
-    allowed_openids = {item.strip() for item in settings.ADMIN_OPENIDS.split(",") if item.strip()}
-    if openid not in allowed_openids:
-        raise HTTPException(status_code=403, detail="当前微信账号不是管理员")
-    ticket = await db.get(AdminLoginTicket, payload.ticket_id)
-    if ticket is None or ticket.status != "pending" or ticket.expires_at < datetime.utcnow():
-        raise HTTPException(status_code=400, detail="登录二维码已失效")
-    ticket.status = "approved"
-    ticket.approved_openid = openid
-    await db.flush()
-    return AdminTicketPollOut(status="approved")
-
-
-@router.get("/auth/tickets/{ticket_id}", response_model=AdminTicketPollOut)
-async def poll_admin_login(ticket_id: str, db: AsyncSession = Depends(get_db)):
-    """浏览器轮询二维码状态；票据确认后只签发一次短期管理令牌。"""
-    ticket = await db.get(AdminLoginTicket, ticket_id)
-    if ticket is None:
-        raise HTTPException(status_code=404, detail="登录二维码不存在")
-    if ticket.status == "pending" and ticket.expires_at < datetime.utcnow():
-        ticket.status = "expired"
-        await db.flush()
-    if ticket.status != "approved":
-        return AdminTicketPollOut(status=ticket.status)
-
-    token = secrets.token_urlsafe(32)
-    session = AdminSession(
-        token_hash=hashlib.sha256(token.encode("utf-8")).hexdigest(),
-        openid=ticket.approved_openid,
-        expires_at=datetime.utcnow() + timedelta(seconds=settings.ADMIN_SESSION_TTL_SECONDS),
-    )
-    db.add(session)
-    ticket.status = "consumed"
-    await db.flush()
-    return AdminTicketPollOut(status="approved", access_token=token)
 
 
 # ============================================================
@@ -363,7 +334,18 @@ async def get_dashboard_stats(
     # Token 统计
     today_input_tokens = sum(qa.input_tokens or 0 for qa in today_qas)
     today_output_tokens = sum(qa.output_tokens or 0 for qa in today_qas)
-    web_search_count = sum(1 for qa in today_qas if "source_type': 'web'" in (qa.sources or ""))
+    def _legacy_web_search_count(raw_sources: str | None) -> int:
+        """兼容新字段上线前的历史记录；实际新记录以独立计数为准。"""
+        try:
+            sources = json.loads(raw_sources or "[]")
+            return int(any((item.get("metadata") or {}).get("source_type") == "web" or item.get("source_type") == "web" for item in sources))
+        except (TypeError, ValueError, AttributeError):
+            return 0
+
+    web_search_count = sum(
+        qa.web_search_count if (qa.web_search_count or 0) > 0 else _legacy_web_search_count(qa.sources)
+        for qa in today_qas
+    )
 
     # 知识库统计
     doc_result = await db.execute(select(Document))

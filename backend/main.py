@@ -73,10 +73,11 @@ def create_app():
         # 初始化向量化配置（从数据库加载）
         from app.core.database import async_session_factory
         from app.api.v1.embedding.router import init_embedding_config
-        from app.api.v1.admin.router import load_web_search_config
+        from app.api.v1.admin.router import load_langfuse_config, load_web_search_config
         async with async_session_factory() as db:
             await init_embedding_config(db)
             await load_web_search_config(db)
+            await load_langfuse_config(db)
 
         # 单机后台任务没有外部队列；启动时恢复上次中断的文档处理。
         from app.services.knowledge.document_processor import resume_unfinished_document_processing
@@ -120,10 +121,6 @@ def create_app():
     # 限流中间件 —— 令牌桶 + 滑动窗口 + 问题冷却 + 静默时段
     from app.api.middleware.rate_limit import RateLimitMiddleware
     app.add_middleware(RateLimitMiddleware)
-
-    # 云端部署可开启二维码管理员认证；桌面版默认保持本地免登录体验。
-    from app.api.middleware.admin_auth import AdminAuthMiddleware
-    app.add_middleware(AdminAuthMiddleware)
 
     # ================================================================
     # 注册 API 路由

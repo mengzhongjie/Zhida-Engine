@@ -52,6 +52,7 @@ filetype==1.2.0  # magic bytes 文件格式检测
 # ---- 工具 ----
 loguru==0.7.2
 httpx==0.27.0
+langfuse>=2.60,<3
 python-dateutil==2.9.0
 psutil==6.0.0
 

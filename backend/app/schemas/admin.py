@@ -55,6 +55,20 @@ class WebSearchTestResponse(BaseModel):
     result_count: int = 0
 
 
+class LangfuseConfigOut(BaseModel):
+    enabled: bool = False
+    host: str = "https://cloud.langfuse.com"
+    public_key: str = ""
+    secret_key: str = ""
+
+
+class LangfuseConfigUpdate(BaseModel):
+    enabled: bool
+    host: str = "https://cloud.langfuse.com"
+    public_key: Optional[str] = None
+    secret_key: Optional[str] = None
+
+
 # ============================================================
 # 模块开关 Schema
 # ============================================================

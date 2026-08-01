@@ -153,6 +153,12 @@ class Settings(BaseSettings):
     WEB_SEARCH_API_KEY: str = ""
     WEB_SEARCH_MAX_RESULTS: int = 3
 
+    # ---- Langfuse Cloud 可选观测 ----
+    LANGFUSE_ENABLED: bool = False
+    LANGFUSE_HOST: str = "https://cloud.langfuse.com"
+    LANGFUSE_PUBLIC_KEY: str = ""
+    LANGFUSE_SECRET_KEY: str = ""
+
     # ---- 限流配置 ----
     RATE_LIMIT_TOKEN_RATE: float = 10.0  # 令牌桶速率（令牌/秒）
     RATE_LIMIT_TOKEN_CAPACITY: int = 3  # 令牌桶容量
@@ -202,6 +208,13 @@ class Settings(BaseSettings):
     """解析结果为空时自动标记失败"""
     FORMAT_MIN_QUALITY_SCORE: int = 10
     """综合质量评分最低通过线（0-100）"""
+
+    # ---- 轻量文档任务可靠性 ----
+    DOCUMENT_PROCESS_TIMEOUT_BASE_SECONDS: int = 90
+    DOCUMENT_PROCESS_TIMEOUT_PER_MB_SECONDS: int = 12
+    DOCUMENT_PROCESS_TIMEOUT_MAX_SECONDS: int = 900
+    DOCUMENT_PROCESS_MAX_ATTEMPTS: int = 3
+    DOCUMENT_PROCESS_RETRY_BASE_SECONDS: int = 3
 
     model_config = {
         "env_prefix": "ZHIDA_",
