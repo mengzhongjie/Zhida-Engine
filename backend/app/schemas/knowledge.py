@@ -37,6 +37,9 @@ class KnowledgeBaseOut(BaseModel):
     chunk_count: int = 0
     total_size_bytes: int = 0
     is_active: bool = True
+    index_status: str = "ready"
+    embedding_model: Optional[str] = None
+    embedding_dimension: Optional[int] = None
     created_at: datetime
     updated_at: datetime
 
@@ -65,6 +68,12 @@ class DocumentOut(BaseModel):
     error_message: Optional[str] = None
     chunk_count: int = 0
     parse_time_ms: float = 0.0
+    split_time_ms: float = 0.0
+    embedding_time_ms: float = 0.0
+    total_time_ms: float = 0.0
+    processing_stage: Optional[str] = None
+    failed_stage: Optional[str] = None
+    processing_attempts: int = 0
     created_at: datetime
     updated_at: datetime
     duplicate: bool = False  # 本次上传是否命中已有相同文件
