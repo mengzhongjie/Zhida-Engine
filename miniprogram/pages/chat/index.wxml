@@ -28,7 +28,7 @@
               <view wx:elif="{{block.type === 'heading3'}}" class="md-heading md-heading-3">{{block.text}}</view>
               <view wx:elif="{{block.type === 'list'}}" class="md-list"><text class="md-list-mark">{{block.ordered ? '▸' : '•'}}</text><text>{{block.text}}</text></view>
               <view wx:elif="{{block.type === 'code'}}" class="md-code">{{block.text}}</view>
-              <text wx:else class="msg-content">{{block.text}}</text>
+              <view wx:else class="md-paragraph">{{block.text}}</view>
             </block>
           </block>
           <text wx:else class="msg-content">{{item.content}}</text>

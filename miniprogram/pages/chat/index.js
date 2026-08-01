@@ -200,10 +200,13 @@ Page({
         this.typingTimer = null
       }
       const msgs = this.data.messages
-      msgs[msgIndex].content = fullText.substring(0, pos)
+      const visibleText = fullText.substring(0, pos)
+      msgs[msgIndex].content = visibleText
       msgs[msgIndex].showCursor = !isFinished
+      // 流式显示期间也解析已经完整到达的段落，避免换行与列表直到结束才突然合并。
+      // 对未闭合的 Markdown，解析器会按普通段落安全展示。
+      msgs[msgIndex].blocks = parseMarkdown(visibleText)
       if (isFinished) {
-        msgs[msgIndex].blocks = parseMarkdown(fullText)
         msgs[msgIndex].sources = sources
       }
       this.setData({ messages: msgs, typingIndex: pos })
