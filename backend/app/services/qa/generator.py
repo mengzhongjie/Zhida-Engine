@@ -96,6 +96,22 @@ class AnswerGenerator:
         return sources
 
     @staticmethod
+    def _langfuse_retrieval_chunks(results: list[IndexResult], limit: int = 5) -> list[dict]:
+        """为 Langfuse RAG 评测保留实际被送入模型的父块证据。"""
+        chunks: list[dict] = []
+        for rank, result in enumerate(results[:limit], start=1):
+            metadata = result.metadata or {}
+            chunks.append({
+                "rank": rank,
+                "document": metadata.get("filename", "未知来源"),
+                "document_id": metadata.get("document_id"),
+                "parent_id": metadata.get("parent_id"),
+                "score": result.score,
+                "content": result.text[:1200],
+            })
+        return chunks
+
+    @staticmethod
     def _explicitly_requests_web(question: str) -> bool:
         """用户明确要求联网时，不能因本地已有命中而跳过网络检索。"""
         return bool(re.search(
@@ -424,7 +440,6 @@ class AnswerGenerator:
         # 8. 写入记忆（异步，不阻塞返回）
         if enable_memory and memory_service.is_available and not degraded:
             try:
-                import asyncio
                 agent_str = str(agent_id) if agent_id else None
                 messages = [
                     {"role": "user", "content": question},
@@ -453,6 +468,7 @@ class AnswerGenerator:
         asyncio.create_task(observe_qa(
             question=question, answer=answer_text, user_id=user_id,
             model=model_used, input_tokens=input_tokens, output_tokens=output_tokens,
+            retrieval_chunks=self._langfuse_retrieval_chunks(results),
             metadata={"agent_id": agent_id, "retrieval_time_ms": round(retrieval_time), "generation_time_ms": round(generation_time), "web_search_count": web_search_count, "degraded": degraded},
         ))
 
@@ -563,6 +579,7 @@ class AnswerGenerator:
                     answer=answer_text,
                     user_id=user_id,
                     model=model_used,
+                    retrieval_chunks=self._langfuse_retrieval_chunks(results),
                     metadata={
                         "source": "stream",
                         "agent_id": agent_id,
