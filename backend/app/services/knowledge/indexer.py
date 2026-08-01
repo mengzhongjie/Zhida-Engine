@@ -29,6 +29,8 @@ class IndexResult:
 
 
 class IndexManager:
+    INDEX_VERSION = "rag-index-v2"
+    INDEX_SPACE = "cosine"
     """
     索引管理器 —— 管理 ChromaDB 向量存储
 
@@ -85,20 +87,37 @@ class IndexManager:
             try:
                 collection = self._client.get_collection(name=safe_name)
             except Exception:
+                fingerprint = self.current_fingerprint()
                 collection = self._client.create_collection(
                     name=safe_name,
                     metadata={
                         "kb_id": canonical_id,
-                        "hnsw:space": "cosine",
+                        "hnsw:space": self.INDEX_SPACE,
                         "hnsw:M": 16,
                         "hnsw:construction_ef": 200,
                         "hnsw:search_ef": 64,
+                        **fingerprint,
                     },
                 )
 
             self._collections[canonical_id] = collection
 
         return self._collections[canonical_id]
+
+    def current_fingerprint(self) -> dict:
+        """当前嵌入服务对应的不可混用索引参数。"""
+        return {
+            "embedding_model": embedding_service.model_name,
+            "embedding_dimension": embedding_service.dimension,
+            "index_space": self.INDEX_SPACE,
+            "index_version": self.INDEX_VERSION,
+        }
+
+    def get_document_chunk_count(self, knowledge_base_id: str | int, document_id: str | int) -> int:
+        """按文档核验 Chroma 中仍存在的向量数。异常必须向上抛出。"""
+        collection = self._get_collection(knowledge_base_id)
+        result = collection.get(where={"document_id": int(document_id)}, include=[])
+        return len(result.get("ids", []))
 
     # ================================================================
     # 索引操作
@@ -167,7 +186,7 @@ class IndexManager:
         self,
         knowledge_base_id: str,
         document_id: str | int,
-    ):
+    ) -> int:
         """
         删除文档的所有切片
 
@@ -177,14 +196,13 @@ class IndexManager:
         """
         collection = self._get_collection(knowledge_base_id)
 
-        # 按 metadata 过滤删除
-        try:
-            collection.delete(
-                where={"document_id": document_id},
-            )
-            logger.info(f"已删除文档切片: {knowledge_base_id}/{document_id}")
-        except Exception as e:
-            logger.warning(f"删除切片失败: {e}")
+        before = self.get_document_chunk_count(knowledge_base_id, document_id)
+        collection.delete(where={"document_id": int(document_id)})
+        remaining = self.get_document_chunk_count(knowledge_base_id, document_id)
+        if remaining:
+            raise RuntimeError(f"向量删除核验失败：仍有 {remaining} 个切片")
+        logger.info(f"已删除文档切片: {knowledge_base_id}/{document_id} ({before} 个)")
+        return before
 
     async def clear_knowledge_base(self, knowledge_base_id: str):
         """清空知识库的所有索引"""

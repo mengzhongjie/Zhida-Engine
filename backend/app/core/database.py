@@ -112,6 +112,7 @@ async def init_db():
         import app.models.embedding_config  # noqa: F401
         import app.models.miniapp           # noqa: F401
         import app.models.web_search_config # noqa: F401
+        import app.models.langfuse_config # noqa: F401
 
         # 创建所有表
         await conn.run_sync(Base.metadata.create_all)
@@ -127,11 +128,23 @@ async def _run_compatible_migrations(conn):
     migrations = [
         "ALTER TABLE agents ADD COLUMN is_public BOOLEAN NOT NULL DEFAULT 0",
         "ALTER TABLE documents ADD COLUMN content_hash VARCHAR(64)",
+        "ALTER TABLE documents ADD COLUMN split_time_ms FLOAT NOT NULL DEFAULT 0",
+        "ALTER TABLE documents ADD COLUMN embedding_time_ms FLOAT NOT NULL DEFAULT 0",
+        "ALTER TABLE documents ADD COLUMN total_time_ms FLOAT NOT NULL DEFAULT 0",
+        "ALTER TABLE documents ADD COLUMN processing_stage VARCHAR(30)",
+        "ALTER TABLE documents ADD COLUMN failed_stage VARCHAR(30)",
+        "ALTER TABLE documents ADD COLUMN processing_attempts INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE knowledge_bases ADD COLUMN embedding_model VARCHAR(300)",
+        "ALTER TABLE knowledge_bases ADD COLUMN embedding_dimension INTEGER",
+        "ALTER TABLE knowledge_bases ADD COLUMN index_space VARCHAR(20)",
+        "ALTER TABLE knowledge_bases ADD COLUMN index_version VARCHAR(40)",
+        "ALTER TABLE knowledge_bases ADD COLUMN index_status VARCHAR(30) NOT NULL DEFAULT 'ready'",
         "ALTER TABLE miniapp_users ADD COLUMN daily_question_limit INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE invitation_claims ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT 1",
         "ALTER TABLE qa_history ADD COLUMN input_tokens INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE qa_history ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE qa_history ADD COLUMN is_degraded BOOLEAN NOT NULL DEFAULT 0",
+        "ALTER TABLE qa_history ADD COLUMN web_search_count INTEGER NOT NULL DEFAULT 0",
     ]
     for sql in migrations:
         try:

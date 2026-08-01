@@ -16,6 +16,7 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import encrypt_api_key, decrypt_api_key, mask_api_key
 from app.models.embedding_config import EmbeddingConfig
+from app.models.knowledge import KnowledgeBase
 from app.schemas.embedding import (
     EmbeddingConfigOut,
     EmbeddingConfigUpdate,
@@ -271,6 +272,24 @@ async def update_embedding_config(
     update_data = request.model_dump(exclude_unset=True)
     logger.info(f"更新向量化配置: {list(update_data.keys())}")
 
+    # 向量模型、模式或维度改变后，新旧向量无法比较。轻量方案不做在线迁移，明确要求先重建。
+    index_fields = {"mode", "model", "local_model", "cloud_model", "cloud_dimension"}
+    if index_fields.intersection(update_data):
+        current = {
+            "mode": settings.EMBEDDING_MODE,
+            "local_model": settings.EMBEDDING_MODEL,
+            "cloud_model": getattr(settings, "EMBEDDING_CLOUD_MODEL", ""),
+            "cloud_dimension": getattr(settings, "EMBEDDING_CLOUD_DIMENSION", 1536),
+        }
+        candidate = {**current, **update_data}
+        changed = any(candidate.get(key) != current.get(key) for key in current if key in candidate)
+        if changed:
+            affected = (await db.execute(select(KnowledgeBase.id, KnowledgeBase.name).where(KnowledgeBase.chunk_count > 0))).all()
+            if affected:
+                names = "、".join(name for _, name in affected[:5])
+                raise HTTPException(status_code=409, detail=f"已有知识库索引（{names}）使用当前向量配置；请先重建索引后再切换模型或维度")
+
+    setting_keys = {"local_model": "EMBEDDING_MODEL", "local_device": "EMBEDDING_DEVICE"}
     for key, value in update_data.items():
         # API Key 特殊处理：加密存储
         if key == "cloud_api_key":
@@ -285,7 +304,7 @@ async def update_embedding_config(
             continue
 
         # 其他配置项直接映射到 settings
-        setting_key = f"EMBEDDING_{key.upper()}"
+        setting_key = setting_keys.get(key, f"EMBEDDING_{key.upper()}")
         if hasattr(settings, setting_key):
             setattr(settings, setting_key, value)
             logger.info(f"  {key}: {value}")

@@ -34,6 +34,13 @@ class KnowledgeBase(Base):
     total_size_bytes = Column(Integer, default=0, comment="总大小（字节）")
     qa_pair_count = Column(Integer, default=0, comment="Q&A 对数量")
 
+    # 索引指纹：避免不同嵌入模型/维度/距离空间的向量被混用。
+    embedding_model = Column(String(300), nullable=True)
+    embedding_dimension = Column(Integer, nullable=True)
+    index_space = Column(String(20), nullable=True)
+    index_version = Column(String(40), nullable=True)
+    index_status = Column(String(30), default="ready", nullable=False)
+
     created_at = Column(DateTime, default=datetime.utcnow, comment="创建时间")
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, comment="更新时间")
 
@@ -62,6 +69,12 @@ class Document(Base):
     chunk_count = Column(Integer, default=0, comment="子切片数量（用于索引）")
     parent_chunk_count = Column(Integer, default=0, comment="父块数量")
     parse_time_ms = Column(Float, default=0.0, comment="解析耗时（毫秒）")
+    split_time_ms = Column(Float, default=0.0, comment="切分耗时（毫秒）")
+    embedding_time_ms = Column(Float, default=0.0, comment="向量化及写入耗时（毫秒）")
+    total_time_ms = Column(Float, default=0.0, comment="处理总耗时（毫秒）")
+    processing_stage = Column(String(30), nullable=True, comment="当前或失败阶段")
+    failed_stage = Column(String(30), nullable=True, comment="失败阶段")
+    processing_attempts = Column(Integer, default=0, comment="已处理次数")
 
     created_at = Column(DateTime, default=datetime.utcnow, comment="创建时间")
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, comment="更新时间")

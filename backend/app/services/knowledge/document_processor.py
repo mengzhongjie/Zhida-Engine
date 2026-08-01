@@ -74,7 +74,7 @@ async def resume_unfinished_document_processing() -> int:
     return len(document_ids)
 
 
-async def _mark_error(document_id: int, message: str, parse_time_ms: float = 0.0) -> None:
+async def _mark_error(document_id: int, message: str, stage: str = "unknown", timings: dict | None = None) -> None:
     async with async_session_factory() as db:
         doc = await db.get(Document, document_id)
         if doc is None:
@@ -82,8 +82,10 @@ async def _mark_error(document_id: int, message: str, parse_time_ms: float = 0.0
         kb = await db.get(KnowledgeBase, doc.knowledge_base_id)
         doc.status = "error"
         doc.error_message = message[:1000]
-        if parse_time_ms:
-            doc.parse_time_ms = parse_time_ms
+        doc.processing_stage = stage
+        doc.failed_stage = stage
+        for field, value in (timings or {}).items():
+            setattr(doc, field, value)
         if kb:
             await _sync_kb_statistics(db, kb)
         await db.commit()
@@ -93,12 +95,13 @@ async def _cleanup_failed_processing(
     document_id: int,
     knowledge_base_id: int,
     message: str,
-    parse_time_ms: float = 0.0,
+    stage: str = "unknown",
+    timings: dict | None = None,
 ) -> None:
     """清理跨存储的半成品，使失败文档不会留下孤儿向量或父块。"""
     try:
         await index_manager.remove_document_chunks(str(knowledge_base_id), document_id)
-    except Exception:
+    except Exception as exc:
         logger.warning(f"清理失败文档的向量索引失败: {document_id}")
 
     async with async_session_factory() as db:
@@ -112,121 +115,134 @@ async def _cleanup_failed_processing(
         doc.parent_chunk_count = 0
         doc.status = "error"
         doc.error_message = message[:1000]
-        if parse_time_ms:
-            doc.parse_time_ms = parse_time_ms
+        doc.processing_stage = stage
+        doc.failed_stage = stage
+        for field, value in (timings or {}).items():
+            setattr(doc, field, value)
         kb = await db.get(KnowledgeBase, knowledge_base_id)
         if kb:
             await _sync_kb_statistics(db, kb)
         await db.commit()
 
 
-async def process_document(document_id: int) -> None:
-    """解析、切分、入库与向量化。任何失败都会明确标记为 error。"""
+def _timeout_seconds(file_size: int) -> int:
+    size_mb = max(1, (file_size + 1024 * 1024 - 1) // (1024 * 1024))
+    return min(settings.DOCUMENT_PROCESS_TIMEOUT_MAX_SECONDS,
+               settings.DOCUMENT_PROCESS_TIMEOUT_BASE_SECONDS + size_mb * settings.DOCUMENT_PROCESS_TIMEOUT_PER_MB_SECONDS)
+
+
+async def _set_stage(document_id: int, stage: str) -> None:
+    async with async_session_factory() as db:
+        doc = await db.get(Document, document_id)
+        if doc:
+            doc.processing_stage = stage
+            await db.commit()
+
+
+async def _process_once(document_id: int) -> None:
+    """一次完整处理尝试。阶段和耗时持久化，避免长时间占用 SQLite 写事务。"""
+    timings = {"parse_time_ms": 0.0, "split_time_ms": 0.0, "embedding_time_ms": 0.0, "total_time_ms": 0.0}
+    started = time.monotonic()
     kb_id: int | None = None
-    elapsed_ms = 0.0
+    stage = "preparing"
     try:
-        # 短事务 1：只更新任务状态并复制后续处理需要的信息。
         async with async_session_factory() as db:
             doc = await db.get(Document, document_id)
-            if doc is None or doc.status == "completed":
+            if doc is None or doc.status in ("completed", "cleanup_pending"):
                 return
             kb = await db.get(KnowledgeBase, doc.knowledge_base_id)
             if kb is None:
-                await _mark_error(document_id, "知识库不存在")
-                return
-
-            kb_id = kb.id
-            doc.status = "processing"
-            doc.error_message = None
+                raise RuntimeError("知识库不存在")
+            kb_id, file_path, filename, file_type = kb.id, doc.file_path, doc.filename, doc.file_type
+            fingerprint = index_manager.current_fingerprint()
+            existing = {key: getattr(kb, key) for key in fingerprint}
+            if kb.chunk_count and any(existing[key] != value for key, value in fingerprint.items()):
+                kb.index_status = "rebuild_required"
+                await db.commit()
+                raise RuntimeError("索引配置已变化，请先重建知识库索引后再上传文档")
+            if not kb.chunk_count:
+                for key, value in fingerprint.items():
+                    setattr(kb, key, value)
+                kb.index_status = "ready"
+            doc.status, doc.error_message, doc.failed_stage, doc.processing_stage = "processing", None, None, stage
+            doc.processing_attempts = (doc.processing_attempts or 0) + 1
             await db.commit()
 
-            file_path = doc.file_path
-            filename = doc.filename
-            file_type = doc.file_type
-
-        # 同一知识库串行修改 Chroma，仍允许问答读取及不同知识库并行处理。
         kb_lock = _kb_locks.setdefault(kb_id, asyncio.Lock())
         async with kb_lock:
-            started_at = time.time()
+            stage = "parsing"; await _set_stage(document_id, stage)
+            phase_start = time.monotonic()
             parse_result = await document_parser.parse(file_path)
-            elapsed_ms = (time.time() - started_at) * 1000
-
-            if settings.ENABLE_FORMAT_CHECK:
-                quality = parse_quality_checker.check(parse_result)
-                if not quality.passed:
-                    message = parse_result.error_message or (
-                        f"文档质量检查未通过 (评分 {quality.score}/100): "
-                        + "; ".join(quality.errors or quality.warnings)
-                    )
-                    await _cleanup_failed_processing(document_id, kb_id, message, elapsed_ms)
-                    return
-
+            timings["parse_time_ms"] = (time.monotonic() - phase_start) * 1000
+            if settings.ENABLE_FORMAT_CHECK and not parse_quality_checker.check(parse_result).passed:
+                raise RuntimeError(parse_result.error_message or "文档质量检查未通过")
             if parse_result.status.value == "failed" or not parse_result.text.strip():
-                await _cleanup_failed_processing(
-                    document_id,
-                    kb_id,
-                    parse_result.error_message or "解析失败",
-                    elapsed_ms,
-                )
-                return
+                raise RuntimeError(parse_result.error_message or "解析失败")
 
-            normalized_text = normalize_text(parse_result.text)
-            parent_chunks, child_chunks = text_splitter.split_parent_child(
-                text=normalized_text,
-                child_size=200,
-                child_overlap=50,
-                parent_multiplier=4,
-                metadata={
-                    "document_id": document_id,
-                    "knowledge_base_id": kb_id,
-                    "filename": filename,
-                    "file_type": file_type,
-                },
-            )
+            stage = "splitting"; await _set_stage(document_id, stage)
+            phase_start = time.monotonic()
+            parent_chunks, child_chunks = text_splitter.split_parent_child(normalize_text(parse_result.text), 200, 50, 4, {
+                "document_id": document_id, "knowledge_base_id": kb_id, "filename": filename, "file_type": file_type,
+            })
+            timings["split_time_ms"] = (time.monotonic() - phase_start) * 1000
 
-            # 长耗时向量化之前提交父块；不持有 SQLite 写事务。
+            stage = "indexing"; await _set_stage(document_id, stage)
+            phase_start = time.monotonic()
             await index_manager.remove_document_chunks(str(kb_id), document_id)
             async with async_session_factory() as db:
-                await db.execute(
-                    DocumentChunk.__table__.delete().where(DocumentChunk.document_id == document_id)
-                )
+                await db.execute(DocumentChunk.__table__.delete().where(DocumentChunk.document_id == document_id))
                 for index, parent in enumerate(parent_chunks):
-                    db.add(DocumentChunk(
-                        document_id=document_id,
-                        knowledge_base_id=kb_id,
-                        parent_id=parent.metadata.get("parent_id", f"doc_{document_id}_parent_{index}"),
-                        content=parent.text,
-                        content_type=parent.metadata.get("content_type", "text"),
-                        code_lang=parent.metadata.get("code_lang"),
-                        chunk_index=parent.chunk_index,
-                        metadata_json=json.dumps(parent.metadata, ensure_ascii=False),
-                    ))
+                    db.add(DocumentChunk(document_id=document_id, knowledge_base_id=kb_id,
+                        parent_id=parent.metadata.get("parent_id", f"doc_{document_id}_parent_{index}"), content=parent.text,
+                        content_type=parent.metadata.get("content_type", "text"), code_lang=parent.metadata.get("code_lang"),
+                        chunk_index=parent.chunk_index, metadata_json=json.dumps(parent.metadata, ensure_ascii=False)))
                 await db.commit()
-
-            # 云端 Embedding 和 Chroma 写入阶段没有 SQLite 写事务。
             indexed = await index_manager.index_chunks(str(kb_id), child_chunks)
+            timings["embedding_time_ms"] = (time.monotonic() - phase_start) * 1000
             if indexed != len(child_chunks):
                 raise RuntimeError(f"向量索引不完整：已写入 {indexed}/{len(child_chunks)} 个切片")
 
-            # 短事务 3：索引完整后再发布 completed 状态。
+            timings["total_time_ms"] = (time.monotonic() - started) * 1000
+            async with async_session_factory() as db:
+                doc, kb = await db.get(Document, document_id), await db.get(KnowledgeBase, kb_id)
+                if doc is None or kb is None: raise RuntimeError("文档或知识库在处理期间被删除")
+                doc.chunk_count, doc.parent_chunk_count = len(child_chunks), len(parent_chunks)
+                for key, value in timings.items(): setattr(doc, key, value)
+                doc.status, doc.processing_stage, doc.failed_stage, doc.error_message = "completed", "completed", None, None
+                await _sync_kb_statistics(db, kb); await db.commit()
+    except Exception:
+        timings["total_time_ms"] = (time.monotonic() - started) * 1000
+        if kb_id is not None:
+            await _cleanup_failed_processing(document_id, kb_id, str(exc) or "处理失败", stage, timings)
+        else:
+            await _mark_error(document_id, str(exc) or "处理失败", stage, timings)
+        raise
+
+
+async def process_document(document_id: int) -> None:
+    """动态超时、有限重试的进程内任务；无需外部队列或心跳。"""
+    for attempt in range(settings.DOCUMENT_PROCESS_MAX_ATTEMPTS):
+        async with async_session_factory() as db:
+            doc = await db.get(Document, document_id)
+            if doc is None or doc.status in ("completed", "cleanup_pending"): return
+            timeout = _timeout_seconds(doc.file_size)
+        try:
+            await asyncio.wait_for(_process_once(document_id), timeout=timeout)
+            return
+        except asyncio.CancelledError: raise
+        except Exception as exc:
+            logger.exception(f"文档 {document_id} 第 {attempt + 1} 次处理失败: {exc}")
+            if isinstance(exc, asyncio.TimeoutError):
+                async with async_session_factory() as db:
+                    timed_out = await db.get(Document, document_id)
+                    if timed_out:
+                        await _cleanup_failed_processing(
+                            document_id, timed_out.knowledge_base_id,
+                            f"处理超时（超过 {timeout} 秒）", timed_out.processing_stage or "processing",
+                            {"total_time_ms": timeout * 1000.0},
+                        )
+            if attempt + 1 >= settings.DOCUMENT_PROCESS_MAX_ATTEMPTS: return
             async with async_session_factory() as db:
                 doc = await db.get(Document, document_id)
-                kb = await db.get(KnowledgeBase, kb_id)
-                if doc is None or kb is None:
-                    raise RuntimeError("文档或知识库在处理期间被删除")
-                doc.chunk_count = len(child_chunks)
-                doc.parent_chunk_count = len(parent_chunks)
-                doc.parse_time_ms = elapsed_ms
-                doc.status = "completed"
-                doc.error_message = None
-                await _sync_kb_statistics(db, kb)
-                await db.commit()
-            logger.info(f"文档 {document_id} 后台处理完成: {indexed} 个子块")
-    except asyncio.CancelledError:
-        raise
-    except Exception as exc:
-        logger.exception(f"文档 {document_id} 后台处理失败: {exc}")
-        if kb_id is not None:
-            await _cleanup_failed_processing(document_id, kb_id, str(exc), elapsed_ms)
-        else:
-            await _mark_error(document_id, str(exc), elapsed_ms)
+                if doc: doc.status, doc.error_message = "pending", f"第 {attempt + 1} 次失败，正在重试：{str(exc)[:300]}"; await db.commit()
+            await asyncio.sleep(settings.DOCUMENT_PROCESS_RETRY_BASE_SECONDS * (2 ** attempt))

@@ -52,6 +52,12 @@ def _document_to_out(doc: Document, duplicate: bool = False) -> DocumentOut:
         error_message=doc.error_message,
         chunk_count=doc.chunk_count,
         parse_time_ms=doc.parse_time_ms,
+        split_time_ms=doc.split_time_ms,
+        embedding_time_ms=doc.embedding_time_ms,
+        total_time_ms=doc.total_time_ms,
+        processing_stage=doc.processing_stage,
+        failed_stage=doc.failed_stage,
+        processing_attempts=doc.processing_attempts,
         created_at=doc.created_at,
         updated_at=doc.updated_at,
         duplicate=duplicate,
@@ -108,6 +114,9 @@ def _kb_to_out(kb: KnowledgeBase) -> KnowledgeBaseOut:
         chunk_count=kb.chunk_count,
         total_size_bytes=kb.total_size_bytes,
         is_active=kb.is_active,
+        index_status=kb.index_status or "ready",
+        embedding_model=kb.embedding_model,
+        embedding_dimension=kb.embedding_dimension,
         created_at=kb.created_at,
         updated_at=kb.updated_at,
     )
@@ -491,28 +500,29 @@ async def delete_document(
         raise HTTPException(status_code=404, detail="文档不存在")
 
     kb_id = doc.knowledge_base_id
-    # 删除父块记录
-    await db.execute(
-        DocumentChunk.__table__.delete().where(DocumentChunk.document_id == document_id)
-    )
-
-    await db.delete(doc)
-    await db.flush()
-
-    # 更新知识库统计
-    kb_result = await db.execute(select(KnowledgeBase).where(KnowledgeBase.id == kb_id))
-    kb = kb_result.scalar_one_or_none()
-    if kb:
-        await _sync_kb_statistics(db, kb)
-        kb.updated_at = datetime.utcnow()
-        await db.flush()
-
-    # 删除向量索引
+    # 先持久化待清理状态。Chroma 删除失败时保留 SQLite 记录，用户可再次点击删除重试。
+    doc.status = "cleanup_pending"
+    doc.processing_stage = "cleanup"
+    doc.error_message = None
+    await db.commit()
     try:
         await index_manager.remove_document_chunks(str(kb_id), document_id)
     except Exception as e:
-        logger.warning(f"删除向量索引失败: {e}")
+        doc = await db.get(Document, document_id)
+        if doc:
+            doc.status = "cleanup_pending"
+            doc.error_message = f"向量清理待重试：{str(e)[:500]}"
+            await db.commit()
+        raise HTTPException(status_code=409, detail="向量清理未完成，文档已保留为待清理状态，可重试删除")
 
+    doc = await db.get(Document, document_id)
+    if doc:
+        await db.execute(DocumentChunk.__table__.delete().where(DocumentChunk.document_id == document_id))
+        await db.delete(doc)
+    kb = await db.get(KnowledgeBase, kb_id)
+    if kb:
+        await _sync_kb_statistics(db, kb)
+        kb.updated_at = datetime.utcnow()
     await db.commit()
     return {"message": "删除成功", "id": document_id}
 
