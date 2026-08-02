@@ -32,9 +32,9 @@ from app.core.config import settings
 # API Key 加密/解密
 # ============================================================
 
-def _get_machine_fingerprint() -> bytes:
+def _get_machine_id() -> str:
     """
-    获取机器指纹作为加密密钥
+    获取稳定机器标识。
 
     组合机器唯一标识符生成 32 字节密钥：
     - macOS: 硬件 UUID + 主机名
@@ -82,8 +82,47 @@ def _get_machine_fingerprint() -> bytes:
     if not machine_id:
         machine_id = str(uuid.getnode()) + socket.gethostname()
 
-    # 使用 SHA256 派生 32 字节密钥
-    raw = f"{machine_id}:{socket.gethostname()}:ZhidaEngine"
+    return machine_id
+
+
+def _get_or_create_encryption_salt() -> bytes:
+    """在应用数据目录保存随机盐，避免网络/DHCP 改变主机名导致密钥失效。"""
+    salt_file = settings.DATA_DIR / ".encryption_salt"
+    try:
+        salt = salt_file.read_bytes()
+        if len(salt) >= 32:
+            return salt
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        logger.warning(f"读取本地加密盐失败: {exc}")
+
+    salt = os.urandom(32)
+    try:
+        # O_EXCL 防止多个启动进程同时覆盖同一个盐。
+        descriptor = os.open(salt_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "wb") as file:
+            file.write(salt)
+            file.flush()
+            os.fsync(file.fileno())
+        return salt
+    except FileExistsError:
+        return salt_file.read_bytes()
+    except OSError as exc:
+        # 仅作为最后兜底；正常桌面数据目录可写时不会走到这里。
+        logger.warning(f"创建本地加密盐失败，将使用机器标识兜底: {exc}")
+        return b""
+
+
+def _get_machine_fingerprint() -> bytes:
+    """新格式密钥：稳定硬件标识 + 持久随机盐，不依赖可变主机名。"""
+    raw = _get_machine_id().encode() + b":" + _get_or_create_encryption_salt() + b":ZhidaEngine"
+    return hashlib.sha256(raw).digest()
+
+
+def _get_legacy_machine_fingerprint() -> bytes:
+    """兼容旧版“硬件 UUID + 主机名”格式，供尚未重新保存的旧密钥过渡。"""
+    raw = f"{_get_machine_id()}:{socket.gethostname()}:ZhidaEngine"
     return hashlib.sha256(raw.encode()).digest()
 
 
@@ -101,8 +140,7 @@ def encrypt_api_key(api_key: str) -> str:
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
         import os as crypto_os
 
-        key = _get_machine_fingerprint()
-        aesgcm = AESGCM(key)
+        aesgcm = AESGCM(_get_machine_fingerprint())
 
         # 生成随机 nonce（12 字节）
         nonce = crypto_os.urandom(12)
@@ -132,16 +170,19 @@ def decrypt_api_key(encrypted: str) -> str:
     try:
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-        key = _get_machine_fingerprint()
-        aesgcm = AESGCM(key)
-
         combined = base64.b64decode(encrypted)
 
         # 分离 nonce 和 ciphertext
         nonce = combined[:12]
         ciphertext = combined[12:]
 
-        return aesgcm.decrypt(nonce, ciphertext, None).decode()
+        # 先使用稳定新格式；若失败，再尝试当前环境的旧格式以兼容历史配置。
+        for key in (_get_machine_fingerprint(), _get_legacy_machine_fingerprint()):
+            try:
+                return AESGCM(key).decrypt(nonce, ciphertext, None).decode()
+            except Exception:
+                continue
+        raise ValueError("无法使用当前或旧格式密钥解密")
 
     except ImportError:
         try:

@@ -11,6 +11,9 @@ import AgentNew from './pages/agent-new'
 import AgentList from './pages/agents'
 import KnowledgeDetail from './pages/knowledge/detail'
 import Settings from './pages/settings'
+import SettingsOverview from './pages/settings/overview'
+import FeishuSettings from './pages/settings/feishu'
+import ReliabilitySettings from './pages/settings/reliability'
 import Knowledge from './pages/knowledge'
 import Invitations from './pages/invitations'
 
@@ -22,7 +25,10 @@ function App() {
         <Route path="agents" element={<AgentList />} />
         <Route path="agents/:id" element={<AgentDetail />} />
         <Route path="agents/new" element={<AgentNew />} />
-        <Route path="settings" element={<Settings />} />
+        <Route path="settings" element={<SettingsOverview />} />
+        <Route path="settings/sources" element={<FeishuSettings />} />
+        <Route path="settings/system" element={<ReliabilitySettings />} />
+        <Route path="settings/:section" element={<Settings />} />
         <Route path="knowledge" element={<Knowledge />} />
         <Route path="knowledge/:id" element={<KnowledgeDetail />} />
         <Route path="invitations" element={<Invitations />} />

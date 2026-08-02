@@ -45,6 +45,7 @@ interface DashboardStats {
   cache_hit_rate: number
 }
 interface ModelHealth { chat_models: { name: string; role: string; available: boolean; message: string }[]; embedding: { name: string; available: boolean } }
+interface ComponentHealth { items: { key: string; name: string; available: boolean; configured?: boolean; message: string }[]; checked_at: string }
 
 // LLM 使用统计
 interface LLMUsage {
@@ -68,6 +69,7 @@ export default function Dashboard() {
   const [agents, setAgents] = useState<AgentItem[]>([])
   const [llmUsages, setLlmUsages] = useState<LLMUsage[]>([])
   const [modelHealth, setModelHealth] = useState<ModelHealth | null>(null)
+  const [componentHealth, setComponentHealth] = useState<ComponentHealth | null>(null)
   const [dateRange, setDateRange] = useState<any>([dayjs(), dayjs()])
   const [loading, setLoading] = useState(true)
   const refreshTimer = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -77,16 +79,18 @@ export default function Dashboard() {
     try {
       setLoading(true)
       const params = dateRange?.[0] ? `?start_date=${dateRange[0].format('YYYY-MM-DD')}&end_date=${dateRange[1].format('YYYY-MM-DD')}` : ''
-      const [dashboardData, agentData, llmData, healthData] = await Promise.all([
+      const [dashboardData, agentData, llmData, healthData, components] = await Promise.all([
         api.get<DashboardStats>(`/admin/dashboard${params}`),
         api.get<{ items: AgentItem[] }>('/agents'),
         api.get<LLMUsage[]>('/admin/llm-usage'),
         api.get<ModelHealth>('/admin/model-health'),
+        api.get<ComponentHealth>('/admin/component-health'),
       ])
       setStats(dashboardData)
       setAgents(agentData.items || [])
       setLlmUsages(llmData as any)
       setModelHealth(healthData)
+      setComponentHealth(components)
     } catch (err) {
       console.error('加载仪表盘数据失败:', err)
     } finally {
@@ -217,6 +221,9 @@ export default function Dashboard() {
         <Col xs={24} sm={15}><Card title="问答模型"><Space direction="vertical" size={12}>{modelHealth?.chat_models?.length ? modelHealth.chat_models.map((model) => <div className="model-line" key={`${model.role}-${model.name}`}><Tag color={model.available ? 'success' : 'error'}>{model.available ? '可用' : '不可用'}</Tag><Text type="secondary">{model.role}</Text><Text strong>{model.name}</Text></div>) : <Text type="secondary">未配置</Text>}</Space></Card></Col>
         <Col xs={24} sm={9}><Card title="当前向量化模型"><div className="embedding-health"><Tag color={modelHealth?.embedding.available ? 'success' : 'error'}>{modelHealth?.embedding.available ? '可用' : '不可用'}</Tag><Text strong>{modelHealth?.embedding.name || '检测中'}</Text></div></Card></Col>
       </Row>
+      <Card title="组件可用性" extra={<Text type="secondary">每 30 秒检查一次</Text>} style={{ marginBottom: 28 }}>
+        <Row gutter={[12, 12]}>{componentHealth?.items?.map(item => <Col xs={24} sm={12} lg={6} key={item.key}><div className="component-health-line"><Tag color={item.available ? 'success' : item.configured === false ? 'default' : 'error'}>{item.available ? '可用' : item.configured === false ? '未配置' : '异常'}</Tag><div><Text strong>{item.name}</Text><br /><Text type="secondary">{item.message}</Text></div></div></Col>) || <Col><Text type="secondary">检测中</Text></Col>}</Row>
+      </Card>
 
       {/* LLM 配置监控 —— 每 30s 自动刷新 */}
       {false && llmUsages.length > 0 && (
