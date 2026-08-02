@@ -19,6 +19,7 @@ from app.services.validation.quality_checker import parse_quality_checker
 _tasks: set[asyncio.Task] = set()
 _active_document_ids: set[int] = set()
 _kb_locks: dict[int, asyncio.Lock] = {}
+_active_rebuild_kb_ids: set[int] = set()
 
 
 async def _sync_kb_statistics(db, kb: KnowledgeBase) -> None:
@@ -58,6 +59,64 @@ def schedule_document_processing(document_id: int) -> bool:
 
     task.add_done_callback(_finished)
     return True
+
+
+def schedule_knowledge_base_rebuild(knowledge_base_id: int) -> bool:
+    """异步重建一个知识库的索引，避免 HTTP 请求长期占用连接。"""
+    if knowledge_base_id in _active_rebuild_kb_ids:
+        return False
+    _active_rebuild_kb_ids.add(knowledge_base_id)
+    task = asyncio.create_task(_rebuild_knowledge_base(knowledge_base_id), name=f"kb-rebuild-{knowledge_base_id}")
+    _tasks.add(task)
+    def _finished(done_task: asyncio.Task) -> None:
+        _tasks.discard(done_task)
+        _active_rebuild_kb_ids.discard(knowledge_base_id)
+        try:
+            done_task.result()
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.exception(f"知识库重建任务异常退出: {knowledge_base_id}")
+    task.add_done_callback(_finished)
+    return True
+
+
+async def _rebuild_knowledge_base(knowledge_base_id: int) -> None:
+    """清除旧索引后，让既有文档复用标准处理流水线重新入库。"""
+    kb_lock = _kb_locks.setdefault(knowledge_base_id, asyncio.Lock())
+    async with kb_lock:
+        async with async_session_factory() as db:
+            kb = await db.get(KnowledgeBase, knowledge_base_id)
+            if kb is None:
+                raise ValueError("知识库不存在")
+            documents = (await db.execute(select(Document).where(
+                Document.knowledge_base_id == knowledge_base_id,
+                Document.status.in_(("completed", "pending")),
+            ))).scalars().all()
+            if not documents:
+                raise RuntimeError("没有可重建的已完成或待处理文档")
+            kb.index_status = "rebuilding"
+            await db.commit()
+        # 旧集合只有在成功请求重建后才删除；随后首个文档会按当前 cosine 参数创建集合。
+        await index_manager.clear_knowledge_base(str(knowledge_base_id))
+        async with async_session_factory() as db:
+            kb = await db.get(KnowledgeBase, knowledge_base_id)
+            docs = (await db.execute(select(Document).where(
+                Document.knowledge_base_id == knowledge_base_id,
+                Document.status.in_(("completed", "pending")),
+            ))).scalars().all()
+            await db.execute(DocumentChunk.__table__.delete().where(DocumentChunk.knowledge_base_id == knowledge_base_id))
+            for doc in docs:
+                doc.status, doc.error_message = "pending", None
+                doc.chunk_count, doc.parent_chunk_count = 0, 0
+                doc.processing_stage, doc.failed_stage = "queued", None
+            if kb:
+                kb.chunk_count, kb.parent_chunk_count, kb.index_status = 0, 0, "rebuilding"
+            await db.commit()
+            document_ids = [doc.id for doc in docs]
+    for document_id in document_ids:
+        schedule_document_processing(document_id)
+    logger.info(f"知识库 {knowledge_base_id} 已提交重建：{len(document_ids)} 篇文档")
 
 
 async def resume_unfinished_document_processing() -> int:
@@ -210,7 +269,7 @@ async def _process_once(document_id: int) -> None:
                 for key, value in timings.items(): setattr(doc, key, value)
                 doc.status, doc.processing_stage, doc.failed_stage, doc.error_message = "completed", "completed", None, None
                 await _sync_kb_statistics(db, kb); await db.commit()
-    except Exception:
+    except Exception as exc:
         timings["total_time_ms"] = (time.monotonic() - started) * 1000
         if kb_id is not None:
             await _cleanup_failed_processing(document_id, kb_id, str(exc) or "处理失败", stage, timings)

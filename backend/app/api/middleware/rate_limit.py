@@ -38,6 +38,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if path.startswith("/api/v1/admin/"):
             return await call_next(request)
 
+        # 管理台的知识库详情会在后台任务执行期间轮询进度。这些只读查询
+        # 不会触发模型、写入或外部调用，不能与问答/上传共用极小令牌桶。
+        if request.method == "GET" and path.startswith("/api/v1/knowledge/"):
+            return await call_next(request)
+
         # 健康检查不限流
         if path == "/health":
             return await call_next(request)

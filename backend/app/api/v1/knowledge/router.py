@@ -5,7 +5,10 @@
 """
 
 import hashlib
+import asyncio
+import json
 import os
+import uuid
 from datetime import datetime
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, Form
@@ -16,8 +19,11 @@ from sqlalchemy.exc import IntegrityError
 from loguru import logger
 
 from app.core.config import settings
-from app.core.database import get_db
+from app.core.database import async_session_factory, get_db
 from app.models.knowledge import KnowledgeBase, Document, DocumentChunk
+from app.models.feishu_config import FeishuConfig
+from app.models.import_job import ImportJob
+from app.models.agent_knowledge_base import AgentKnowledgeBase
 from app.schemas.knowledge import (
     DocumentOut,
     DocumentListOut,
@@ -28,12 +34,21 @@ from app.schemas.knowledge import (
     KnowledgeStatsOut,
     OptimizeRequest,
     OptimizeResponse,
+    FeishuConfigOut,
+    FeishuConfigUpdate,
+    FeishuImportRequest,
+    FeishuImportStartOut,
+    FeishuImportJobOut,
 )
 from app.services.knowledge.indexer import index_manager
-from app.services.knowledge.document_processor import schedule_document_processing
+from app.services.knowledge.document_processor import schedule_document_processing, schedule_knowledge_base_rebuild
+from app.services.knowledge.data_integrity import data_integrity_service
 from app.services.validation.precheck import upload_prechecker
+from app.services.knowledge.feishu import FeishuClient
+from app.core.security import encrypt_api_key, decrypt_api_key, mask_api_key
 
 router = APIRouter(prefix="/knowledge", tags=["知识库管理"])
+_import_tasks: set = set()
 
 
 # ============================================================
@@ -58,6 +73,7 @@ def _document_to_out(doc: Document, duplicate: bool = False) -> DocumentOut:
         processing_stage=doc.processing_stage,
         failed_stage=doc.failed_stage,
         processing_attempts=doc.processing_attempts,
+        source_url=doc.source_url,
         created_at=doc.created_at,
         updated_at=doc.updated_at,
         duplicate=duplicate,
@@ -139,6 +155,122 @@ async def _sync_kb_statistics(db: AsyncSession, kb: KnowledgeBase) -> None:
     kb.total_size_bytes = total_size_bytes
 
 
+def _feishu_config_out(config: FeishuConfig | None) -> FeishuConfigOut:
+    if config is None:
+        return FeishuConfigOut()
+    return FeishuConfigOut(
+        enabled=config.enabled, app_id=config.app_id,
+        app_secret=mask_api_key(decrypt_api_key(config.app_secret)),
+        last_test_at=config.last_test_at, last_test_success=config.last_test_success,
+        last_error=config.last_error,
+    )
+
+
+async def _create_text_document(
+    db: AsyncSession, kb: KnowledgeBase, filename: str, content: str, source_url: str,
+) -> tuple[Document, bool]:
+    """将云端正文以 Markdown 原件写入既有异步入库流水线。"""
+    encoded = content.encode("utf-8")
+    content_hash = hashlib.sha256(encoded).hexdigest()
+    safe_filename = upload_prechecker.sanitize_filename(filename or "飞书文档")
+    if not safe_filename.lower().endswith(".md"):
+        safe_filename = f"{safe_filename}.md"
+    duplicate = await _find_duplicate_document(db, kb.id, safe_filename, len(encoded), content_hash)
+    if duplicate:
+        return duplicate, True
+    upload_dir = os.path.join(settings.DATA_DIR, "uploads", f"kb_{kb.id}")
+    os.makedirs(upload_dir, exist_ok=True)
+    file_path = os.path.join(upload_dir, f"{content_hash[:16]}_{safe_filename}")
+    with open(file_path, "wb") as file:
+        file.write(encoded)
+    doc = Document(
+        knowledge_base_id=kb.id, filename=safe_filename, file_type="md", file_path=file_path,
+        file_size=len(encoded), content_hash=content_hash, source_url=source_url, status="pending",
+    )
+    db.add(doc)
+    try:
+        await db.flush()
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        existing = await _find_duplicate_document(db, kb.id, safe_filename, len(encoded), content_hash)
+        if existing:
+            return existing, True
+        raise
+    await db.refresh(doc)
+    schedule_document_processing(doc.id)
+    return doc, False
+
+
+def _job_out(job: ImportJob) -> FeishuImportJobOut:
+    try:
+        logs = json.loads(job.logs_json or "[]")
+    except json.JSONDecodeError:
+        logs = []
+    return FeishuImportJobOut(id=job.id, status=job.status, total=job.total, processed=job.processed,
+                               imported=job.imported, duplicate=job.duplicate,
+                               error_message=job.error_message, logs=logs)
+
+
+async def _run_feishu_import_job(job_id: str) -> None:
+    """后台读取 Wiki 并逐篇提交现有文档处理队列；进度持久化供前端显示。"""
+    try:
+        async with async_session_factory() as db:
+            job = await db.get(ImportJob, job_id)
+            if job is None:
+                return
+            kb = await db.get(KnowledgeBase, job.knowledge_base_id)
+            config = await db.get(FeishuConfig, 1)
+            if kb is None or config is None or not config.enabled:
+                raise RuntimeError("知识库不存在，或飞书数据源未启用")
+            job.status = "processing"
+            await db.commit()
+            source_url, max_nodes = job.source_url, job.max_nodes
+            client = FeishuClient(config.app_id, decrypt_api_key(config.app_secret))
+        documents = await client.import_url(source_url, max_nodes)
+        async with async_session_factory() as db:
+            job = await db.get(ImportJob, job_id)
+            if job is None:
+                return
+            job.total = len(documents)
+            job.logs_json = json.dumps([{"name": "数据源", "status": "已读取", "message": f"发现 {len(documents)} 篇文档"}], ensure_ascii=False)
+            await db.commit()
+        for item in documents:
+            async with async_session_factory() as db:
+                job = await db.get(ImportJob, job_id)
+                kb = await db.get(KnowledgeBase, job.knowledge_base_id) if job else None
+                if job is None or kb is None:
+                    return
+                try:
+                    _, duplicate = await _create_text_document(db, kb, item.title, item.content, item.source_url)
+                    job.imported += 0 if duplicate else 1
+                    job.duplicate += 1 if duplicate else 0
+                    status = "重复跳过" if duplicate else "已提交处理"
+                    entry = {"name": item.title, "status": status}
+                except Exception as exc:
+                    entry = {"name": item.title, "status": "失败", "message": str(exc)[:160]}
+                job.processed += 1
+                try:
+                    logs = json.loads(job.logs_json or "[]")
+                except json.JSONDecodeError:
+                    logs = []
+                logs.append(entry)
+                job.logs_json = json.dumps(logs[-100:], ensure_ascii=False)
+                await db.commit()
+        async with async_session_factory() as db:
+            job = await db.get(ImportJob, job_id)
+            if job:
+                job.status = "completed"
+                await db.commit()
+    except Exception as exc:
+        logger.warning(f"飞书后台导入失败: {type(exc).__name__}: {exc}")
+        async with async_session_factory() as db:
+            job = await db.get(ImportJob, job_id)
+            if job:
+                job.status, job.error_message = "failed", str(exc)[:500]
+                await db.commit()
+
+
 # ============================================================
 # 知识库管理
 # ============================================================
@@ -155,7 +287,7 @@ async def list_knowledge_bases(
     """
     query = select(KnowledgeBase).order_by(KnowledgeBase.created_at.desc())
     if agent_id is not None:
-        query = query.where(KnowledgeBase.agent_id == agent_id)
+        query = query.join(AgentKnowledgeBase, AgentKnowledgeBase.knowledge_base_id == KnowledgeBase.id).where(AgentKnowledgeBase.agent_id == agent_id)
 
     result = await db.execute(query)
     bases = result.scalars().all()
@@ -202,8 +334,8 @@ async def list_independent_knowledge_bases(
     可用于选择要挂载的知识库。
     """
     result = await db.execute(
-        select(KnowledgeBase)
-        .where(KnowledgeBase.agent_id.is_(None))
+        select(KnowledgeBase).outerjoin(AgentKnowledgeBase, AgentKnowledgeBase.knowledge_base_id == KnowledgeBase.id)
+        .where(AgentKnowledgeBase.id.is_(None))
         .order_by(KnowledgeBase.created_at.desc())
     )
     bases = result.scalars().all()
@@ -249,6 +381,24 @@ async def update_knowledge_base(
     await db.refresh(kb)
 
     return _kb_to_out(kb)
+
+
+@router.post("/bases/{kb_id}/rebuild-index")
+async def rebuild_knowledge_base_index(kb_id: int, db: AsyncSession = Depends(get_db)):
+    """备份后异步重建当前知识库的 Chroma 索引。"""
+    kb = await db.get(KnowledgeBase, kb_id)
+    if kb is None:
+        raise HTTPException(status_code=404, detail="知识库不存在")
+    available = (await db.execute(select(func.count(Document.id)).where(
+        Document.knowledge_base_id == kb_id,
+        Document.status.in_(("completed", "pending")),
+    ))).scalar_one()
+    if not available:
+        raise HTTPException(status_code=422, detail="没有可重建的已完成或待处理文档")
+    backup = await data_integrity_service.backup()
+    if not schedule_knowledge_base_rebuild(kb_id):
+        raise HTTPException(status_code=409, detail="该知识库正在重建中")
+    return {"success": True, "message": "索引重建已开始，文档将依次重新向量化", "backup": backup, "document_count": available}
 
 
 @router.delete("/bases/{kb_id}")
@@ -302,10 +452,13 @@ async def attach_knowledge_base_to_agent(
     if kb is None:
         raise HTTPException(status_code=404, detail="知识库不存在")
 
-    if kb.agent_id is not None:
-        raise HTTPException(status_code=400, detail="知识库已挂载到其他 Agent，请先解绑")
-
-    kb.agent_id = request.agent_id
+    link = (await db.execute(select(AgentKnowledgeBase).where(
+        AgentKnowledgeBase.agent_id == request.agent_id,
+        AgentKnowledgeBase.knowledge_base_id == kb_id,
+    ))).scalar_one_or_none()
+    if link is not None:
+        raise HTTPException(status_code=409, detail="该知识库已挂载到当前 Agent")
+    db.add(AgentKnowledgeBase(agent_id=request.agent_id, knowledge_base_id=kb_id))
     await db.flush()
     await db.refresh(kb)
 
@@ -321,6 +474,7 @@ async def attach_knowledge_base_to_agent(
 @router.post("/bases/{kb_id}/detach", response_model=AttachDetachResponse)
 async def detach_knowledge_base_from_agent(
     kb_id: int,
+    agent_id: int = Query(..., description="要解绑的 Agent ID"),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -333,15 +487,17 @@ async def detach_knowledge_base_from_agent(
     if kb is None:
         raise HTTPException(status_code=404, detail="知识库不存在")
 
-    if kb.agent_id is None:
-        raise HTTPException(status_code=400, detail="知识库当前未挂载到任何 Agent")
-
-    old_agent_id = kb.agent_id
-    kb.agent_id = None
+    link = (await db.execute(select(AgentKnowledgeBase).where(
+        AgentKnowledgeBase.agent_id == agent_id,
+        AgentKnowledgeBase.knowledge_base_id == kb_id,
+    ))).scalar_one_or_none()
+    if link is None:
+        raise HTTPException(status_code=404, detail="该知识库未挂载到当前 Agent")
+    await db.delete(link)
     await db.flush()
     await db.refresh(kb)
 
-    logger.info(f"知识库 {kb_id} 已从 Agent {old_agent_id} 解绑")
+    logger.info(f"知识库 {kb_id} 已从 Agent {agent_id} 解绑")
     return AttachDetachResponse(
         success=True,
         message="解绑成功",
@@ -375,6 +531,76 @@ async def list_documents(
         total=len(docs),
         items=[_document_to_out(d) for d in docs],
     )
+
+
+# ============================================================
+# 飞书数据源（应用身份）
+# ============================================================
+
+@router.get("/feishu/config", response_model=FeishuConfigOut)
+async def get_feishu_config(db: AsyncSession = Depends(get_db)):
+    return _feishu_config_out(await db.get(FeishuConfig, 1))
+
+
+@router.put("/feishu/config", response_model=FeishuConfigOut)
+async def update_feishu_config(request: FeishuConfigUpdate, db: AsyncSession = Depends(get_db)):
+    config = await db.get(FeishuConfig, 1)
+    if config is None:
+        config = FeishuConfig(id=1)
+        db.add(config)
+    config.enabled, config.app_id = request.enabled, request.app_id.strip()
+    if request.app_secret:
+        config.app_secret = encrypt_api_key(request.app_secret.strip())
+    if config.enabled and (not config.app_id or not config.app_secret):
+        raise HTTPException(status_code=422, detail="启用飞书数据源前，请填写 App ID 和 App Secret")
+    await db.flush()
+    return _feishu_config_out(config)
+
+
+@router.post("/feishu/config/test")
+async def test_feishu_config(db: AsyncSession = Depends(get_db)):
+    config = await db.get(FeishuConfig, 1)
+    if config is None:
+        raise HTTPException(status_code=422, detail="请先保存飞书 App ID 和 App Secret")
+    try:
+        await FeishuClient(config.app_id, decrypt_api_key(config.app_secret)).test_connection()
+        config.last_test_at, config.last_test_success, config.last_error = datetime.utcnow(), True, None
+        await db.commit()
+        return {"success": True, "message": "飞书应用连接成功"}
+    except Exception as exc:
+        config.last_test_at, config.last_test_success, config.last_error = datetime.utcnow(), False, str(exc)[:500]
+        await db.commit()
+        return {"success": False, "message": "飞书连接失败，请检查凭据与应用发布状态"}
+
+
+@router.post("/bases/{kb_id}/feishu/import", response_model=FeishuImportStartOut)
+async def import_feishu_documents(kb_id: int, request: FeishuImportRequest, db: AsyncSession = Depends(get_db)):
+    kb = await db.get(KnowledgeBase, kb_id)
+    if kb is None:
+        raise HTTPException(status_code=404, detail="知识库不存在")
+    config = await db.get(FeishuConfig, 1)
+    if config is None or not config.enabled:
+        raise HTTPException(status_code=422, detail="请先在设置中启用并保存飞书数据源")
+    try:
+        FeishuClient._validate_url(request.url)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    job = ImportJob(id=str(uuid.uuid4()), knowledge_base_id=kb_id, source_type="feishu",
+                    source_url=request.url, max_nodes=request.max_nodes, status="pending")
+    db.add(job)
+    await db.commit()
+    task = asyncio.create_task(_run_feishu_import_job(job.id), name=f"feishu-import-{job.id}")
+    _import_tasks.add(task)
+    task.add_done_callback(_import_tasks.discard)
+    return FeishuImportStartOut(job_id=job.id)
+
+
+@router.get("/feishu/imports/{job_id}", response_model=FeishuImportJobOut)
+async def get_feishu_import_job(job_id: str, db: AsyncSession = Depends(get_db)):
+    job = await db.get(ImportJob, job_id)
+    if job is None or job.source_type != "feishu":
+        raise HTTPException(status_code=404, detail="导入任务不存在")
+    return _job_out(job)
 
 
 @router.post("/bases/{kb_id}/upload", response_model=DocumentOut)
@@ -525,6 +751,32 @@ async def delete_document(
         kb.updated_at = datetime.utcnow()
     await db.commit()
     return {"message": "删除成功", "id": document_id}
+
+
+@router.delete("/bases/{kb_id}/failed-documents")
+async def clear_failed_documents(kb_id: int, db: AsyncSession = Depends(get_db)):
+    """清除处理失败的数据库记录及可能残留的向量，不影响正常/进行中文档。"""
+    kb = await db.get(KnowledgeBase, kb_id)
+    if kb is None:
+        raise HTTPException(status_code=404, detail="知识库不存在")
+    failed_docs = (await db.execute(select(Document).where(
+        Document.knowledge_base_id == kb_id,
+        Document.status.in_(("error", "failed")),
+    ))).scalars().all()
+    removed, retained = 0, []
+    for document in failed_docs:
+        try:
+            # 失败处理通常已清理过向量；再次核验可避免留下幽灵知识。
+            await index_manager.remove_document_chunks(str(kb_id), document.id)
+            await db.execute(DocumentChunk.__table__.delete().where(DocumentChunk.document_id == document.id))
+            await db.delete(document)
+            await db.flush()
+            removed += 1
+        except Exception as exc:
+            retained.append({"id": document.id, "filename": document.filename, "reason": str(exc)[:200]})
+    await _sync_kb_statistics(db, kb)
+    await db.commit()
+    return {"success": True, "removed": removed, "retained": retained}
 
 
 # ============================================================
