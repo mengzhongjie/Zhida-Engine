@@ -113,6 +113,9 @@ async def init_db():
         import app.models.miniapp           # noqa: F401
         import app.models.web_search_config # noqa: F401
         import app.models.langfuse_config # noqa: F401
+        import app.models.feishu_config   # noqa: F401
+        import app.models.import_job      # noqa: F401
+        import app.models.agent_knowledge_base  # noqa: F401
 
         # 创建所有表
         await conn.run_sync(Base.metadata.create_all)
@@ -136,6 +139,7 @@ async def _run_compatible_migrations(conn):
         "ALTER TABLE langfuse_configs ADD COLUMN evaluator_enabled BOOLEAN NOT NULL DEFAULT 0",
         "ALTER TABLE langfuse_configs ADD COLUMN evaluator_model_config_id INTEGER",
         "ALTER TABLE documents ADD COLUMN processing_attempts INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE documents ADD COLUMN source_url VARCHAR(1500)",
         "ALTER TABLE knowledge_bases ADD COLUMN embedding_model VARCHAR(300)",
         "ALTER TABLE knowledge_bases ADD COLUMN embedding_dimension INTEGER",
         "ALTER TABLE knowledge_bases ADD COLUMN index_space VARCHAR(20)",
@@ -164,6 +168,10 @@ async def _run_compatible_migrations(conn):
         ))
     except Exception:
         # 首次建库或旧库尚未创建邀请表时，下一次启动会补齐。
+        pass
+    try:
+        await conn.execute(text("INSERT OR IGNORE INTO agent_knowledge_bases (agent_id, knowledge_base_id) SELECT agent_id, id FROM knowledge_bases WHERE agent_id IS NOT NULL"))
+    except Exception:
         pass
 
 

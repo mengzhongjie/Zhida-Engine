@@ -58,6 +58,7 @@ class Document(Base):
     filename = Column(String(500), nullable=False, comment="原始文件名")
     file_type = Column(String(20), nullable=False, comment="文件类型: pdf/docx/xlsx/txt/md")
     file_path = Column(String(1000), nullable=False, comment="文件存储路径")
+    source_url = Column(String(1500), nullable=True, comment="外部数据源原始链接")
     file_size = Column(Integer, default=0, comment="文件大小（字节）")
     content_hash = Column(String(64), nullable=True, index=True, comment="文件 SHA-256，用于同知识库去重")
 

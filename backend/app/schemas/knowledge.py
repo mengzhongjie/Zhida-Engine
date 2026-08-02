@@ -74,11 +74,48 @@ class DocumentOut(BaseModel):
     processing_stage: Optional[str] = None
     failed_stage: Optional[str] = None
     processing_attempts: int = 0
+    source_url: Optional[str] = None
     created_at: datetime
     updated_at: datetime
     duplicate: bool = False  # 本次上传是否命中已有相同文件
 
     model_config = {"from_attributes": True}
+
+
+class FeishuConfigOut(BaseModel):
+    enabled: bool = False
+    app_id: str = ""
+    app_secret: str = ""
+    last_test_at: Optional[datetime] = None
+    last_test_success: Optional[bool] = None
+    last_error: Optional[str] = None
+
+
+class FeishuConfigUpdate(BaseModel):
+    enabled: bool = False
+    app_id: str = Field("", max_length=100)
+    app_secret: Optional[str] = Field(None, max_length=500)
+
+
+class FeishuImportRequest(BaseModel):
+    url: str = Field(..., min_length=12, max_length=2000)
+    max_nodes: int = Field(500, ge=1, le=1000)
+
+
+class FeishuImportStartOut(BaseModel):
+    job_id: str
+    status: str = "pending"
+
+
+class FeishuImportJobOut(BaseModel):
+    id: str
+    status: str
+    total: int = 0
+    processed: int = 0
+    imported: int = 0
+    duplicate: int = 0
+    error_message: Optional[str] = None
+    logs: list[dict] = Field(default_factory=list)
 
 
 class DocumentListOut(BaseModel):
