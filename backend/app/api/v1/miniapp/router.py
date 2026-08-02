@@ -21,6 +21,7 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.models.agent import Agent
 from app.models.knowledge import KnowledgeBase
+from app.models.agent_knowledge_base import AgentKnowledgeBase
 from app.models.miniapp import Invitation, InvitationClaim, InvitationDailyUsage, MiniAppSession, MiniAppUser
 from app.models.qa import QAHistory
 from app.schemas.miniapp import (
@@ -166,12 +167,11 @@ async def _get_public_agent(db: AsyncSession, agent_id: int) -> Agent:
         select(Agent).where(
             Agent.id == agent_id,
             Agent.is_active == True,  # noqa: E712
-            Agent.is_public == True,  # noqa: E712
         )
     )
     agent = result.scalar_one_or_none()
     if agent is None:
-        raise HTTPException(status_code=404, detail="Agent 不存在或未公开")
+        raise HTTPException(status_code=404, detail="Agent 不存在或未启用")
     return agent
 
 
@@ -225,7 +225,7 @@ async def list_public_agents(
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
-        select(Agent).where(Agent.is_active == True, Agent.is_public == True).order_by(Agent.created_at.desc())  # noqa: E712
+        select(Agent).where(Agent.is_active == True).order_by(Agent.created_at.desc())  # noqa: E712
     )
     return [MiniAppAgentOut(id=a.id, name=a.name, description=a.description, avatar=a.avatar) for a in result.scalars()]
 
@@ -309,7 +309,7 @@ async def ask(
         raise HTTPException(status_code=429, detail="今日问答次数已用完")
 
     kb_result = await db.execute(
-        select(KnowledgeBase.id).where(KnowledgeBase.agent_id == payload.agent_id, KnowledgeBase.is_active == True)  # noqa: E712
+        select(KnowledgeBase.id).join(AgentKnowledgeBase, AgentKnowledgeBase.knowledge_base_id == KnowledgeBase.id).where(AgentKnowledgeBase.agent_id == payload.agent_id, KnowledgeBase.is_active == True)  # noqa: E712
     )
     knowledge_base_ids = [str(kb_id) for kb_id in kb_result.scalars()]
     # 允许无知识库问答（RAG 降级策略：reply_mode=auto/hybrid 时 LLM 自行回答）

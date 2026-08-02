@@ -19,7 +19,6 @@ class AgentCreate(BaseModel):
     description: Optional[str] = Field(None, description="Agent 描述")
     avatar: Optional[str] = Field(None, description="头像 URL 或 emoji")
     reply_mode: str = Field("auto", description="回复模式: auto/manual/hybrid")
-    is_public: bool = Field(False, description="是否在小程序公开")
 
 
 class AgentUpdate(BaseModel):
@@ -28,7 +27,6 @@ class AgentUpdate(BaseModel):
     description: Optional[str] = Field(None, description="Agent 描述")
     avatar: Optional[str] = Field(None, description="头像 URL 或 emoji")
     is_active: Optional[bool] = Field(None, description="是否启用")
-    is_public: Optional[bool] = Field(None, description="是否在小程序公开")
     reply_mode: Optional[str] = Field(None, description="回复模式: auto/manual/hybrid")
 
 
@@ -39,7 +37,6 @@ class AgentOut(BaseModel):
     description: Optional[str] = None
     avatar: Optional[str] = None
     is_active: bool
-    is_public: bool = False
     status: str
     reply_mode: str
     created_at: datetime

@@ -18,6 +18,7 @@ from app.core.database import get_db
 from app.core.config import settings
 from app.core.sandbox import sandbox_manager
 from app.models.agent import Agent
+from app.models.agent_knowledge_base import AgentKnowledgeBase
 from app.models.qa import QAHistory
 from app.schemas.agent import (
     AgentCreate,
@@ -42,7 +43,6 @@ def _agent_to_out(agent: Agent) -> AgentOut:
         description=agent.description,
         avatar=agent.avatar,
         is_active=agent.is_active,
-        is_public=agent.is_public,
         status=agent.status,
         reply_mode=agent.reply_mode,
         created_at=agent.created_at,
@@ -106,7 +106,6 @@ async def create_agent(
         description=request.description or "",
         avatar=request.avatar or "",
         reply_mode=request.reply_mode,
-        is_public=request.is_public,
         status="stopped",
     )
     db.add(agent)
@@ -197,12 +196,7 @@ async def delete_agent(
     if agent is None:
         raise HTTPException(status_code=404, detail="Agent 不存在")
 
-    # 将关联知识库解绑（设为独立知识库），避免级联删除
-    await db.execute(
-        update(KnowledgeBase).where(
-            KnowledgeBase.agent_id == agent_id
-        ).values(agent_id=None)
-    )
+    await db.execute(AgentKnowledgeBase.__table__.delete().where(AgentKnowledgeBase.agent_id == agent_id))
 
     await db.delete(agent)
     await db.flush()

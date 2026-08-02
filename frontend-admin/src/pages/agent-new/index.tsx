@@ -88,7 +88,7 @@ export default function AgentNew() {
       if (formData.selected_kb_ids.length > 0) {
         for (const kbId of formData.selected_kb_ids) {
           try {
-            await api.put(`/knowledge/bases/${kbId}`, { agent_id: agent.id })
+            await api.post(`/knowledge/bases/${kbId}/attach`, { agent_id: agent.id })
           } catch (e) {
             console.error(`挂载知识库 ${kbId} 失败:`, e)
           }

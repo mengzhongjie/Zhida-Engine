@@ -6,7 +6,7 @@ import { api } from '@/services/api'
 import zhidaLogo from '../../assets/zhida-logo.png'
 
 const { Title, Text } = Typography
-interface Agent { id: number; name: string; description: string; is_public: boolean; status: string; today_answers: number; success_rate: number }
+interface Agent { id: number; name: string; description: string; status: string; today_answers: number; success_rate: number }
 export default function AgentList() {
   const navigate = useNavigate(); const [items, setItems] = useState<Agent[]>([]); const [loading, setLoading] = useState(false)
   const load = useCallback(async () => { setLoading(true); try { setItems((await api.get<{ items: Agent[] }>('/agents')).items || []) } catch { message.error('加载 Agent 失败') } finally { setLoading(false) } }, [])
@@ -16,9 +16,8 @@ export default function AgentList() {
   const columns = [
     { title: 'Agent', dataIndex: 'name', render: (name: string, item: Agent) => <Space><img src={zhidaLogo} alt="智答" style={{ width: 36, height: 36, borderRadius: 9 }} /><div><Text strong>{name}</Text><br /><Text type="secondary">{item.description || '暂无描述'}</Text></div></Space> },
     { title: '运行状态', dataIndex: 'status', width: 110, render: (v: string) => <Tag color={v === 'running' ? 'green' : 'default'}>{v === 'running' ? '运行中' : '已停止'}</Tag> },
-    { title: '小程序', dataIndex: 'is_public', width: 110, render: (v: boolean) => <Tag color={v ? 'blue' : 'default'}>{v ? '已公开' : '未公开'}</Tag> },
     { title: '今日回答', dataIndex: 'today_answers', width: 110 }, { title: '成功率', dataIndex: 'success_rate', width: 100, render: (v: number) => `${v}%` },
     { title: '操作', width: 260, render: (_: unknown, agent: Agent) => <Space><Button type="link" icon={<EditOutlined />} onClick={() => navigate(`/agents/${agent.id}`)}>管理</Button><Button type="link" icon={<PoweroffOutlined />} onClick={() => toggle(agent)}>{agent.status === 'running' ? '停止' : '启动'}</Button><Popconfirm title="确认删除该 Agent？" onConfirm={() => remove(agent.id)}><Button danger type="link" icon={<DeleteOutlined />}>删除</Button></Popconfirm></Space> },
   ]
-  return <div className="content-page"><div className="page-header"><div><Title level={3}>Agent 管理</Title><Text type="secondary" className="page-header-copy">配置每个问答助手的知识库、小程序公开状态与运行状态。</Text></div><Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/agents/new')}>新建 Agent</Button></div><Card><Table rowKey="id" loading={loading} columns={columns} dataSource={items} pagination={{ pageSize: 10 }} locale={{ emptyText: '暂无 Agent，创建一个开始配置' }} /></Card></div>
+  return <div className="content-page"><div className="page-header"><div><Title level={3}>Agent 管理</Title><Text type="secondary" className="page-header-copy">配置每个问答助手的知识库与运行状态。</Text></div><Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/agents/new')}>新建 Agent</Button></div><Card><Table rowKey="id" loading={loading} columns={columns} dataSource={items} pagination={{ pageSize: 10 }} locale={{ emptyText: '暂无 Agent，创建一个开始配置' }} /></Card></div>
 }
