@@ -10,6 +10,14 @@ function formatTime(value) {
 Page({
   data: { sessions: [], loading: true },
 
+  goBack() {
+    if (getCurrentPages().length > 1) {
+      wx.navigateBack()
+      return
+    }
+    wx.reLaunch({ url: '/pages/agents/index' })
+  },
+
   onShow() {
     this.loadSessions()
   },

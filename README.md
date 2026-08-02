@@ -11,6 +11,7 @@
 - [快速开始](#快速开始)
 - [项目结构](#项目结构)
 - [配置说明](#配置说明)
+- [作为服务接入其他应用](#作为服务接入其他应用)
 - [API 文档](#api-文档)
 - [架构说明](#架构说明)
 
@@ -21,7 +22,7 @@
 - **📚 知识库管理** — 上传 PDF/DOCX/Excel/MD/TXT/CSV/JSON 等文档，自动解析、切分、向量化
 - **🔍 RAG 问答** — 基于混合检索（向量 + 关键词）的智能问答，支持来源引用
 - **🤖 Agent 管理** — 创建 AI 助手，绑定知识库和 LLM 配置
-- **📱 微信小程序** — 邀请码激活、公开 Agent、会话历史与问答来源展示
+- **📱 微信小程序** — 邀请码激活、会话历史与问答来源展示
 - **🧠 长期记忆** — 基于 Mem0 的跨会话个性化记忆
 - **🔒 格式校验** — 上传文件自动检测真实类型，防止扩展名伪装，确保数据安全
 - **⚡ 可选 MinerU 解析** — 可选集成 MinerU 引擎，支持复杂 PDF 布局/OCR/公式识别
@@ -202,6 +203,123 @@ ENABLE_SOURCE_CITATION    # 来源引用
 | `/api/v1/qa/ask` | POST | 提问 |
 | `/api/v1/admin/settings` | GET/PUT | 系统设置 |
 | `/api/v1/miniapp/*` | GET/POST | CloudBase 签名的小程序接口 |
+
+---
+
+## 作为服务接入其他应用
+
+智答引擎可以作为一个独立的本地 RAG 服务，被 Web 应用、桌面端、企业内部工具或其他 AI Agent 调用。调用方只需要保存 `agent_id`；该 Agent 已挂载的所有知识库会一起参与检索。
+
+### 1. 启动与健康检查
+
+默认服务仅监听本机回环地址，适合桌面端或同机应用接入：
+
+```bash
+cd backend
+source .venv/bin/activate
+python main.py
+
+curl http://127.0.0.1:18900/health
+```
+
+若要供其他机器访问，请通过反向代理或受控网关暴露服务，并自行增加调用方认证、HTTPS、IP 白名单和请求审计。不要直接将当前桌面默认端口公开到互联网。
+
+### 2. 最小接入流程
+
+```text
+创建知识库 → 上传/导入资料 → 创建 Agent → 挂载知识库 → 启动 Agent → 调用问答接口
+```
+
+同一个知识库可以挂载给多个 Agent；一个 Agent 也可以挂载多个知识库。
+
+```bash
+# 创建 Agent（新建后默认停用）
+curl -X POST http://127.0.0.1:18900/api/v1/agents \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"产品知识助手","description":"回答产品与交付问题"}'
+
+# 将已有知识库 12 挂载到 Agent 3
+curl -X POST http://127.0.0.1:18900/api/v1/knowledge/bases/12/attach \
+  -H 'Content-Type: application/json' \
+  -d '{"agent_id":3}'
+
+# 启动：启动即启用，也即对已授权的小程序用户可见
+curl -X POST http://127.0.0.1:18900/api/v1/agents/3/start
+```
+
+### 3. 调用 RAG 问答
+
+`POST /api/v1/qa/ask` 是其他应用最常用的接口。它会执行混合检索、父块扩展、回答生成与来源整理，并返回本轮使用的模型和文档来源。
+
+```bash
+curl -X POST http://127.0.0.1:18900/api/v1/qa/ask \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "agent_id": 3,
+    "question": "退款流程是什么？",
+    "user_id": "external-user-42",
+    "chat_id": "web-session-a8f2",
+    "chat_type": "private"
+  }'
+```
+
+响应示例：
+
+```json
+{
+  "question": "退款流程是什么？",
+  "answer": "……",
+  "sources": [
+    {
+      "document_name": "售后政策.md",
+      "chunk_text": "……",
+      "score": 0.82,
+      "source_type": "document"
+    }
+  ],
+  "confidence": 0.8,
+  "response_time_ms": 684.2,
+  "model_used": "your-model-name",
+  "from_cache": false
+}
+```
+
+JavaScript 调用示例：
+
+```ts
+const response = await fetch('http://127.0.0.1:18900/api/v1/qa/ask', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    agent_id: 3,
+    question: userQuestion,
+    user_id: currentUserId,
+    chat_id: currentConversationId,
+    chat_type: 'private',
+  }),
+})
+const result = await response.json()
+```
+
+`user_id` 和 `chat_id` 建议由接入方稳定传入：它们用于问答历史、长期记忆隔离与可观测性关联。调用方应将 `sources` 原样保留或展示，避免把 RAG 回答误呈现为无来源结论。
+
+### 4. 为调用方补充知识
+
+本地文件使用 `multipart/form-data` 上传，接口会立即返回文档任务；解析和向量化在后台执行。通过 `GET /api/v1/knowledge/documents?kb_id={kb_id}` 查询 `status`，直到为 `completed` 后再作为稳定知识参与问答。
+
+```bash
+curl -X POST http://127.0.0.1:18900/api/v1/knowledge/bases/12/upload \
+  -F 'file=@./售后政策.pdf'
+```
+
+云文档导入可通过管理台完成。飞书导入会创建后台任务并在知识库详情页显示逐篇进度；同一正文基于 SHA-256 自动去重。
+
+### 5. 接入边界
+
+- 问答接口只接受已启用的 Agent；停止 Agent 后，调用会返回“Agent 不存在或未启用”。
+- `/api/v1/qa/ask` 当前返回完整 JSON 回答；外部应用需要打字机效果时，应在自身 UI 层按段或按字展示 `answer`。
+- 桌面管理 API 默认没有面向公网的多租户鉴权设计。接入第三方应用前，应由宿主应用或网关负责身份认证、授权和限流。
+- API Key、飞书密钥等只在本机加密保存；接入方不应从 API 或日志中读取、传递这些密钥。
 
 ---
 

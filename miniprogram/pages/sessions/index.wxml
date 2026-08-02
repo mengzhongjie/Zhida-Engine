@@ -1,5 +1,8 @@
 <view class="page">
-  <view class="page-heading">历史对话</view>
+  <view class="history-header">
+    <view class="back-button" bindtap="goBack">‹ 返回</view>
+    <view class="page-heading">历史对话</view>
+  </view>
   <view class="muted page-subtitle">选择一段对话继续提问</view>
 
   <view wx:if="{{loading}}" class="card muted">正在加载…</view>

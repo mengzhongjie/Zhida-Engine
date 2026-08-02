@@ -1,3 +1,5 @@
+.history-header { display: flex; align-items: center; gap: 16rpx; }
+.back-button { color: #58718f; font-size: 26rpx; padding: 8rpx 4rpx; }
 .page-heading { font-size: 40rpx; font-weight: 700; color: #17233d; }
 .page-subtitle { margin: 10rpx 0 28rpx; }
 .session-card { position: relative; }
