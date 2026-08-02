@@ -5,6 +5,8 @@
 """
 
 from datetime import datetime, date, timedelta, time as dt_time
+import platform
+import sys
 import hashlib
 import json
 import secrets
@@ -13,7 +15,7 @@ import time
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, delete
+from sqlalchemy import select, func, delete, text
 from loguru import logger
 
 from app.core.config import settings
@@ -56,8 +58,80 @@ from app.services.cache.query_cache import query_cache
 from app.services.cache.rate_limiter import rate_limiter
 from app.services.memory.memory_service import memory_service
 from app.core.security import encrypt_api_key, decrypt_api_key, mask_api_key
+from app.services.knowledge.data_integrity import data_integrity_service
 
 router = APIRouter(prefix="/admin", tags=["管理后台"])
+
+
+@router.get("/reliability")
+async def get_reliability_report():
+    """只读核验 SQLite 与 Chroma，不会自动删除或重建数据。"""
+    return await data_integrity_service.report()
+
+
+@router.post("/reliability/backup")
+async def create_reliability_backup():
+    name = await data_integrity_service.backup()
+    return {"success": True, "backup": name}
+
+
+@router.post("/reliability/cleanup-pending")
+async def retry_pending_cleanup():
+    removed = await data_integrity_service.cleanup_pending()
+    return {"success": True, "removed": removed}
+
+
+@router.get("/system-info")
+async def get_system_info():
+    """供本地管理台展示真实运行环境，不暴露任何密钥。"""
+    profile = resource_manager.detect_hardware()
+    return {
+        "app_name": settings.APP_NAME, "app_version": settings.APP_VERSION,
+        "python_version": sys.version.split()[0], "platform": platform.platform(),
+        "data_dir": str(settings.DATA_DIR), "api_address": f"{settings.API_HOST}:{settings.API_PORT}",
+        "cpu_cores": profile.cpu_cores, "memory_gb": profile.total_memory_gb,
+        "storage_type": "SSD" if profile.is_ssd else "HDD", "resource_profile": profile.profile_name,
+    }
+
+
+@router.get("/component-health")
+async def get_component_health(db: AsyncSession = Depends(get_db)):
+    """快速、无副作用的组件可用性检查；不触发模型调用。"""
+    checks: list[dict] = []
+    try:
+        await db.execute(text("SELECT 1"))
+        checks.append({"key": "sqlite", "name": "SQLite 数据库", "available": True, "message": "读写连接正常"})
+    except Exception as exc:
+        checks.append({"key": "sqlite", "name": "SQLite 数据库", "available": False, "message": str(exc)[:100]})
+    try:
+        from app.services.knowledge.indexer import index_manager
+        index_manager._client.heartbeat()
+        checks.append({"key": "chroma", "name": "Chroma 向量库", "available": True, "message": "嵌入式索引正常"})
+    except Exception as exc:
+        checks.append({"key": "chroma", "name": "Chroma 向量库", "available": False, "message": str(exc)[:100]})
+    try:
+        from app.services.knowledge.embedder import embedding_service
+        ready = await embedding_service.is_ready()
+        checks.append({"key": "embedding", "name": "向量化服务", "available": ready, "message": embedding_service.model_name})
+    except Exception as exc:
+        checks.append({"key": "embedding", "name": "向量化服务", "available": False, "message": str(exc)[:100]})
+    if not settings.LANGFUSE_ENABLED:
+        checks.append({"key": "langfuse", "name": "Langfuse", "available": False, "configured": False, "message": "未启用"})
+    elif not settings.LANGFUSE_PUBLIC_KEY or not settings.LANGFUSE_SECRET_KEY:
+        checks.append({"key": "langfuse", "name": "Langfuse", "available": False, "configured": False, "message": "缺少访问凭据"})
+    else:
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.get(
+                    f"{settings.LANGFUSE_HOST.rstrip('/')}/api/public/health",
+                    auth=(settings.LANGFUSE_PUBLIC_KEY, settings.LANGFUSE_SECRET_KEY),
+                )
+            checks.append({"key": "langfuse", "name": "Langfuse", "available": response.is_success, "configured": True,
+                           "message": "Cloud 连接正常" if response.is_success else f"服务返回 HTTP {response.status_code}"})
+        except Exception as exc:
+            checks.append({"key": "langfuse", "name": "Langfuse", "available": False, "configured": True, "message": str(exc)[:100]})
+    return {"items": checks, "checked_at": datetime.utcnow().isoformat()}
 
 
 async def load_web_search_config(db: AsyncSession) -> None:

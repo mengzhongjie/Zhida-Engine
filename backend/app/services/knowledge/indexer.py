@@ -205,15 +205,12 @@ class IndexManager:
         return before
 
     async def clear_knowledge_base(self, knowledge_base_id: str):
-        """清空知识库的所有索引"""
-        try:
-            collection = self._get_collection(knowledge_base_id)
-            self._client.delete_collection(name=collection.name)
-            canonical_id = self.normalize_knowledge_base_id(knowledge_base_id)
-            self._collections.pop(canonical_id, None)
-            logger.info(f"已清空知识库索引: {knowledge_base_id}")
-        except Exception as e:
-            logger.warning(f"清空知识库索引失败: {e}")
+        """清空知识库的所有索引；重建场景下失败必须中止，不能静默混用旧向量。"""
+        collection = self._get_collection(knowledge_base_id)
+        self._client.delete_collection(name=collection.name)
+        canonical_id = self.normalize_knowledge_base_id(knowledge_base_id)
+        self._collections.pop(canonical_id, None)
+        logger.info(f"已清空知识库索引: {knowledge_base_id}")
 
     # ================================================================
     # 检索操作

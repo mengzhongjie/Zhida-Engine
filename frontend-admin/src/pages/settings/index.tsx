@@ -5,14 +5,15 @@
  */
 
 import { useState, useEffect, useCallback } from 'react'
+import { useNavigate, useParams } from 'react-router-dom'
 import {
   Card, Table, Button, Modal, Form, Input, Select, Switch,
   message, Space, Divider, Tag, Typography, Alert, Row, Col, Statistic,
-  Tabs, Radio, InputNumber,
+  Radio, InputNumber,
 } from 'antd'
 import {
   PlusOutlined, EditOutlined, DeleteOutlined,
-  CheckCircleOutlined, CloseCircleOutlined, GlobalOutlined,
+  CheckCircleOutlined, CloseCircleOutlined, GlobalOutlined, ArrowLeftOutlined,
 } from '@ant-design/icons'
 import { api } from '@/services/api'
 import styles from './index.module.css'
@@ -93,6 +94,8 @@ interface LangfuseConfig {
 }
 
 export default function SettingsPage() {
+  const { section } = useParams()
+  const navigate = useNavigate()
   const [templates, setTemplates] = useState<{
     cloud: ProviderTemplate[]
     local: ProviderTemplate[]
@@ -838,15 +841,13 @@ export default function SettingsPage() {
       ),
     },
   ]
+  const tabKey = ({ models: 'llm', embedding: 'embedding', search: 'web-search', langfuse: 'langfuse', runtime: 'system' }[section || ''] || 'llm')
+  const activeItem = tabItems.find(item => item.key === tabKey)
 
   return (
     <div className={styles.container}>
-      <div className="page-header"><div><Title level={3}>系统设置</Title><Text type="secondary" className="page-header-copy">管理模型、向量化、联网补充与本地运行参数。</Text></div></div>
-      <Tabs
-        defaultActiveKey="llm"
-        items={tabItems}
-        size="large"
-      />
+      <div className="page-header"><div><Button type="text" icon={<ArrowLeftOutlined />} onClick={() => navigate('/settings')} style={{ marginLeft: -8 }}>返回设置</Button><Title level={3}>{activeItem?.label || '设置'}</Title><Text type="secondary" className="page-header-copy">{tabKey === 'llm' ? '管理问答模型与连接测试。' : tabKey === 'embedding' ? '配置用于知识检索的向量模型。' : tabKey === 'web-search' ? '配置知识不足时的联网补充。' : '独立配置页面。'}</Text></div></div>
+      {activeItem?.children}
 
       {/* 新建/编辑 模态框 */}
       <Modal
