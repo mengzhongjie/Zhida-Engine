@@ -44,7 +44,6 @@ def _agent_to_out(agent: Agent) -> AgentOut:
         avatar=agent.avatar,
         is_active=agent.is_active,
         status=agent.status,
-        reply_mode=agent.reply_mode,
         created_at=agent.created_at,
         updated_at=agent.updated_at,
     )
@@ -105,7 +104,8 @@ async def create_agent(
         name=request.name,
         description=request.description or "",
         avatar=request.avatar or "",
-        reply_mode=request.reply_mode,
+        reply_mode="ai",
+        is_active=False,
         status="stopped",
     )
     db.add(agent)
@@ -264,6 +264,7 @@ async def start_agent(
         pass  # Windows 下 chmod 可能无意义
 
     agent.status = "running"
+    agent.is_active = True
     await db.flush()
 
     logger.info(f"Agent-{agent_id} 已启动，沙箱已就绪，允许的 API 端点: {allowed_hosts}")
@@ -296,6 +297,7 @@ async def stop_agent(
     sandbox_manager.destroy_sandbox(agent_id)
 
     agent.status = "stopped"
+    agent.is_active = False
     await db.flush()
 
     return {"message": f"Agent '{agent.name}' 已停止", "status": "stopped"}

@@ -7,7 +7,7 @@ import {
 } from 'antd'
 import {
   ArrowLeftOutlined, DisconnectOutlined, PauseCircleOutlined, PlayCircleOutlined,
-  PlusOutlined,
+  EditOutlined, PlusOutlined,
 } from '@ant-design/icons'
 import { api } from '../../services/api'
 import zhidaLogo from '../../assets/zhida-logo.png'
@@ -21,7 +21,6 @@ interface AgentInfo {
   avatar: string
   is_active: boolean
   status: string
-  reply_mode: string
   today_messages: number
   today_answers: number
   success_rate: number
@@ -94,7 +93,7 @@ export default function AgentDetail() {
     }
   }
 
-  const saveName = async () => { if (!agent) return; const values = await nameForm.validateFields(); const updated = await api.put<AgentInfo>(`/agents/${agent.id}`, values); setAgent(updated); setEditingName(false); message.success('Agent 名称已更新') }
+  const saveName = async () => { if (!agent) return; const values = await nameForm.validateFields(); const updated = await api.put<AgentInfo>(`/agents/${agent.id}`, values); setAgent(updated); setEditingName(false); message.success('Agent 信息已更新') }
 
   const openMountModal = async () => {
     setMountModalVisible(true)
@@ -169,7 +168,7 @@ export default function AgentDetail() {
         <Space>
           <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(-1)}>返回</Button>
           <img src={zhidaLogo} alt="智答引擎" style={{ width: 36, height: 36, borderRadius: 9, objectFit: 'cover' }} />
-          <Title level={3} style={{ margin: 0 }}>{agent.name}</Title><Button type="link" onClick={() => { nameForm.setFieldsValue({ name: agent.name }); setEditingName(true) }}>改名</Button>
+          <Title level={3} style={{ margin: 0 }}>{agent.name}</Title>
           {statusTag}
         </Space>
         <Button type={agent.status === 'running' ? 'default' : 'primary'} icon={agent.status === 'running' ? <PauseCircleOutlined /> : <PlayCircleOutlined />} onClick={toggleAgent}>
@@ -187,13 +186,13 @@ export default function AgentDetail() {
         <Tabs activeKey={activeTab} onChange={setActiveTab} items={[
           {
             key: 'overview', label: '概览', children: (
-              <Descriptions bordered column={2}>
+              <Card size="small" title="Agent 概览" extra={<Button icon={<EditOutlined />} onClick={() => { nameForm.setFieldsValue({ name: agent.name, description: agent.description }); setEditingName(true) }}>编辑</Button>}><Descriptions bordered column={2}>
                 <Descriptions.Item label="名称">{agent.name}</Descriptions.Item>
                 <Descriptions.Item label="状态">{statusTag}</Descriptions.Item>
-                <Descriptions.Item label="回复模式">{agent.reply_mode === 'auto' ? '自动回复' : agent.reply_mode === 'manual' ? '手动回复' : '混合模式'}</Descriptions.Item>
+                <Descriptions.Item label="回复方式">AI 回复</Descriptions.Item>
                 <Descriptions.Item label="可用状态">{agent.is_active ? <Tag color="green">已启用</Tag> : <Tag>已停用</Tag>}</Descriptions.Item>
                 <Descriptions.Item label="描述" span={2}>{agent.description || '暂无描述'}</Descriptions.Item>
-              </Descriptions>
+              </Descriptions></Card>
             ),
           },
           {
@@ -212,7 +211,7 @@ export default function AgentDetail() {
       <Modal title="挂载知识库" open={mountModalVisible} onOk={mountKnowledgeBases} onCancel={() => setMountModalVisible(false)} confirmLoading={mountModalLoading} okText="确认挂载" cancelText="取消" width={700}>
         <Table rowKey="id" loading={mountModalLoading} dataSource={availableKbList} columns={knowledgeColumns.slice(0, 4)} rowSelection={{ selectedRowKeys: selectedKbIds, onChange: (keys) => setSelectedKbIds(keys.map(Number)) }} pagination={{ pageSize: 6 }} size="small" locale={{ emptyText: '暂无可挂载的知识库' }} />
       </Modal>
-      <Modal title="修改 Agent 名称" open={editingName} onCancel={() => setEditingName(false)} onOk={saveName}><Form form={nameForm} layout="vertical"><Form.Item name="name" label="名称" rules={[{ required: true, message: '请输入名称' }]}><Input /></Form.Item></Form></Modal>
+      <Modal title="编辑 Agent" open={editingName} onCancel={() => setEditingName(false)} onOk={saveName}><Form form={nameForm} layout="vertical"><Form.Item name="name" label="名称" rules={[{ required: true, message: '请输入名称' }]}><Input /></Form.Item><Form.Item name="description" label="描述"><Input.TextArea rows={3} maxLength={200} /></Form.Item></Form></Modal>
     </div>
   )
 }

@@ -6,7 +6,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  Card, Steps, Form, Input, Radio, Space, Typography, message,
+  Card, Steps, Form, Input, Space, Typography, message,
   Table, Button, Segmented, Descriptions,
 } from 'antd'
 import {
@@ -44,7 +44,6 @@ export default function AgentNew() {
   const [formData, setFormData] = useState({
     name: '',
     description: '',
-    reply_mode: 'auto',
     selected_kb_ids: [] as number[],
   })
 
@@ -82,7 +81,6 @@ export default function AgentNew() {
       const agent = await api.post<any>('/agents', {
         name: formData.name,
         description: formData.description,
-        reply_mode: formData.reply_mode,
       })
 
       if (formData.selected_kb_ids.length > 0) {
@@ -167,16 +165,6 @@ export default function AgentNew() {
                   maxLength={200}
                 />
               </Form.Item>
-              <Form.Item label="回复模式">
-                <Radio.Group
-                  value={formData.reply_mode}
-                  onChange={(e) => updateField('reply_mode', e.target.value)}
-                >
-                  <Radio.Button value="auto">自动回复</Radio.Button>
-                  <Radio.Button value="manual">手动回复</Radio.Button>
-                  <Radio.Button value="hybrid">混合模式</Radio.Button>
-                </Radio.Group>
-              </Form.Item>
             </Form>
           </div>
         )
@@ -220,9 +208,7 @@ export default function AgentNew() {
             <Card>
               <Descriptions column={1} bordered size="small">
                 <Descriptions.Item label="名称">{formData.name || '未设置'}</Descriptions.Item>
-                <Descriptions.Item label="回复模式">
-                  {formData.reply_mode === 'auto' ? '自动回复' : formData.reply_mode === 'manual' ? '手动回复' : '混合模式'}
-                </Descriptions.Item>
+                <Descriptions.Item label="回复方式">AI 回复</Descriptions.Item>
                 <Descriptions.Item label="知识库">
                   {formData.selected_kb_ids.length > 0
                     ? `${formData.selected_kb_ids.length} 个知识库`

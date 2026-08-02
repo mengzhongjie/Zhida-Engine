@@ -18,7 +18,6 @@ class AgentCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=100, description="Agent 名称")
     description: Optional[str] = Field(None, description="Agent 描述")
     avatar: Optional[str] = Field(None, description="头像 URL 或 emoji")
-    reply_mode: str = Field("auto", description="回复模式: auto/manual/hybrid")
 
 
 class AgentUpdate(BaseModel):
@@ -27,7 +26,6 @@ class AgentUpdate(BaseModel):
     description: Optional[str] = Field(None, description="Agent 描述")
     avatar: Optional[str] = Field(None, description="头像 URL 或 emoji")
     is_active: Optional[bool] = Field(None, description="是否启用")
-    reply_mode: Optional[str] = Field(None, description="回复模式: auto/manual/hybrid")
 
 
 class AgentOut(BaseModel):
@@ -38,7 +36,6 @@ class AgentOut(BaseModel):
     avatar: Optional[str] = None
     is_active: bool
     status: str
-    reply_mode: str
     created_at: datetime
     updated_at: datetime
 

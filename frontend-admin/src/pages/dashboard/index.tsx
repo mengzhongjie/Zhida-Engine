@@ -27,7 +27,6 @@ interface AgentItem {
   description: string
   avatar: string
   is_active: boolean
-  is_public: boolean
   status: string
   today_messages: number
   today_answers: number
@@ -332,17 +331,12 @@ export default function Dashboard() {
                     <Text type="secondary">{agent.description || '暂无描述'}</Text>
                     <div style={{ marginTop: 12 }}>
                       <Row gutter={8}>
-                        <Col span={8}>
-                          <Text type="secondary" style={{ fontSize: 12 }}>小程序</Text>
-                          <br />
-                          <Text strong>{agent.is_public ? '公开' : '未公开'}</Text>
-                        </Col>
-                        <Col span={8}>
+                        <Col span={12}>
                           <Text type="secondary" style={{ fontSize: 12 }}>今日回答</Text>
                           <br />
                           <Text strong>{agent.today_answers}</Text>
                         </Col>
-                        <Col span={8}>
+                        <Col span={12}>
                           <Text type="secondary" style={{ fontSize: 12 }}>成功率</Text>
                           <br />
                           <Text strong>{agent.success_rate}%</Text>
