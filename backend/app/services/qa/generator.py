@@ -24,12 +24,12 @@ from app.services.qa.retriever import hybrid_retriever
 from app.services.qa.prompt import prompt_template
 from app.services.llm.gateway import llm_gateway
 from app.services.cache.query_cache import query_cache
-from app.services.cache.idempotency import single_flight
 from app.services.cache.degradation import degradation_manager
 from app.services.knowledge.indexer import IndexResult
 from app.services.memory.memory_service import memory_service
 from app.services.qa.web_search import web_search_service
 from app.services.qa.langfuse_observer import observe_qa
+from app.services.qa.request_coalescer import qa_request_coalescer
 
 
 @dataclass
@@ -313,6 +313,33 @@ class AnswerGenerator:
         return context, sources
 
     async def generate(
+        self,
+        knowledge_base_ids: list[str],
+        question: str,
+        top_k: int = 5,
+        system_prompt: Optional[str] = None,
+        include_sources: bool = True,
+        temperature: float = 0.7,
+        user_id: Optional[str] = None,
+        agent_id: Optional[int] = None,
+        enable_memory: bool = True,
+        reply_mode: str = "auto",
+        conversation_history: Optional[list[dict[str, str]]] = None,
+    ) -> AnswerResult:
+        """合并同一用户同一上下文下并发到达的问答，避免重复检索和模型调用。"""
+        key = qa_request_coalescer.make_key(
+            agent_id=agent_id, user_id=user_id, knowledge_base_ids=sorted(knowledge_base_ids),
+            question=" ".join(question.split()), reply_mode=reply_mode,
+            conversation_history=conversation_history or [], system_prompt=system_prompt or "",
+        )
+        return await qa_request_coalescer.run(key, lambda: self._generate(
+            knowledge_base_ids=knowledge_base_ids, question=question, top_k=top_k,
+            system_prompt=system_prompt, include_sources=include_sources, temperature=temperature,
+            user_id=user_id, agent_id=agent_id, enable_memory=enable_memory,
+            reply_mode=reply_mode, conversation_history=conversation_history,
+        ))
+
+    async def _generate(
         self,
         knowledge_base_ids: list[str],
         question: str,

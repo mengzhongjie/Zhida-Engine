@@ -301,7 +301,6 @@ class MemoryService:
         run_id: Optional[str] = None,
         limit: int = 10,
         filters: Optional[dict] = None,
-        rerank: bool = False,
     ) -> list[dict]:
         """
         搜索相关记忆
@@ -313,7 +312,6 @@ class MemoryService:
             run_id: 运行 ID 过滤
             limit: 返回结果数量
             filters: 额外过滤条件
-            rerank: 是否重排序
 
         Returns:
             记忆结果列表，每项包含 id, memory, score, metadata 等
@@ -332,9 +330,6 @@ class MemoryService:
                 kwargs["run_id"] = run_id
             if filters:
                 kwargs["filters"] = filters
-            if rerank:
-                kwargs["rerank"] = rerank
-
             result = self._memory.search(query, **kwargs)
             return result.get("results", [])
         except Exception as e:

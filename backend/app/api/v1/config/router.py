@@ -189,7 +189,7 @@ async def create_config(
         model_name=request.model_name,
         api_key=encrypt_api_key(request.api_key or ""),  # 加密存储
         is_primary=request.is_primary,
-        is_fallback=request.is_fallback,
+        is_fallback=request.is_fallback and not request.is_primary,
         extra_config=request.extra_config,
         max_tokens_per_request=request.max_tokens_per_request,
         max_requests_per_minute=request.max_requests_per_minute,
@@ -229,6 +229,10 @@ async def update_config(
 
     # 更新字段
     update_data = request.model_dump(exclude_unset=True)
+    if update_data.get("is_primary") is True:
+        update_data["is_fallback"] = False
+    elif update_data.get("is_fallback") is True:
+        update_data["is_primary"] = False
     logger.info(f"更新配置 {config_id}: 字段={list(update_data.keys())}")
     for key, value in update_data.items():
         # API Key 特殊处理：空字符串表示不修改，有值时加密存储

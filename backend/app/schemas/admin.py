@@ -84,14 +84,12 @@ class LangfuseConfigUpdate(BaseModel):
 
 class ModuleSwitchesOut(BaseModel):
     """模块开关输出"""
-    enable_single_flight: bool = Field(..., description="Single-Flight 幂等合并")
     enable_source_citation: bool = Field(..., description="回答后附带消息来源")
     enable_rate_limit: bool = Field(..., description="限流总开关")
 
 
 class ModuleSwitchesUpdate(BaseModel):
     """模块开关更新请求"""
-    enable_single_flight: Optional[bool] = Field(None, description="Single-Flight 幂等合并")
     enable_source_citation: Optional[bool] = Field(None, description="回答后附带消息来源")
     enable_rate_limit: Optional[bool] = Field(None, description="限流总开关")
 
@@ -182,7 +180,6 @@ class MemorySearchIn(BaseModel):
     agent_id: Optional[str] = Field(None, description="Agent ID 过滤")
     run_id: Optional[str] = Field(None, description="运行 ID 过滤")
     limit: int = Field(20, ge=1, le=100, description="返回数量")
-    rerank: bool = Field(False, description="是否重排序")
 
 
 class MemoryAddIn(BaseModel):

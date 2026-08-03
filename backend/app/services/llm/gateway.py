@@ -166,6 +166,7 @@ class LLMGateway:
         system_prompt: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: int = 2048,
+        extra_body: Optional[dict] = None,
     ) -> ChatResult:
         """
         发送对话请求 —— 主模型失败时自动降级
@@ -191,7 +192,7 @@ class LLMGateway:
         # 尝试主模型
         if self._primary_client:
             try:
-                return await self._call_model(self._primary_client, messages, temperature, max_tokens)
+                return await self._call_model(self._primary_client, messages, temperature, max_tokens, extra_body)
             except Exception as e:
                 logger.warning(f"主模型 {self._primary_client.config.model_name} 调用失败: {e}，尝试降级模型")
 
@@ -199,7 +200,7 @@ class LLMGateway:
         for fallback in self._fallback_clients:
             try:
                 logger.info(f"使用降级模型: {fallback.config.model_name}")
-                return await self._call_model(fallback, messages, temperature, max_tokens)
+                return await self._call_model(fallback, messages, temperature, max_tokens, extra_body)
             except Exception as e:
                 logger.warning(f"降级模型 {fallback.config.model_name} 也失败: {e}")
                 continue
@@ -226,20 +227,26 @@ class LLMGateway:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
 
-        # 优先使用主模型
-        client = self._primary_client
-        if client is None and self._fallback_clients:
-            client = self._fallback_clients[0]
-
-        if client is None:
+        clients = ([self._primary_client] if self._primary_client else []) + self._fallback_clients
+        if not clients:
             raise RuntimeError("没有可用的 LLM 模型")
 
-        try:
-            async for chunk in self._call_model_stream(client, messages, temperature, max_tokens):
-                yield chunk
-        except Exception as e:
-            logger.error(f"流式调用失败: {e}")
-            raise
+        # 仅在尚未向用户输出任何内容时允许切换。若已输出再换模型，回答会从头
+        # 重复，反而破坏对话；这时将错误交给上层保持流式结果一致。
+        for index, client in enumerate(clients):
+            emitted = False
+            try:
+                async for chunk in self._call_model_stream(client, messages, temperature, max_tokens):
+                    emitted = True
+                    yield chunk
+                return
+            except Exception as exc:
+                if emitted or index == len(clients) - 1:
+                    logger.error(f"流式调用失败: {exc}")
+                    raise
+                logger.warning(
+                    f"流式主模型 {client.config.model_name} 在输出前失败: {exc}，尝试降级模型"
+                )
 
     # ================================================================
     # 底层调用
@@ -251,25 +258,48 @@ class LLMGateway:
         messages: list[dict],
         temperature: float,
         max_tokens: int,
+        extra_body: Optional[dict] = None,
     ) -> ChatResult:
         """调用单个模型（非流式），返回包含 token 用量的结果"""
         start_time = time.time()
 
-        response = await model_client.client.chat.completions.create(
+        request_kwargs = dict(
             model=model_client.config.model_name,
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
         )
+        if extra_body:
+            request_kwargs["extra_body"] = extra_body
+        try:
+            response = await model_client.client.chat.completions.create(**request_kwargs)
+        except Exception:
+            # 不同 OpenAI 兼容厂商对扩展参数的支持并不一致；拒绝时无参数重试，
+            # 不让一个优化项影响原有问答可用性。
+            if not extra_body:
+                raise
+            logger.info(f"模型 {model_client.config.model_name} 不支持扩展参数，回退普通调用")
+            request_kwargs.pop("extra_body", None)
+            response = await model_client.client.chat.completions.create(**request_kwargs)
 
         elapsed = (time.time() - start_time) * 1000
-        content = response.choices[0].message.content or ""
+        choice = response.choices[0]
+        content = choice.message.content or ""
         usage = response.usage
+        finish_reason = choice.finish_reason or "unknown"
+        reasoning_content = getattr(choice.message, "reasoning_content", None) or ""
 
         logger.debug(
             f"模型 {model_client.config.model_name} 响应: "
-            f"{len(content)} 字符, {elapsed:.0f}ms"
+            f"{len(content)} 字符, {elapsed:.0f}ms, finish_reason={finish_reason}, "
+            f"reasoning={len(reasoning_content)} 字符"
         )
+        # 空正文不是有效回答。将其视为调用失败，才能触发已有降级模型策略，
+        # 而不是把空字符串交给上层业务在很晚的阶段才报错。
+        if not content.strip():
+            raise RuntimeError(
+                f"模型返回空正文（finish_reason={finish_reason}, reasoning={len(reasoning_content)} 字符）"
+            )
 
         return ChatResult(
             text=content,
