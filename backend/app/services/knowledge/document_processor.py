@@ -18,6 +18,7 @@ from app.services.validation.quality_checker import parse_quality_checker
 
 _tasks: set[asyncio.Task] = set()
 _active_document_ids: set[int] = set()
+_document_tasks: dict[int, asyncio.Task] = {}
 _kb_locks: dict[int, asyncio.Lock] = {}
 _active_rebuild_kb_ids: set[int] = set()
 
@@ -29,13 +30,15 @@ async def _sync_kb_statistics(db, kb: KnowledgeBase) -> None:
             func.coalesce(func.sum(Document.chunk_count), 0),
             func.coalesce(func.sum(Document.parent_chunk_count), 0),
             func.coalesce(func.sum(Document.file_size), 0),
+            func.coalesce(func.sum(Document.character_count), 0),
         ).where(Document.knowledge_base_id == kb.id)
     )
-    document_count, chunk_count, parent_chunk_count, total_size_bytes = result.one()
+    document_count, chunk_count, parent_chunk_count, total_size_bytes, total_characters = result.one()
     kb.document_count = document_count
     kb.chunk_count = chunk_count
     kb.parent_chunk_count = parent_chunk_count
     kb.total_size_bytes = total_size_bytes
+    kb.total_characters = total_characters
 
 
 def schedule_document_processing(document_id: int) -> bool:
@@ -46,10 +49,12 @@ def schedule_document_processing(document_id: int) -> bool:
     _active_document_ids.add(document_id)
     task = asyncio.create_task(process_document(document_id), name=f"document-{document_id}")
     _tasks.add(task)
+    _document_tasks[document_id] = task
 
     def _finished(done_task: asyncio.Task) -> None:
         _tasks.discard(done_task)
         _active_document_ids.discard(document_id)
+        _document_tasks.pop(document_id, None)
         try:
             done_task.result()
         except asyncio.CancelledError:
@@ -58,6 +63,19 @@ def schedule_document_processing(document_id: int) -> bool:
             logger.exception(f"文档后台任务异常退出: {document_id}")
 
     task.add_done_callback(_finished)
+    return True
+
+
+async def cancel_document_processing(document_id: int) -> bool:
+    """取消当前进程内的文档任务，并等待协程停止，供 API 安全清理残留索引。"""
+    task = _document_tasks.get(document_id)
+    if task is None or task.done():
+        return False
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
     return True
 
 
@@ -91,7 +109,7 @@ async def _rebuild_knowledge_base(knowledge_base_id: int) -> None:
                 raise ValueError("知识库不存在")
             documents = (await db.execute(select(Document).where(
                 Document.knowledge_base_id == knowledge_base_id,
-                Document.status.in_(("completed", "pending")),
+                Document.status.in_(("completed", "pending", "source_removed_retained")),
             ))).scalars().all()
             if not documents:
                 raise RuntimeError("没有可重建的已完成或待处理文档")
@@ -103,7 +121,7 @@ async def _rebuild_knowledge_base(knowledge_base_id: int) -> None:
             kb = await db.get(KnowledgeBase, knowledge_base_id)
             docs = (await db.execute(select(Document).where(
                 Document.knowledge_base_id == knowledge_base_id,
-                Document.status.in_(("completed", "pending")),
+                Document.status.in_(("completed", "pending", "source_removed_retained")),
             ))).scalars().all()
             await db.execute(DocumentChunk.__table__.delete().where(DocumentChunk.knowledge_base_id == knowledge_base_id))
             for doc in docs:
@@ -266,6 +284,7 @@ async def _process_once(document_id: int) -> None:
                 doc, kb = await db.get(Document, document_id), await db.get(KnowledgeBase, kb_id)
                 if doc is None or kb is None: raise RuntimeError("文档或知识库在处理期间被删除")
                 doc.chunk_count, doc.parent_chunk_count = len(child_chunks), len(parent_chunks)
+                doc.character_count = len(parse_result.text)
                 for key, value in timings.items(): setattr(doc, key, value)
                 doc.status, doc.processing_stage, doc.failed_stage, doc.error_message = "completed", "completed", None, None
                 await _sync_kb_statistics(db, kb); await db.commit()

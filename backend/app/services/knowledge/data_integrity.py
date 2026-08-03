@@ -57,8 +57,12 @@ class DataIntegrityService:
                         counts = (await db.execute(select(
                             func.count(Document.id), func.coalesce(func.sum(Document.chunk_count), 0),
                             func.coalesce(func.sum(Document.parent_chunk_count), 0), func.coalesce(func.sum(Document.file_size), 0),
+                            func.coalesce(func.sum(Document.character_count), 0),
                         ).where(Document.knowledge_base_id == kb.id))).one()
-                        kb.document_count, kb.chunk_count, kb.parent_chunk_count, kb.total_size_bytes = counts
+                        (
+                            kb.document_count, kb.chunk_count, kb.parent_chunk_count,
+                            kb.total_size_bytes, kb.total_characters,
+                        ) = counts
                     await db.commit()
                     removed += 1
                 except Exception:

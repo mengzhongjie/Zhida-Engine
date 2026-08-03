@@ -287,6 +287,23 @@ async def ask(
     db: AsyncSession = Depends(get_db),
 ):
     await _get_public_agent(db, payload.agent_id)
+    # 网络重试复用同一 request_id 时，直接回放已完成回答，不再扣额度或调用模型。
+    if payload.request_id:
+        existing = (await db.execute(select(QAHistory).where(
+            QAHistory.channel == "miniprogram",
+            QAHistory.user_id == user.openid,
+            QAHistory.agent_id == payload.agent_id,
+            QAHistory.request_id == payload.request_id,
+        ).order_by(QAHistory.id.desc()).limit(1))).scalar_one_or_none()
+        if existing is not None:
+            return {
+                "session_id": existing.chat_id,
+                "question": existing.question,
+                "answer": existing.answer or "",
+                "sources": _decode_sources(existing.sources),
+                "from_cache": existing.is_cache_hit,
+                "remaining_today": (await _user_out(db, user)).remaining_today,
+            }
     session_id = payload.session_id
     if session_id:
         session = await db.get(MiniAppSession, session_id)

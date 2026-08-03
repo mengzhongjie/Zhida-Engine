@@ -27,7 +27,6 @@ from app.schemas.qa import (
     QAFeedbackRequest,
 )
 from app.services.cache.query_cache import query_cache
-from app.services.cache.idempotency import single_flight
 from app.services.qa.generator import answer_generator
 
 router = APIRouter(prefix="/qa", tags=["问答"])

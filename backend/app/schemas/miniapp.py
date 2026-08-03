@@ -70,6 +70,7 @@ class MiniAppAskRequest(BaseModel):
     agent_id: int
     question: str = Field(..., min_length=1, max_length=1000)
     session_id: Optional[str] = None
+    request_id: Optional[str] = Field(None, min_length=12, max_length=80, description="同一次发送及其网络重试共用的幂等 ID")
 
 
 class MiniAppUserOut(BaseModel):

@@ -82,6 +82,8 @@ def create_app():
         # 单机后台任务没有外部队列；启动时恢复上次中断的文档处理。
         from app.services.knowledge.document_processor import resume_unfinished_document_processing
         await resume_unfinished_document_processing()
+        from app.api.v1.knowledge.router import resume_web_summary_jobs
+        await resume_web_summary_jobs()
 
         # 后台异步加载重模块（不阻塞启动）
         import asyncio
@@ -149,6 +151,10 @@ def create_app():
     # 向量化配置
     from app.api.v1.embedding.router import router as embedding_router
     app.include_router(embedding_router, prefix="/api/v1")
+
+    # 视觉模型配置
+    from app.api.v1.vision.router import router as vision_router
+    app.include_router(vision_router, prefix="/api/v1")
 
     # 小程序邀请制问答接口（仅接受 CloudBase 网关签名请求）
     from app.api.v1.miniapp.router import router as miniapp_router

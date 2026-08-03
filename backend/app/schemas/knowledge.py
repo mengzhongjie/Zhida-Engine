@@ -36,6 +36,7 @@ class KnowledgeBaseOut(BaseModel):
     document_count: int = 0
     chunk_count: int = 0
     total_size_bytes: int = 0
+    total_characters: int = 0
     is_active: bool = True
     index_status: str = "ready"
     embedding_model: Optional[str] = None
@@ -64,6 +65,7 @@ class DocumentOut(BaseModel):
     filename: str
     file_type: str
     file_size: int
+    character_count: int = 0
     status: str  # pending/processing/completed/error
     error_message: Optional[str] = None
     chunk_count: int = 0
@@ -74,7 +76,12 @@ class DocumentOut(BaseModel):
     processing_stage: Optional[str] = None
     failed_stage: Optional[str] = None
     processing_attempts: int = 0
+    web_image_count: int = 0
+    vision_image_count: int = 0
+    vision_time_ms: float = 0.0
     source_url: Optional[str] = None
+    source_type: str = "file"
+    source_key: Optional[str] = None
     created_at: datetime
     updated_at: datetime
     duplicate: bool = False  # 本次上传是否命中已有相同文件
@@ -99,7 +106,7 @@ class FeishuConfigUpdate(BaseModel):
 
 class FeishuImportRequest(BaseModel):
     url: str = Field(..., min_length=12, max_length=2000)
-    max_nodes: int = Field(500, ge=1, le=1000)
+    max_nodes: int = Field(50, ge=1, le=100)
 
 
 class FeishuImportStartOut(BaseModel):
@@ -118,15 +125,36 @@ class FeishuImportJobOut(BaseModel):
     logs: list[dict] = Field(default_factory=list)
 
 
+class DocumentApproveRequest(BaseModel):
+    document_ids: list[int] = Field(..., min_length=1, max_length=100)
+
+
+class DocumentApproveOut(BaseModel):
+    approved: int = 0
+    skipped: int = 0
+
+
+class DocumentBatchDeleteRequest(BaseModel):
+    document_ids: list[int] = Field(..., min_length=1, max_length=100)
+
+
+class DocumentBatchDeleteOut(BaseModel):
+    removed: int = 0
+    skipped: int = 0
+    cleanup_pending: int = 0
+
+
+class DocumentContentOut(BaseModel):
+    id: int
+    filename: str
+    source_type: str
+    source_url: Optional[str] = None
+    content: str
+    truncated: bool = False
+
+
 class WebUrlImportRequest(BaseModel):
     url: str = Field(..., min_length=12, max_length=2000)
-
-
-class WebUrlPreviewOut(BaseModel):
-    title: str
-    url: str
-    content_preview: str
-    content_length: int
 
 
 class WebUrlImportOut(BaseModel):

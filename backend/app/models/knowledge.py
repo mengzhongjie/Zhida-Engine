@@ -32,6 +32,7 @@ class KnowledgeBase(Base):
     chunk_count = Column(Integer, default=0, comment="子切片数量（用于索引）")
     parent_chunk_count = Column(Integer, default=0, comment="父块数量")
     total_size_bytes = Column(Integer, default=0, comment="总大小（字节）")
+    total_characters = Column(Integer, default=0, comment="资料正文总字符数")
     qa_pair_count = Column(Integer, default=0, comment="Q&A 对数量")
 
     # 索引指纹：避免不同嵌入模型/维度/距离空间的向量被混用。
@@ -59,7 +60,10 @@ class Document(Base):
     file_type = Column(String(20), nullable=False, comment="文件类型: pdf/docx/xlsx/txt/md")
     file_path = Column(String(1000), nullable=False, comment="文件存储路径")
     source_url = Column(String(1500), nullable=True, comment="外部数据源原始链接")
+    source_type = Column(String(30), nullable=False, default="file", comment="来源类型: file/web_page/cloud_document")
+    source_key = Column(String(500), nullable=True, index=True, comment="数据源稳定身份，如飞书 docx token")
     file_size = Column(Integer, default=0, comment="文件大小（字节）")
+    character_count = Column(Integer, default=0, comment="解析/保存后的正文字符数")
     content_hash = Column(String(64), nullable=True, index=True, comment="文件 SHA-256，用于同知识库去重")
 
     # 处理状态
@@ -76,6 +80,9 @@ class Document(Base):
     processing_stage = Column(String(30), nullable=True, comment="当前或失败阶段")
     failed_stage = Column(String(30), nullable=True, comment="失败阶段")
     processing_attempts = Column(Integer, default=0, comment="已处理次数")
+    web_image_count = Column(Integer, default=0, comment="网页正文发现的图片数")
+    vision_image_count = Column(Integer, default=0, comment="视觉模型成功识别的图片数")
+    vision_time_ms = Column(Float, default=0.0, comment="网页视觉识别总耗时（毫秒）")
 
     created_at = Column(DateTime, default=datetime.utcnow, comment="创建时间")
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, comment="更新时间")

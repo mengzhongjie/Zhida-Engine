@@ -13,7 +13,7 @@ class ImportJob(Base):
     knowledge_base_id = Column(Integer, nullable=False, index=True)
     source_type = Column(String(40), nullable=False)
     source_url = Column(String(2000), nullable=False)
-    max_nodes = Column(Integer, nullable=False, default=500)
+    max_nodes = Column(Integer, nullable=False, default=50)
     status = Column(String(20), nullable=False, default="pending")  # pending/processing/completed/failed
     total = Column(Integer, nullable=False, default=0)
     processed = Column(Integer, nullable=False, default=0)
