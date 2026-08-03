@@ -826,7 +826,7 @@ export default function SettingsPage() {
               return <Card key={item.id} size="small" className={`web-search-provider-card ${active ? 'is-active' : ''}`}>
                 <div className="web-search-provider-main">
                   <div><Text strong>{item.name}</Text><Text type="secondary">{item.description}</Text></div>
-                  <div className="web-search-provider-status"><Tag color={active ? 'processing' : 'default'}>{active ? '当前链路' : '备用'}</Tag><Text type={health && !health.success ? 'danger' : 'secondary'}>{health ? (health.success ? '可用' : '不可用') : status.message}</Text></div>
+                  <div className="web-search-provider-status"><Tag className={active ? 'search-chain-active' : undefined} color={active ? 'success' : 'default'}>{active ? '已启用' : '备用'}</Tag><Text type={health && !health.success ? 'danger' : 'secondary'}>{health ? (health.success ? '可用' : '不可用') : status.message}</Text></div>
                 </div>
                 <Text className="web-search-health-copy" type="secondary">{health?.message || (active ? '尚未测试该搜索链路' : status.message)}</Text>
                 <Space wrap className="web-search-provider-actions">
