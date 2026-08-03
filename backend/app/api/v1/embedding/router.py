@@ -6,7 +6,8 @@
 """
 
 import time
-from fastapi import APIRouter, HTTPException, Depends
+from datetime import datetime
+from fastapi import APIRouter, HTTPException, Depends, Query
 from loguru import logger
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,6 +17,7 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import encrypt_api_key, decrypt_api_key, mask_api_key
 from app.models.embedding_config import EmbeddingConfig
+from app.models.embedding_profile import EmbeddingProfile
 from app.models.knowledge import KnowledgeBase
 from app.schemas.embedding import (
     EmbeddingConfigOut,
@@ -28,6 +30,7 @@ from app.services.knowledge.embedder import (
     LocalBGEEmbedding,
     CloudEmbedding,
 )
+from app.services.knowledge.document_processor import schedule_knowledge_base_rebuild
 from app.services.knowledge.embedding_providers import (
     BUILTIN_EMBEDDING_PROVIDERS,
     get_embedding_provider_by_id,
@@ -36,6 +39,157 @@ from app.services.knowledge.embedding_providers import (
 )
 
 router = APIRouter(prefix="/embedding", tags=["向量化配置"])
+
+class EmbeddingProfileRequest(BaseModel):
+    name: str = "向量模型"
+    provider_id: str = "custom"
+    provider_name: str = "自定义"
+    mode: str = "local"
+    local_model: str = "BAAI/bge-large-zh-v1.5"
+    local_device: str = "cpu"
+    cloud_base_url: str = ""
+    cloud_api_key: str | None = None
+    cloud_model: str = "text-embedding-3-small"
+    cloud_dimension: int = 1536
+    is_active: bool = True
+
+
+def _profile_out(item: EmbeddingProfile) -> dict:
+    return {
+        "id": item.id, "name": item.name, "provider_id": item.provider_id,
+        "provider_name": item.provider_name, "mode": item.mode,
+        "local_model": item.local_model, "local_device": item.local_device,
+        "cloud_base_url": item.cloud_base_url,
+        "cloud_api_key": mask_api_key(decrypt_api_key(item.cloud_api_key)),
+        "cloud_model": item.cloud_model, "cloud_dimension": item.cloud_dimension,
+        "model": item.local_model if item.mode == "local" else item.cloud_model,
+        "dimension": item.cloud_dimension if item.mode == "cloud" else None,
+        "is_primary": item.is_primary, "is_active": item.is_active,
+        "last_test_at": item.last_test_at, "last_test_success": item.last_test_success,
+        "last_error": item.last_error,
+    }
+
+
+async def _ensure_embedding_profile(db: AsyncSession) -> None:
+    # scalar 可能是 0/None；不要依赖 SQLAlchemy Row 的真值，避免每次读取
+    # 配置页都错误地重新种子化一条“当前向量模型”。
+    existing_id = (await db.execute(select(EmbeddingProfile.id).limit(1))).scalar_one_or_none()
+    if existing_id is not None:
+        return
+    current = (await db.execute(select(EmbeddingConfig).where(EmbeddingConfig.id == 1))).scalar_one_or_none()
+    item = EmbeddingProfile(
+        name="当前向量模型", provider_id="local" if not current or current.mode == "local" else "custom",
+        provider_name="本地模型" if not current or current.mode == "local" else "云端 API",
+        mode=current.mode if current else getattr(settings, "EMBEDDING_MODE", "local"),
+        local_model=current.local_model if current else settings.EMBEDDING_MODEL,
+        local_device=current.local_device if current else settings.EMBEDDING_DEVICE,
+        cloud_base_url=current.cloud_base_url if current else getattr(settings, "EMBEDDING_CLOUD_BASE_URL", ""),
+        cloud_api_key=current.cloud_api_key if current else getattr(settings, "EMBEDDING_CLOUD_API_KEY", ""),
+        cloud_model=current.cloud_model if current else getattr(settings, "EMBEDDING_CLOUD_MODEL", "text-embedding-3-small"),
+        cloud_dimension=current.cloud_dimension if current else getattr(settings, "EMBEDDING_CLOUD_DIMENSION", 1536),
+        is_primary=True, is_active=True,
+    )
+    db.add(item)
+    await db.flush()
+
+
+@router.get("/profiles")
+async def list_embedding_profiles(db: AsyncSession = Depends(get_db)):
+    await _ensure_embedding_profile(db)
+    items = (await db.execute(select(EmbeddingProfile).order_by(
+        EmbeddingProfile.is_primary.desc(), EmbeddingProfile.updated_at.desc(),
+    ))).scalars().all()
+    return [_profile_out(item) for item in items]
+
+
+@router.post("/profiles")
+async def create_embedding_profile(request: EmbeddingProfileRequest, db: AsyncSession = Depends(get_db)):
+    if request.mode not in {"local", "cloud"}:
+        raise HTTPException(status_code=422, detail="向量模式只能是 local 或 cloud")
+    if request.mode == "cloud" and (not request.cloud_base_url or not request.cloud_model or not request.cloud_api_key):
+        raise HTTPException(status_code=422, detail="请填写完整的云端向量配置")
+    item = EmbeddingProfile(
+        name=request.name.strip(), provider_id=request.provider_id, provider_name=request.provider_name,
+        mode=request.mode, is_active=request.is_active, local_model=request.local_model,
+        local_device=request.local_device, cloud_base_url=request.cloud_base_url.strip().rstrip("/"),
+        cloud_api_key=encrypt_api_key(request.cloud_api_key) if request.cloud_api_key else "",
+        cloud_model=request.cloud_model, cloud_dimension=request.cloud_dimension,
+    )
+    db.add(item)
+    await db.flush()
+    return _profile_out(item)
+
+
+@router.put("/profiles/{profile_id}")
+async def update_embedding_profile(profile_id: int, request: EmbeddingProfileRequest, db: AsyncSession = Depends(get_db)):
+    item = await db.get(EmbeddingProfile, profile_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="向量配置不存在")
+    if item.is_primary:
+        changed = (request.mode != item.mode or request.local_model != item.local_model or
+                   request.cloud_model != item.cloud_model or request.cloud_dimension != item.cloud_dimension)
+        if changed and (await db.execute(select(KnowledgeBase.id).where(KnowledgeBase.chunk_count > 0))).first():
+            raise HTTPException(status_code=409, detail="主向量配置已被索引使用；请新增配置并通过‘设为主模型’执行重建切换")
+    item.name, item.provider_id, item.provider_name = request.name.strip(), request.provider_id, request.provider_name
+    item.mode, item.local_model, item.local_device = request.mode, request.local_model, request.local_device
+    item.cloud_base_url = request.cloud_base_url.strip().rstrip("/")
+    item.cloud_model, item.cloud_dimension, item.is_active = request.cloud_model, request.cloud_dimension, request.is_active
+    if request.cloud_api_key:
+        item.cloud_api_key = encrypt_api_key(request.cloud_api_key)
+    return _profile_out(item)
+
+
+@router.delete("/profiles/{profile_id}")
+async def delete_embedding_profile(profile_id: int, db: AsyncSession = Depends(get_db)):
+    item = await db.get(EmbeddingProfile, profile_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="向量配置不存在")
+    if item.is_primary:
+        raise HTTPException(status_code=409, detail="当前主向量配置不能删除")
+    await db.delete(item)
+    return {"success": True}
+
+
+@router.post("/profiles/{profile_id}/test", response_model=EmbeddingTestResponse)
+async def test_embedding_profile(profile_id: int, db: AsyncSession = Depends(get_db)):
+    item = await db.get(EmbeddingProfile, profile_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="向量配置不存在")
+    started = time.time()
+    try:
+        service = (CloudEmbedding(base_url=item.cloud_base_url, api_key=decrypt_api_key(item.cloud_api_key),
+                                  model_name=item.cloud_model, dimension=item.cloud_dimension)
+                   if item.mode == "cloud" else LocalBGEEmbedding(item.local_model, item.local_device))
+        result = await service.embed_text("测试连接")
+        item.last_test_at, item.last_test_success, item.last_error = datetime.utcnow(), True, None
+        return EmbeddingTestResponse(success=True, message="连接成功", latency_ms=(time.time()-started)*1000, dimension=len(result))
+    except Exception as exc:
+        item.last_test_at, item.last_test_success, item.last_error = datetime.utcnow(), False, str(exc)[:500]
+        return EmbeddingTestResponse(success=False, message=f"连接失败: {exc}", latency_ms=(time.time()-started)*1000)
+
+
+@router.post("/profiles/{profile_id}/activate")
+async def activate_embedding_profile(profile_id: int, rebuild: bool = Query(False), db: AsyncSession = Depends(get_db)):
+    item = await db.get(EmbeddingProfile, profile_id)
+    if item is None or not item.is_active:
+        raise HTTPException(status_code=404, detail="可用向量配置不存在")
+    affected = list((await db.execute(select(KnowledgeBase).where(KnowledgeBase.chunk_count > 0))).scalars())
+    if affected and not rebuild:
+        raise HTTPException(status_code=409, detail={"message": "切换向量模型需要重建现有知识库索引", "requires_rebuild": True,
+                                                     "knowledge_base_count": len(affected)})
+    for other in (await db.execute(select(EmbeddingProfile))).scalars():
+        other.is_primary = other.id == item.id
+    settings.EMBEDDING_MODE, settings.EMBEDDING_MODEL, settings.EMBEDDING_DEVICE = item.mode, item.local_model, item.local_device
+    settings.EMBEDDING_CLOUD_BASE_URL, settings.EMBEDDING_CLOUD_API_KEY = item.cloud_base_url, item.cloud_api_key
+    settings.EMBEDDING_CLOUD_MODEL, settings.EMBEDDING_CLOUD_DIMENSION = item.cloud_model, item.cloud_dimension
+    _reload_embedding_service()
+    await save_embedding_config_to_db(db)
+    for kb in affected:
+        kb.index_status = "rebuild_required"
+    await db.commit()
+    for kb in affected:
+        schedule_knowledge_base_rebuild(kb.id)
+    return {**_profile_out(item), "rebuild_started": len(affected)}
 
 
 # ============================================================
