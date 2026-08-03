@@ -30,7 +30,6 @@ try:
     print(f"  ✅ API_HOST: {settings.API_HOST}:{settings.API_PORT}")
 
     # 模块开关
-    print(f"  ✅ ENABLE_SINGLE_FLIGHT: {settings.ENABLE_SINGLE_FLIGHT}")
     print(f"  ✅ ENABLE_STREAMING: {settings.ENABLE_STREAMING}")
     print(f"  ✅ ENABLE_SOURCE_CITATION: {settings.ENABLE_SOURCE_CITATION}")
 
@@ -247,46 +246,7 @@ except Exception as e:
     import traceback; traceback.print_exc()
 
 # ================================================================
-# 测试 5: Single-Flight 幂等控制
-# ================================================================
-print("\n" + "=" * 60)
-print("测试 5: Single-Flight (idempotency)")
-print("=" * 60)
-
-try:
-    import asyncio
-    from app.services.cache.idempotency import SingleFlight
-
-    sf = SingleFlight(cache_dir=settings.cache_dir)
-
-    call_counter = [0]  # 使用列表避免 nonlocal 作用域问题
-
-    async def slow_fn(sleep_time: float = 0.1):
-        call_counter[0] += 1
-        await asyncio.sleep(sleep_time)
-        return f"result_{call_counter[0]}"
-
-    # 并发调用相同 key
-    async def test_concurrent():
-        tasks = [
-            sf.do("test_key", slow_fn, 0.1)
-            for _ in range(5)
-        ]
-        results = await asyncio.gather(*tasks)
-        return results
-
-    results = asyncio.run(test_concurrent())
-    assert call_counter[0] == 1, f"期望 1 次调用，实际 {call_counter[0]} 次"
-    assert all(r == "result_1" for r in results), f"所有结果应相同: {results}"
-    print(f"  ✅ Single-Flight: 5 个并发请求合并为 1 次调用, 结果: {results}")
-
-    print("  ✅ Single-Flight 测试通过")
-except Exception as e:
-    print(f"  ❌ Single-Flight 测试失败: {e}")
-    import traceback; traceback.print_exc()
-
-# ================================================================
-# 测试 6: 查询缓存
+# 测试 5: 查询缓存
 # ================================================================
 print("\n" + "=" * 60)
 print("测试 6: 查询缓存 (query_cache)")
@@ -498,5 +458,5 @@ print("\n" + "=" * 60)
 print("测试总结")
 print("=" * 60)
 print("所有核心模块测试完成！")
-print("测试覆盖: 配置/厂商模板/限流器/降级/Single-Flight/缓存/文档解析/切片/Prompt")
+print("测试覆盖: 配置/厂商模板/限流器/降级/缓存/文档解析/切片/Prompt")
 print("未测试（需要外部依赖）: LLM网关/向量化/索引/检索器/生成器")

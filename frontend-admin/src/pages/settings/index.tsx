@@ -1,19 +1,19 @@
 /**
  * 智答引擎 - 设置页面
  *
- * LLM 配置管理 + 向量化配置 + 模块开关 + 系统信息
+ * LLM 配置管理 + 网络检索 + 模块开关 + 系统信息
  */
 
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
-  Card, Table, Button, Modal, Form, Input, Select, Switch,
+  Card, Button, Modal, Form, Input, Select, Switch,
   message, Space, Divider, Tag, Typography, Alert, Row, Col, Statistic,
-  Radio, InputNumber,
+  InputNumber,
 } from 'antd'
 import {
   PlusOutlined, EditOutlined, DeleteOutlined,
-  CheckCircleOutlined, CloseCircleOutlined, GlobalOutlined, ArrowLeftOutlined,
+  ArrowLeftOutlined,
 } from '@ant-design/icons'
 import { api } from '@/services/api'
 import styles from './index.module.css'
@@ -54,37 +54,8 @@ interface LLMConfig {
 }
 
 interface ModuleSettings {
-  enable_single_flight: boolean
   enable_source_citation: boolean
   enable_rate_limit: boolean
-}
-
-interface EmbeddingProviderModel {
-  model: string
-  dimension: number
-}
-
-interface EmbeddingProvider {
-  provider_id: string
-  name: string
-  category: string
-  base_url: string
-  default_model: string
-  default_dimension: number
-  available_models: EmbeddingProviderModel[]
-}
-
-interface EmbeddingConfig {
-  mode: 'local' | 'cloud'
-  local_model: string
-  local_device: string
-  cloud_base_url: string
-  cloud_api_key: string
-  cloud_model: string
-  cloud_dimension: number
-  is_ready: boolean
-  current_model: string
-  current_dimension: number
 }
 
 interface WebSearchConfig { enabled: boolean; provider: string; tavily_api_key: string; exa_api_key: string; tavily_configured: boolean; exa_configured: boolean; max_results: number }
@@ -113,19 +84,10 @@ export default function SettingsPage() {
   const [loading, setLoading] = useState(false)
   const [modalVisible, setModalVisible] = useState(false)
   const [testing, setTesting] = useState(false)
+  const [configTestingId, setConfigTestingId] = useState<number | null>(null)
   const [editingId, setEditingId] = useState<number | null>(null)
   const [form] = Form.useForm()
   const [moduleSettings, setModuleSettings] = useState<ModuleSettings | null>(null)
-  const [embeddingConfig, setEmbeddingConfig] = useState<EmbeddingConfig | null>(null)
-  const [embeddingForm] = Form.useForm()
-  const [embeddingTesting, setEmbeddingTesting] = useState(false)
-  const [embeddingSaving, setEmbeddingSaving] = useState(false)
-  const [embeddingProviders, setEmbeddingProviders] = useState<{
-    cloud: EmbeddingProvider[]
-    custom: EmbeddingProvider[]
-  }>({ cloud: [], custom: [] })
-  const [embeddingAvailableModels, setEmbeddingAvailableModels] = useState<EmbeddingProviderModel[]>([])
-  const [embeddingProviderId, setEmbeddingProviderId] = useState<string>('')
   const [webSearchConfig, setWebSearchConfig] = useState<WebSearchConfig | null>(null)
   const [webSearchForm] = Form.useForm()
   const [webSearchSaving, setWebSearchSaving] = useState(false)
@@ -163,31 +125,12 @@ export default function SettingsPage() {
       const settingsRes = await api.get<ModuleSettings>('/admin/settings')
       setModuleSettings(settingsRes)
 
-      // 获取向量化厂商列表
-      const embeddingProvidersRes = await api.get<{
-        cloud: EmbeddingProvider[]
-        custom: EmbeddingProvider[]
-      }>('/embedding/providers')
-      setEmbeddingProviders(embeddingProvidersRes)
-
-      // 获取向量化配置
-      const embeddingRes = await api.get<EmbeddingConfig>('/embedding/config')
-      setEmbeddingConfig(embeddingRes)
-      embeddingForm.setFieldsValue({
-        mode: embeddingRes.mode,
-        local_model: embeddingRes.local_model,
-        local_device: embeddingRes.local_device,
-        cloud_base_url: embeddingRes.cloud_base_url,
-        cloud_api_key: '',
-        cloud_model: embeddingRes.cloud_model,
-        cloud_dimension: embeddingRes.cloud_dimension,
-      })
     } catch (err) {
       message.error('加载设置失败')
     } finally {
       setLoading(false)
     }
-  }, [embeddingForm])
+  }, [])
 
   useEffect(() => {
     loadData()
@@ -299,7 +242,7 @@ export default function SettingsPage() {
     setEditingId(null)
     form.resetFields()
     // 单模型场景是默认使用方式，避免“测试成功但没有主模型可调用”。
-    form.setFieldsValue({ is_primary: true, is_fallback: false, is_active: true })
+    form.setFieldsValue({ role: 'primary', is_active: true })
     setModalVisible(true)
   }
 
@@ -311,9 +254,13 @@ export default function SettingsPage() {
       base_url: config.base_url,
       model_name: config.model_name,
       api_key: '', // 不回显 API Key
-      is_primary: config.is_primary,
-      is_fallback: config.is_fallback,
+      role: config.is_primary ? 'primary' : config.is_fallback ? 'fallback' : 'standalone',
       is_active: config.is_active,
+      agent_id: config.agent_id,
+      max_tokens_per_request: config.max_tokens_per_request,
+      max_requests_per_minute: config.max_requests_per_minute,
+      max_tokens_per_minute: config.max_tokens_per_minute,
+      max_tokens_per_day: config.max_tokens_per_day,
     })
     setModalVisible(true)
   }
@@ -345,38 +292,6 @@ export default function SettingsPage() {
       })
     } catch (err) {
       message.error('自动填充失败')
-    }
-  }
-
-  const handleEmbeddingProviderChange = async (providerId: string) => {
-    setEmbeddingProviderId(providerId)
-    try {
-      const res = await api.post<{
-        provider_id: string
-        provider_name: string
-        base_url: string
-        default_model: string
-        default_dimension: number
-        available_models: EmbeddingProviderModel[]
-      }>('/embedding/providers/autofill', { provider_id: providerId })
-
-      setEmbeddingAvailableModels(res.available_models)
-      embeddingForm.setFieldsValue({
-        cloud_base_url: res.base_url,
-        cloud_model: res.default_model,
-        cloud_dimension: res.default_dimension,
-      })
-    } catch (err) {
-      message.error('自动填充失败')
-    }
-  }
-
-  const handleEmbeddingModelChange = (model: string) => {
-    const modelInfo = embeddingAvailableModels.find(m => m.model === model)
-    if (modelInfo) {
-      embeddingForm.setFieldsValue({
-        cloud_dimension: modelInfo.dimension,
-      })
     }
   }
 
@@ -423,12 +338,18 @@ export default function SettingsPage() {
 
   const handleSubmit = async () => {
     const values = await form.validateFields()
+    const payload = {
+      ...values,
+      is_primary: values.role === 'primary',
+      is_fallback: values.role === 'fallback',
+    }
+    delete payload.role
     try {
       if (editingId) {
-        await api.put(`/llm/configs/${editingId}`, values)
+        await api.put(`/llm/configs/${editingId}`, payload)
         message.success('更新成功')
       } else {
-        await api.post('/llm/configs', values)
+        await api.post('/llm/configs', payload)
         message.success('创建成功')
       }
       setModalVisible(false)
@@ -439,7 +360,9 @@ export default function SettingsPage() {
   }
 
   const handleTestConfig = async (config: LLMConfig) => {
-    setTesting(true)
+    // 配置卡片的测试是单模型直连，不走主/降级调用链；按配置 ID 记录状态，
+    // 防止测试降级模型时主模型卡片也显示为“测试中”。
+    setConfigTestingId(config.id)
     try {
       const res = await api.post<{
         success: boolean
@@ -455,8 +378,16 @@ export default function SettingsPage() {
     } catch (err) {
       message.error('测试失败')
     } finally {
-      setTesting(false)
+      setConfigTestingId(null)
     }
+  }
+
+  const toggleLLMConfig = async (config: LLMConfig) => {
+    try {
+      await api.put(`/llm/configs/${config.id}`, { is_active: !config.is_active })
+      await loadData()
+      message.success(config.is_active ? '模型已停用' : '模型已启用')
+    } catch (error: any) { message.error(error?.response?.data?.detail || '更新模型状态失败') }
   }
 
   // 保存模块开关变更到后端
@@ -477,336 +408,13 @@ export default function SettingsPage() {
     }
   }
 
-  // 向量化配置 - 测试连接
-  const handleTestEmbedding = async () => {
-    const values = await embeddingForm.validateFields()
-    setEmbeddingTesting(true)
-    try {
-      const res = await api.post<{
-        success: boolean
-        message: string
-        latency_ms: number
-        dimension: number
-      }>('/embedding/test', {
-        mode: values.mode,
-        local_model: values.local_model,
-        local_device: values.local_device,
-        cloud_base_url: values.cloud_base_url,
-        cloud_api_key: values.cloud_api_key || undefined,
-        cloud_model: values.cloud_model,
-      })
-
-      if (res.success) {
-        message.success(`连接成功！延迟 ${res.latency_ms.toFixed(0)}ms，维度: ${res.dimension}`)
-      } else {
-        message.error(res.message || '连接失败')
-      }
-    } catch (err) {
-      message.error('连接测试失败')
-    } finally {
-      setEmbeddingTesting(false)
-    }
-  }
-
-  // 向量化配置 - 保存
-  const handleSaveEmbedding = async () => {
-    const values = await embeddingForm.validateFields()
-    setEmbeddingSaving(true)
-    try {
-      const body: Partial<EmbeddingConfig> = {
-        mode: values.mode,
-        local_model: values.local_model,
-        local_device: values.local_device,
-        cloud_base_url: values.cloud_base_url,
-        cloud_model: values.cloud_model,
-        cloud_dimension: values.cloud_dimension,
-      }
-      if (values.cloud_api_key) {
-        body.cloud_api_key = values.cloud_api_key
-      }
-
-      const res = await api.put<EmbeddingConfig>('/embedding/config', body)
-      setEmbeddingConfig(res)
-      message.success('保存成功')
-    } catch (err) {
-      message.error('保存失败')
-    } finally {
-      setEmbeddingSaving(false)
-    }
-  }
-
-  const columns = [
-    {
-      title: '厂商',
-      dataIndex: 'provider_name',
-      key: 'provider_name',
-      render: (text: string, record: LLMConfig) => (
-        <Space>
-          {text}
-          {record.is_primary && <Tag color="blue">主模型</Tag>}
-          {record.is_fallback && <Tag color="orange">降级</Tag>}
-        </Space>
-      ),
-    },
-    {
-      title: '模型',
-      dataIndex: 'model_name',
-      key: 'model_name',
-    },
-    {
-      title: '状态',
-      dataIndex: 'is_active',
-      key: 'is_active',
-      render: (active: boolean) => (
-        active
-          ? <Tag icon={<CheckCircleOutlined />} color="success">启用</Tag>
-          : <Tag icon={<CloseCircleOutlined />} color="default">禁用</Tag>
-      ),
-    },
-    {
-      title: '测试',
-      dataIndex: 'last_test_success',
-      key: 'last_test_success',
-      render: (success: boolean | null) => {
-        if (success === null) return <Text type="secondary">未测试</Text>
-        return success
-          ? <CheckCircleOutlined style={{ color: '#52c41a' }} />
-          : <CloseCircleOutlined style={{ color: '#ff4d4f' }} />
-      },
-    },
-    {
-      title: '今日用量',
-      key: 'usage',
-      render: (_: any, record: LLMConfig) => (
-        <Text type="secondary">
-          {record.requests_today || 0}次 / {record.tokens_used_today || 0}tokens
-        </Text>
-      ),
-    },
-    {
-      title: '操作',
-      key: 'action',
-      render: (_: any, record: LLMConfig) => (
-        <Space size="middle">
-          <Button
-            size="small"
-            icon={<GlobalOutlined />}
-            onClick={() => handleTestConfig(record)}
-            loading={testing}
-          >
-            测试
-          </Button>
-          <Button
-            size="small"
-            icon={<EditOutlined />}
-            onClick={() => handleEdit(record)}
-          >
-            编辑
-          </Button>
-          <Button
-            size="small"
-            danger
-            icon={<DeleteOutlined />}
-            onClick={() => handleDelete(record.id)}
-          >
-            删除
-          </Button>
-        </Space>
-      ),
-    },
-  ]
-
   const tabItems = [
     {
       key: 'llm',
       label: 'LLM 配置',
-      children: (
-        <Card
-          extra={
-            <Button
-              type="primary"
-              icon={<PlusOutlined />}
-              onClick={handleCreate}
-            >
-              新增配置
-            </Button>
-          }
-        >
-          <Alert
-            message="配置说明"
-            description="选择厂商后会自动填充 API 地址，只需输入 API Key 即可。支持多个配置（一个主模型 + 一个降级模型）。"
-            type="info"
-            showIcon
-            style={{ marginBottom: 16 }}
-          />
-
-          <Table
-            columns={columns}
-            dataSource={configs}
-            rowKey="id"
-            loading={loading}
-            pagination={false}
-          />
-        </Card>
-      ),
-    },
-    {
-      key: 'embedding',
-      label: '向量化配置',
-      children: (
-        <Space direction="vertical" size="large" style={{ width: '100%' }}>
-          {embeddingConfig && (
-            <Card className="embedding-status-card">
-              <Row gutter={[20, 16]}>
-                <Col span={8}>
-                  <Statistic
-                    title="就绪状态"
-                    value={embeddingConfig.is_ready ? '就绪' : '未就绪'}
-                    valueStyle={{ color: embeddingConfig.is_ready ? '#3f8600' : '#cf1322' }}
-                  />
-                </Col>
-                <Col span={8}>
-                  <Statistic title="当前模型" value={embeddingConfig.current_model || '-'} />
-                </Col>
-                <Col span={8}>
-                  <Statistic title="当前维度" value={embeddingConfig.current_dimension || 0} />
-                </Col>
-              </Row>
-            </Card>
-          )}
-
-          <Card title="向量化方案" className="settings-config-card">
-            <Form form={embeddingForm} layout="vertical">
-              <Form.Item
-                name="mode"
-                label="模式"
-                rules={[{ required: true, message: '请选择模式' }]}
-              >
-                <Radio.Group className="settings-mode-picker">
-                  <Radio value="local">本地模型 <Text type="secondary">无需 API Key</Text></Radio>
-                  <Radio value="cloud">云端 API <Text type="secondary">更轻量，按服务商计费</Text></Radio>
-                </Radio.Group>
-              </Form.Item>
-
-              <Form.Item
-                noStyle
-                shouldUpdate={(prev, cur) => prev.mode !== cur.mode}
-              >
-                {({ getFieldValue }) => {
-                  const mode = getFieldValue('mode')
-                  if (mode === 'local') {
-                    return (
-                      <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-                        <Form.Item
-                          name="local_model"
-                          label="模型名称"
-                          rules={[{ required: true, message: '请输入模型名称' }]}
-                        >
-                          <Input placeholder="例如: BAAI/bge-large-zh-v1.5" />
-                        </Form.Item>
-                        <Form.Item
-                          name="local_device"
-                          label="运行设备"
-                          rules={[{ required: true, message: '请选择运行设备' }]}
-                        >
-                          <Select>
-                            <Select.Option value="cpu">CPU</Select.Option>
-                            <Select.Option value="cuda">CUDA</Select.Option>
-                          </Select>
-                        </Form.Item>
-                      </Space>
-                    )
-                  }
-                  return (
-                    <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-                      <Form.Item
-                        label="厂商"
-                        rules={[{ required: true, message: '请选择厂商' }]}
-                      >
-                        <Select
-                          placeholder="选择厂商"
-                          value={embeddingProviderId || undefined}
-                          onChange={handleEmbeddingProviderChange}
-                          showSearch
-                          optionFilterProp="label"
-                          options={[
-                            {
-                              label: '云端厂商',
-                              options: embeddingProviders.cloud.map(p => ({
-                                label: p.name,
-                                value: p.provider_id,
-                              })),
-                            },
-                            {
-                              label: '自定义',
-                              options: embeddingProviders.custom.map(p => ({
-                                label: p.name,
-                                value: p.provider_id,
-                              })),
-                            },
-                          ]}
-                        />
-                      </Form.Item>
-                      <Form.Item
-                        name="cloud_base_url"
-                        label="API 基础地址"
-                        rules={[{ required: true, message: '请输入 API 基础地址' }]}
-                      >
-                        <Input placeholder="例如: https://api.openai.com/v1" />
-                      </Form.Item>
-                      <Form.Item
-                        name="cloud_api_key"
-                        label="API Key"
-                        extra={embeddingConfig?.cloud_api_key ? `当前: ${embeddingConfig.cloud_api_key}` : ''}
-                      >
-                        <Input.Password placeholder="留空表示不修改" autoComplete="new-password" />
-                      </Form.Item>
-                      <Form.Item
-                        name="cloud_model"
-                        label="模型名称"
-                        rules={[{ required: true, message: '请选择或输入模型名称' }]}
-                      >
-                        {embeddingAvailableModels.length > 0 ? (
-                          <Select
-                            placeholder="选择模型"
-                            onChange={handleEmbeddingModelChange}
-                            options={embeddingAvailableModels.map(m => ({
-                              label: `${m.model} (${m.dimension}维)`,
-                              value: m.model,
-                            }))}
-                          />
-                        ) : (
-                          <Input placeholder="例如: text-embedding-3-small" />
-                        )}
-                      </Form.Item>
-                      <Form.Item
-                        name="cloud_dimension"
-                        label="向量维度"
-                        rules={[{ required: true, message: '请输入向量维度' }]}
-                      >
-                        <InputNumber min={1} style={{ width: '100%' }} placeholder="例如: 1536" />
-                      </Form.Item>
-                    </Space>
-                  )
-                }}
-              </Form.Item>
-
-              <Divider />
-
-              <Form.Item>
-                <Space>
-                  <Button onClick={handleTestEmbedding} loading={embeddingTesting}>
-                    测试连接
-                  </Button>
-                  <Button type="primary" onClick={handleSaveEmbedding} loading={embeddingSaving}>
-                    保存配置
-                  </Button>
-                </Space>
-              </Form.Item>
-            </Form>
-          </Card>
-        </Space>
-      ),
+      children: <div className="web-search-settings"><Alert message="主模型与降级链路" description="主模型调用失败后，会按已启用的降级配置继续尝试。独立评测模型可以保持启用，但无需加入主/降级链路。" type="info" showIcon />
+        <div className="web-search-provider-list">{configs.map(config => <Card key={config.id} size="small" loading={loading} className={`web-search-provider-card ${config.is_active ? 'is-active' : ''}`}><div className="web-search-provider-main"><div><Space><Text strong>{config.provider_name}</Text>{config.is_primary && <Tag color="blue">主模型</Tag>}{config.is_fallback && <Tag color="orange">降级</Tag>}</Space><Text type="secondary">{config.model_name}</Text></div><div className="web-search-provider-status"><Tag className={config.is_active ? 'search-chain-active' : undefined} color={config.is_active ? 'success' : 'default'}>{config.is_active ? '已启用' : '已停用'}</Tag><Text type={config.last_test_success === false ? 'danger' : 'secondary'}>{config.last_test_success === true ? '可用' : config.last_test_success === false ? '不可用' : '待检测'}</Text></div></div><Text className="web-search-health-copy" type="secondary">今日 {config.requests_today || 0} 次 · {config.tokens_used_today || 0} tokens</Text><Space wrap className="web-search-provider-actions"><Button onClick={() => handleTestConfig(config)} loading={configTestingId === config.id}>测试连接</Button><Button icon={<EditOutlined />} onClick={() => handleEdit(config)}>配置</Button><Button type={config.is_active ? 'default' : 'primary'} onClick={() => toggleLLMConfig(config)}>{config.is_active ? '停用' : '启用'}</Button><Button danger icon={<DeleteOutlined />} disabled={config.is_primary} onClick={() => handleDelete(config.id)}>删除</Button></Space></Card>)}</div>
+      </div>,
     },
     {
       key: 'web-search',
@@ -877,7 +485,6 @@ export default function SettingsPage() {
                     <div>
                       <Text strong>{
                         {
-                          enable_single_flight: '幂等 Single-Flight',
                           enable_source_citation: '返回结构化来源',
                           enable_rate_limit: '请求限流',
                         }[key]
@@ -929,12 +536,12 @@ export default function SettingsPage() {
       ),
     },
   ]
-  const tabKey = ({ models: 'llm', embedding: 'embedding', search: 'web-search', langfuse: 'langfuse', runtime: 'system' }[section || ''] || 'llm')
+  const tabKey = ({ models: 'llm', search: 'web-search', langfuse: 'langfuse', runtime: 'system' }[section || ''] || 'llm')
   const activeItem = tabItems.find(item => item.key === tabKey)
 
   return (
     <div className={styles.container}>
-      <div className="page-header"><div><Button type="text" icon={<ArrowLeftOutlined />} onClick={() => navigate('/settings')} style={{ marginLeft: -8 }}>返回设置</Button><Title level={3}>{activeItem?.label || '设置'}</Title><Text type="secondary" className="page-header-copy">{tabKey === 'llm' ? '管理问答模型与连接测试。' : tabKey === 'embedding' ? '配置用于知识检索的向量模型。' : tabKey === 'web-search' ? '仅在外部事实缺失或用户明确要求时联网补充。' : '独立配置页面。'}</Text></div></div>
+      <div className="page-header"><div><Button type="text" icon={<ArrowLeftOutlined />} onClick={() => navigate('/settings')} style={{ marginLeft: -8 }}>返回设置</Button><Title level={3}>{activeItem?.label || '设置'}</Title><Text type="secondary" className="page-header-copy">{tabKey === 'llm' ? '管理问答模型、降级链路与连接测试。' : tabKey === 'web-search' ? '仅在外部事实缺失或用户明确要求时联网补充。' : '独立配置页面。'}</Text></div>{tabKey === 'llm' && <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>新增配置</Button>}</div>
       {activeItem?.children}
 
       <Modal title={`配置 ${SEARCH_PROVIDERS.find(item => item.id === webSearchEditingProvider)?.name || '搜索服务'}`} open={webSearchModalOpen} onCancel={() => setWebSearchModalOpen(false)} footer={null} destroyOnHidden>
@@ -1038,18 +645,13 @@ export default function SettingsPage() {
 
           <Divider />
 
-          <Row gutter={16}>
-            <Col span={12}>
-              <Form.Item name="is_primary" valuePropName="checked" label="主模型">
-                <Switch />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item name="is_fallback" valuePropName="checked" label="降级模型">
-                <Switch />
-              </Form.Item>
-            </Col>
-          </Row>
+          <Form.Item name="role" label="调用角色" rules={[{ required: true, message: '请选择调用角色' }]}>
+            <Select options={[
+              { value: 'primary', label: '主模型（优先调用）' },
+              { value: 'fallback', label: '降级模型（主模型失败后调用）' },
+              { value: 'standalone', label: '独立模型（不加入问答链路）' },
+            ]} />
+          </Form.Item>
 
           <Form.Item name="is_active" valuePropName="checked" label="启用" initialValue={true}>
             <Switch defaultChecked />

@@ -12,6 +12,7 @@ from app.services.knowledge.splitter import text_splitter
 from app.services.knowledge.text_normalizer import normalize_text
 from app.services.qa.retriever import HybridRetriever, KeywordRetriever
 from app.services.qa.generator import AnswerGenerator
+from app.services.llm.gateway import LLMGateway
 
 
 def test_nfkc_normalizes_pdf_compatibility_characters():
@@ -22,6 +23,25 @@ def test_bge_instruction_is_query_only_and_model_specific():
     query = "如何开发 RAG"
     assert _prepare_query("BAAI/bge-large-zh-v1.5", query) == BGE_QUERY_INSTRUCTION + query
     assert _prepare_query("text-embedding-3-small", query) == query
+
+
+@pytest.mark.asyncio
+async def test_streaming_uses_fallback_only_before_any_output(monkeypatch):
+    """流式主模型连接失败时可降级，已输出时不会拼接另一模型的重复回答。"""
+    gateway = LLMGateway()
+    primary = type("Client", (), {"config": type("Config", (), {"model_name": "primary"})()})()
+    fallback = type("Client", (), {"config": type("Config", (), {"model_name": "fallback"})()})()
+    gateway._primary_client = primary
+    gateway._fallback_clients = [fallback]
+
+    async def fake_stream(client, *_args):
+        if client is primary:
+            raise RuntimeError("primary unavailable")
+        yield "fallback answer"
+
+    monkeypatch.setattr(gateway, "_call_model_stream", fake_stream)
+    parts = [part async for part in gateway.chat_stream("test")]
+    assert parts == ["fallback answer"]
 
 
 def test_collection_id_is_canonical_and_rejects_nested_prefix():

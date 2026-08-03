@@ -8,7 +8,7 @@ import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { Layout, Menu, Typography, Tag } from 'antd'
 import {
   DashboardOutlined,
-  RobotOutlined,
+  ClusterOutlined,
   SettingOutlined,
   BookOutlined,
   TeamOutlined,
@@ -27,7 +27,7 @@ const menuItems = [
   },
   {
     key: '/agents',
-    icon: <RobotOutlined />,
+    icon: <ClusterOutlined />,
     label: 'Agent 管理',
   },
   {

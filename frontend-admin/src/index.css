@@ -125,12 +125,16 @@ body {
 @media (max-width: 620px) { .settings-mode-picker { grid-template-columns: 1fr; } }
 
 .app-shell { height: 100vh; }
-.app-sider { background: #fff !important; border-right: 1px solid #edf0f5; }
-.app-brand { height: 72px; display: flex; align-items: center; justify-content: center; border-bottom: 1px solid #f0f2f5; }
+.app-sider { background: linear-gradient(180deg, #fff 0%, #f8faff 100%) !important; border-right: 1px solid #e7ebf3; box-shadow: 6px 0 24px rgba(15, 23, 42, .025); }
+.app-brand { height: 78px; display: flex; align-items: center; justify-content: center; border-bottom: 1px solid #eef1f6; }
 .app-brand-text { color: #182230 !important; font-size: 18px; margin-left: 10px; white-space: nowrap; }
-.app-menu { background: transparent !important; border-inline-end: 0 !important; padding: 12px 10px; }
-.app-menu .ant-menu-item { margin: 5px 0 !important; width: 100% !important; border-radius: 9px; color: #64748b; }
-.app-menu .ant-menu-item-selected { background: #eef2ff !important; color: #4338ca !important; font-weight: 600; }
+.app-menu { background: transparent !important; border-inline-end: 0 !important; padding: 16px 10px; }
+.app-menu .ant-menu-item { display: flex; align-items: center; gap: 10px; height: 46px; margin: 6px 0 !important; width: 100% !important; border-radius: 12px; color: #64748b; transition: background .18s ease, color .18s ease, transform .18s ease; }
+.app-menu .ant-menu-item:hover { background: #f1f5ff !important; color: #4054b8 !important; transform: translateX(2px); }
+.app-menu .ant-menu-item .anticon { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; margin-inline-end: 0 !important; border-radius: 9px; color: #64748b; background: #f1f4f9; font-size: 16px; transition: inherit; }
+.app-menu .ant-menu-item-selected { background: linear-gradient(90deg, #e9edff, #f3f5ff) !important; color: #3347a8 !important; font-weight: 600; box-shadow: inset 3px 0 0 #5865d8; }
+.app-menu .ant-menu-item-selected .anticon { color: #fff; background: linear-gradient(135deg, #6374e5, #4858ca); box-shadow: 0 5px 12px rgba(72, 88, 202, .22); }
+.app-sider.ant-layout-sider-collapsed .app-menu { padding-inline: 8px; }.app-sider.ant-layout-sider-collapsed .app-menu .ant-menu-item { justify-content: center; }.app-sider.ant-layout-sider-collapsed .app-menu .ant-menu-item .anticon { margin: 0 !important; }
 .app-content { overflow: auto; padding: 0 30px 30px; background: #f7f8fc; }
 .app-topbar { height: 72px; display: flex; align-items: center; justify-content: space-between; }
 .knowledge-hero { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:20px; }

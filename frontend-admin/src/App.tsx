@@ -14,6 +14,8 @@ import Settings from './pages/settings'
 import SettingsOverview from './pages/settings/overview'
 import FeishuSettings from './pages/settings/feishu'
 import ReliabilitySettings from './pages/settings/reliability'
+import VisionSettings from './pages/settings/vision'
+import EmbeddingSettings from './pages/settings/embedding'
 import Knowledge from './pages/knowledge'
 import Invitations from './pages/invitations'
 
@@ -28,6 +30,8 @@ function App() {
         <Route path="settings" element={<SettingsOverview />} />
         <Route path="settings/sources" element={<FeishuSettings />} />
         <Route path="settings/system" element={<ReliabilitySettings />} />
+        <Route path="settings/vision" element={<VisionSettings />} />
+        <Route path="settings/embedding" element={<EmbeddingSettings />} />
         <Route path="settings/:section" element={<Settings />} />
         <Route path="knowledge" element={<Knowledge />} />
         <Route path="knowledge/:id" element={<KnowledgeDetail />} />

@@ -143,6 +143,7 @@ Page({
     if (this.data.loadingAnswer || this.data.loadingHistory) return
     const question = this.data.question.trim()
     if (!question) return
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 14)}`
 
     const userMessage = { role: 'user', content: question }
     const assistantMessage = { role: 'assistant', content: '' }
@@ -158,6 +159,7 @@ Page({
         agent_id: this.data.agentId,
         question,
         session_id: this.data.sessionId || undefined,
+        request_id: requestId,
       })
 
       const answer = data.answer || ''

@@ -11,7 +11,7 @@ import {
 import {
   RobotOutlined, MessageOutlined, CheckCircleOutlined,
   PlayCircleOutlined, PauseCircleOutlined, DeleteOutlined, EyeOutlined,
-  DashboardOutlined, ApiOutlined,
+  DashboardOutlined, ApiOutlined, ThunderboltOutlined, ClusterOutlined,
 } from '@ant-design/icons'
 import { api } from '../../services/api'
 import zhidaLogo from '../../assets/zhida-logo.png'
@@ -41,7 +41,6 @@ interface DashboardStats {
   success_rate: number
   total_knowledge_chunks: number
   total_documents: number
-  cache_hit_rate: number
 }
 interface ModelHealth { chat_models: { name: string; role: string; available: boolean; message: string }[]; embedding: { name: string; available: boolean } }
 interface ComponentHealth { items: { key: string; name: string; available: boolean; configured?: boolean; message: string }[]; checked_at: string }
@@ -161,13 +160,12 @@ export default function Dashboard() {
           <Title level={2} className="dashboard-title"><DashboardOutlined /> 智答概览</Title>
           <Text type="secondary">查看 Agent、知识库与今日问答的运行情况。</Text>
         </div>
-        <Space wrap><DatePicker.RangePicker value={dateRange} onChange={(value) => setDateRange(value)} /><Button type="primary" icon={<RobotOutlined />} onClick={() => navigate('/agents')}>管理 Agent</Button></Space>
+        <Space wrap><DatePicker.RangePicker value={dateRange} onChange={(value) => setDateRange(value)} /><Button type="primary" icon={<ClusterOutlined />} onClick={() => navigate('/agents')}>管理 Agent</Button></Space>
       </section>
 
       <section className="dashboard-summary">
         <div><span>知识库文档</span><strong>{stats?.total_documents || 0}</strong><small>份已管理资料</small></div>
         <div><span>知识切片</span><strong>{stats?.total_knowledge_chunks || 0}</strong><small>条可检索内容</small></div>
-        <div><span>缓存命中率</span><strong>{stats?.cache_hit_rate || 0}%</strong><small>减少重复调用</small></div>
       </section>
 
       {/* 统计卡片 */}
@@ -178,7 +176,7 @@ export default function Dashboard() {
               title="运行中 Agent"
               value={stats?.running_agents || 0}
               suffix={`/ ${stats?.total_agents || 0}`}
-              prefix={<RobotOutlined />}
+              prefix={<span className="metric-icon metric-icon-agent"><ThunderboltOutlined /></span>}
               valueStyle={{ color: '#52c41a' }}
             />
           </Card>
@@ -188,7 +186,7 @@ export default function Dashboard() {
             <Statistic
               title="今日消息"
               value={stats?.today_messages || 0}
-              prefix={<MessageOutlined />}
+              prefix={<span className="metric-icon metric-icon-message"><MessageOutlined /></span>}
               valueStyle={{ color: '#1677ff' }}
             />
           </Card>
@@ -198,7 +196,7 @@ export default function Dashboard() {
             <Statistic
               title="今日回答"
               value={stats?.today_answers || 0}
-              prefix={<CheckCircleOutlined />}
+              prefix={<span className="metric-icon metric-icon-answer"><CheckCircleOutlined /></span>}
               valueStyle={{ color: '#faad14' }}
             />
           </Card>
@@ -210,7 +208,8 @@ export default function Dashboard() {
               value={stats?.success_rate || 0}
               suffix="%"
               precision={1}
-              valueStyle={{ color: '#1677ff' }}
+              prefix={<span className="metric-icon metric-icon-success"><CheckCircleOutlined /></span>}
+              valueStyle={{ color: '#2563eb' }}
             />
           </Card>
         </Col>
