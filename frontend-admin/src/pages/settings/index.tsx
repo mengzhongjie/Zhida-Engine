@@ -87,7 +87,15 @@ interface EmbeddingConfig {
   current_dimension: number
 }
 
-interface WebSearchConfig { enabled: boolean; provider: string; api_key: string; max_results: number }
+interface WebSearchConfig { enabled: boolean; provider: string; tavily_api_key: string; exa_api_key: string; tavily_configured: boolean; exa_configured: boolean; max_results: number }
+type WebSearchHealth = { success: boolean; message: string }
+
+const SEARCH_PROVIDERS = [
+  { id: 'tavily', name: 'Tavily', description: '面向 AI 的网页搜索与摘要', keyRequired: true },
+  { id: 'exa', name: 'Exa', description: '语义搜索与网页正文提取', keyRequired: true },
+  { id: 'duckduckgo', name: 'DuckDuckGo', description: '免费实验搜索，无需密钥', keyRequired: false },
+  { id: 'bing_rss', name: 'Bing RSS', description: '免费 RSS 降级通道，无需密钥', keyRequired: false },
+]
 interface LangfuseConfig {
   enabled: boolean; host: string; public_key: string; secret_key: string
   evaluator_enabled: boolean; evaluator_model_config_id: number | null
@@ -121,7 +129,10 @@ export default function SettingsPage() {
   const [webSearchConfig, setWebSearchConfig] = useState<WebSearchConfig | null>(null)
   const [webSearchForm] = Form.useForm()
   const [webSearchSaving, setWebSearchSaving] = useState(false)
-  const [webSearchTesting, setWebSearchTesting] = useState(false)
+  const [webSearchTestingProvider, setWebSearchTestingProvider] = useState<string | null>(null)
+  const [webSearchModalOpen, setWebSearchModalOpen] = useState(false)
+  const [webSearchEditingProvider, setWebSearchEditingProvider] = useState('tavily')
+  const [webSearchHealth, setWebSearchHealth] = useState<Record<string, WebSearchHealth>>({})
   const [langfuseConfig, setLangfuseConfig] = useState<LangfuseConfig | null>(null)
   const [langfuseForm] = Form.useForm()
   const [langfuseSaving, setLangfuseSaving] = useState(false)
@@ -130,9 +141,8 @@ export default function SettingsPage() {
     try {
       const config = await api.get<WebSearchConfig>('/admin/web-search')
       setWebSearchConfig(config)
-      webSearchForm.setFieldsValue({ ...config, api_key: '' })
     } catch { message.error('加载网络检索配置失败') }
-  }, [webSearchForm])
+  }, [])
 
   const loadData = useCallback(async () => {
     setLoading(true)
@@ -199,25 +209,90 @@ export default function SettingsPage() {
 
   const saveWebSearchConfig = async () => {
     const values = await webSearchForm.validateFields()
+    const provider = webSearchEditingProvider
+    const payload = {
+      ...values,
+      provider,
+      enabled: Boolean(webSearchConfig?.enabled && webSearchConfig.provider === provider),
+    }
     setWebSearchSaving(true)
     try {
-      const saved = await api.put<WebSearchConfig>('/admin/web-search', values)
+      const saved = await api.put<WebSearchConfig>('/admin/web-search', payload)
+      const configured = provider === 'exa' ? saved.exa_configured : saved.tavily_configured
+      const submittedKey = provider === 'exa' ? values.exa_api_key : values.tavily_api_key
+      if (submittedKey && configured !== true) {
+        message.error('密钥没有写入数据库，请重启后端加载最新接口后重新保存')
+        return
+      }
       setWebSearchConfig(saved)
-      webSearchForm.setFieldsValue({ ...saved, api_key: '' })
+      setWebSearchModalOpen(false)
+      await loadWebSearchConfig()
       message.success('网络检索配置已保存')
     } catch (error: any) { message.error(error?.response?.data?.detail || '保存失败') }
     finally { setWebSearchSaving(false) }
   }
 
+  const testWebSearchProvider = async (provider: string, draftValues?: Record<string, any>) => {
+    const apiKey = provider === 'exa' ? draftValues?.exa_api_key : draftValues?.tavily_api_key
+    const hasSavedKey = provider === 'exa' ? webSearchConfig?.exa_configured : webSearchConfig?.tavily_configured
+    if ((provider === 'tavily' || provider === 'exa') && !apiKey && !hasSavedKey) {
+      const tip = `请先配置 ${provider === 'exa' ? 'Exa' : 'Tavily'} API Key，再测试连接`
+      setWebSearchHealth(current => ({ ...current, [provider]: { success: false, message: tip } }))
+      message.warning(tip)
+      return
+    }
+    if (webSearchTestingProvider) return
+    setWebSearchTestingProvider(provider)
+    try {
+      const result = await api.post<{ success: boolean; message: string; provider: string; result_count: number }>('/admin/web-search/test', {
+        provider, api_key: apiKey, max_results: draftValues?.max_results || webSearchConfig?.max_results || 3,
+      })
+      if (result.provider && result.provider !== provider) throw new Error(`测试链路不一致：请求 ${provider}，返回 ${result.provider}`)
+      const resultMessage = result.success ? `${result.message}，返回 ${result.result_count} 条结果` : result.message
+      setWebSearchHealth(current => ({ ...current, [provider]: { success: result.success, message: resultMessage } }))
+      if (result.success) message.success(resultMessage)
+      else message.error(resultMessage)
+    } catch (error: any) {
+      const resultMessage = error?.response?.data?.detail || error?.message || '网络检索测试失败'
+      setWebSearchHealth(current => ({ ...current, [provider]: { success: false, message: resultMessage } }))
+      message.error(resultMessage)
+    }
+    finally { setWebSearchTestingProvider(null) }
+  }
+
   const testWebSearchConfig = async () => {
     const values = await webSearchForm.validateFields()
-    setWebSearchTesting(true)
+    await testWebSearchProvider(webSearchEditingProvider, values)
+  }
+
+  const openWebSearchConfig = (provider: string) => {
+    setWebSearchEditingProvider(provider)
+    webSearchForm.resetFields()
+    webSearchForm.setFieldsValue({
+      max_results: webSearchConfig?.max_results || 3,
+      tavily_api_key: '',
+      exa_api_key: '',
+    })
+    setWebSearchModalOpen(true)
+  }
+
+  const toggleWebSearchProvider = async (provider: string) => {
+    const isCurrentProvider = webSearchConfig?.enabled && webSearchConfig.provider === provider
+    const requiresKey = provider === 'tavily' || provider === 'exa'
+    const hasSavedKey = provider === 'exa' ? webSearchConfig?.exa_configured : webSearchConfig?.tavily_configured
+    if (!isCurrentProvider && requiresKey && !hasSavedKey) {
+      message.warning(`请先配置 ${provider === 'exa' ? 'Exa' : 'Tavily'} API Key`)
+      return
+    }
     try {
-      const result = await api.post<{ success: boolean; message: string; result_count: number }>('/admin/web-search/test', values)
-      if (result.success) message.success(`${result.message}，返回 ${result.result_count} 条结果`)
-      else message.error(result.message)
-    } catch { message.error('网络检索测试失败') }
-    finally { setWebSearchTesting(false) }
+      const saved = await api.put<WebSearchConfig>('/admin/web-search', {
+        enabled: !isCurrentProvider,
+        provider,
+        max_results: webSearchConfig?.max_results || 3,
+      })
+      setWebSearchConfig(saved)
+      message.success(!isCurrentProvider ? `${provider === 'bing_rss' ? 'Bing RSS' : provider === 'duckduckgo' ? 'DuckDuckGo' : provider === 'exa' ? 'Exa' : 'Tavily'} 已启用` : '网络检索已停用')
+    } catch (error: any) { message.error(error?.response?.data?.detail || '更新网络检索状态失败') }
   }
 
   const handleCreate = () => {
@@ -737,19 +812,32 @@ export default function SettingsPage() {
       key: 'web-search',
       label: '网络检索',
       children: (
-        <Card title="网络检索补充" className="web-search-card" extra={<Tag color={webSearchConfig?.enabled ? 'success' : 'default'}>{webSearchConfig?.enabled ? '已启用' : '未启用'}</Tag>}>
-          <Alert type="info" showIcon style={{ marginBottom: 20 }} message="仅在本地知识存在信息缺口时补充网络检索；网络内容会作为补充来源，不会覆盖知识库结论。" />
-          <Form form={webSearchForm} layout="vertical" style={{ maxWidth: 620 }}>
-            <Form.Item name="enabled" label="启用网络检索" valuePropName="checked"><Switch /></Form.Item>
-            <Form.Item name="provider" label="搜索服务" rules={[{ required: true }]}><Select options={[{ label: 'Tavily（推荐，有免费额度）', value: 'tavily' }, { label: 'Bing RSS（实验，无需密钥）', value: 'bing_rss' }]} /></Form.Item>
-            <Form.Item noStyle shouldUpdate={(prev, cur) => prev.provider !== cur.provider}>{({ getFieldValue }) => getFieldValue('provider') === 'bing_rss' ? <Alert className="provider-note" type="success" showIcon message="Bing RSS 无需 API Key" description="适合个人测试和低频补充检索；正式稳定使用建议选择 Tavily。" /> : <Form.Item name="api_key" label="搜索 API Key" extra={webSearchConfig?.api_key ? `当前：${webSearchConfig.api_key}；留空表示不修改` : 'Tavily 需要 API Key'}><Input.Password autoComplete="new-password" placeholder="输入 Tavily API Key" /></Form.Item>}</Form.Item>
-            <Form.Item name="max_results" label="每次最多返回结果" rules={[{ required: true }]}><InputNumber min={1} max={10} style={{ width: '100%' }} /></Form.Item>
-            <Space>
-              <Button onClick={testWebSearchConfig} loading={webSearchTesting}>测试连接</Button>
-              <Button type="primary" onClick={saveWebSearchConfig} loading={webSearchSaving}>保存网络检索配置</Button>
-            </Space>
-          </Form>
-        </Card>
+        <div className="web-search-settings">
+          <Alert type="info" showIcon message="仅在本地知识存在信息缺口时补充网络检索；网络内容只作为补充来源，不会覆盖知识库结论。" />
+          <div className="web-search-provider-list">
+            {SEARCH_PROVIDERS.map(item => {
+              const active = webSearchConfig?.enabled && webSearchConfig.provider === item.id
+              const health = webSearchHealth[item.id]
+              const configured = !item.keyRequired || Boolean(item.id === 'exa' ? webSearchConfig?.exa_configured : webSearchConfig?.tavily_configured)
+              const status = health
+                ? health
+                : active ? { success: false, message: '已启用，待检测' }
+                : { success: false, message: configured ? '已配置，未启用' : '未配置' }
+              return <Card key={item.id} size="small" className={`web-search-provider-card ${active ? 'is-active' : ''}`}>
+                <div className="web-search-provider-main">
+                  <div><Text strong>{item.name}</Text><Text type="secondary">{item.description}</Text></div>
+                  <div className="web-search-provider-status"><Tag color={active ? 'processing' : 'default'}>{active ? '当前链路' : '备用'}</Tag><Text type={health && !health.success ? 'danger' : 'secondary'}>{health ? (health.success ? '可用' : '不可用') : status.message}</Text></div>
+                </div>
+                <Text className="web-search-health-copy" type="secondary">{health?.message || (active ? '尚未测试该搜索链路' : status.message)}</Text>
+                <Space wrap className="web-search-provider-actions">
+                  <Button onClick={() => testWebSearchProvider(item.id)} loading={webSearchTestingProvider === item.id} disabled={Boolean(webSearchTestingProvider && webSearchTestingProvider !== item.id)}>测试连接</Button>
+                  <Button onClick={() => openWebSearchConfig(item.id)} disabled={Boolean(webSearchTestingProvider)}>配置</Button>
+                  <Button type={active ? 'default' : 'primary'} onClick={() => toggleWebSearchProvider(item.id)} disabled={Boolean(webSearchTestingProvider)}>{active ? '停用' : '启用'}</Button>
+                </Space>
+              </Card>
+            })}
+          </div>
+        </div>
       ),
     },
     {
@@ -846,8 +934,21 @@ export default function SettingsPage() {
 
   return (
     <div className={styles.container}>
-      <div className="page-header"><div><Button type="text" icon={<ArrowLeftOutlined />} onClick={() => navigate('/settings')} style={{ marginLeft: -8 }}>返回设置</Button><Title level={3}>{activeItem?.label || '设置'}</Title><Text type="secondary" className="page-header-copy">{tabKey === 'llm' ? '管理问答模型与连接测试。' : tabKey === 'embedding' ? '配置用于知识检索的向量模型。' : tabKey === 'web-search' ? '配置知识不足时的联网补充。' : '独立配置页面。'}</Text></div></div>
+      <div className="page-header"><div><Button type="text" icon={<ArrowLeftOutlined />} onClick={() => navigate('/settings')} style={{ marginLeft: -8 }}>返回设置</Button><Title level={3}>{activeItem?.label || '设置'}</Title><Text type="secondary" className="page-header-copy">{tabKey === 'llm' ? '管理问答模型与连接测试。' : tabKey === 'embedding' ? '配置用于知识检索的向量模型。' : tabKey === 'web-search' ? '仅在外部事实缺失或用户明确要求时联网补充。' : '独立配置页面。'}</Text></div></div>
       {activeItem?.children}
+
+      <Modal title={`配置 ${SEARCH_PROVIDERS.find(item => item.id === webSearchEditingProvider)?.name || '搜索服务'}`} open={webSearchModalOpen} onCancel={() => setWebSearchModalOpen(false)} footer={null} destroyOnHidden>
+        <Form form={webSearchForm} layout="vertical">
+          {(webSearchEditingProvider === 'duckduckgo' || webSearchEditingProvider === 'bing_rss')
+            ? <Alert type="success" showIcon message="无需 API Key" description={webSearchEditingProvider === 'duckduckgo' ? 'DuckDuckGo 适合低频免费测试，可能受网络访问或限流影响。' : 'Bing RSS 为低频实验降级通道。'} style={{ marginBottom: 20 }} />
+            : <Form.Item name={webSearchEditingProvider === 'exa' ? 'exa_api_key' : 'tavily_api_key'} label={`${webSearchEditingProvider === 'exa' ? 'Exa' : 'Tavily'} API Key`} extra={(webSearchEditingProvider === 'exa' ? webSearchConfig?.exa_api_key : webSearchConfig?.tavily_api_key) ? `当前：${webSearchEditingProvider === 'exa' ? webSearchConfig?.exa_api_key : webSearchConfig?.tavily_api_key}；留空表示不修改` : `${webSearchEditingProvider === 'exa' ? 'Exa' : 'Tavily'} 需要 API Key`}><Input.Password autoComplete="new-password" placeholder={`输入 ${webSearchEditingProvider === 'exa' ? 'Exa' : 'Tavily'} API Key`} /></Form.Item>}
+          <Form.Item name="max_results" label="每次最多返回结果" rules={[{ required: true }]}><InputNumber min={1} max={10} style={{ width: '100%' }} /></Form.Item>
+          <Space>
+            <Button onClick={testWebSearchConfig} loading={webSearchTestingProvider === webSearchEditingProvider}>测试连接</Button>
+            <Button type="primary" onClick={saveWebSearchConfig} loading={webSearchSaving}>保存配置</Button>
+          </Space>
+        </Form>
+      </Modal>
 
       {/* 新建/编辑 模态框 */}
       <Modal

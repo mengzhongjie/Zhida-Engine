@@ -31,14 +31,18 @@ class DashboardStatsOut(BaseModel):
 class WebSearchConfigOut(BaseModel):
     enabled: bool = False
     provider: str = "tavily"
-    api_key: str = ""
+    tavily_api_key: str = ""
+    exa_api_key: str = ""
+    tavily_configured: bool = False
+    exa_configured: bool = False
     max_results: int = 3
 
 
 class WebSearchConfigUpdate(BaseModel):
     enabled: bool
     provider: str = "tavily"
-    api_key: Optional[str] = None
+    tavily_api_key: Optional[str] = None
+    exa_api_key: Optional[str] = None
     max_results: int = Field(3, ge=1, le=10)
 
 
@@ -52,6 +56,7 @@ class WebSearchTestRequest(BaseModel):
 class WebSearchTestResponse(BaseModel):
     success: bool
     message: str
+    provider: str = ""
     result_count: int = 0
 
 

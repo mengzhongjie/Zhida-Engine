@@ -151,6 +151,8 @@ async def _run_compatible_migrations(conn):
         "ALTER TABLE qa_history ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE qa_history ADD COLUMN is_degraded BOOLEAN NOT NULL DEFAULT 0",
         "ALTER TABLE qa_history ADD COLUMN web_search_count INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE web_search_configs ADD COLUMN tavily_api_key TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE web_search_configs ADD COLUMN exa_api_key TEXT NOT NULL DEFAULT ''",
     ]
     for sql in migrations:
         try:
@@ -158,6 +160,19 @@ async def _run_compatible_migrations(conn):
         except Exception:
             # 新库已由 create_all 建列；旧库重复执行会报错，均可安全忽略。
             pass
+
+    # 将旧版单一搜索密钥只迁移到其当时选中的供应商，避免把同一密钥误用到 Exa/Tavily。
+    try:
+        await conn.execute(text(
+            "UPDATE web_search_configs SET tavily_api_key = api_key "
+            "WHERE provider = 'tavily' AND tavily_api_key = '' AND api_key != ''"
+        ))
+        await conn.execute(text(
+            "UPDATE web_search_configs SET exa_api_key = api_key "
+            "WHERE provider = 'exa' AND exa_api_key = '' AND api_key != ''"
+        ))
+    except Exception:
+        pass
 
     # 将旧的一对一绑定迁移为领取历史；重复启动可安全执行。
     try:
