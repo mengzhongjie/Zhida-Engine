@@ -39,12 +39,16 @@ from app.schemas.knowledge import (
     FeishuImportRequest,
     FeishuImportStartOut,
     FeishuImportJobOut,
+    WebUrlImportOut,
+    WebUrlImportRequest,
+    WebUrlPreviewOut,
 )
 from app.services.knowledge.indexer import index_manager
 from app.services.knowledge.document_processor import schedule_document_processing, schedule_knowledge_base_rebuild
 from app.services.knowledge.data_integrity import data_integrity_service
 from app.services.validation.precheck import upload_prechecker
 from app.services.knowledge.feishu import FeishuClient
+from app.services.knowledge.web_importer import fetch_public_page
 from app.core.security import encrypt_api_key, decrypt_api_key, mask_api_key
 
 router = APIRouter(prefix="/knowledge", tags=["知识库管理"])
@@ -172,7 +176,7 @@ async def _create_text_document(
     """将云端正文以 Markdown 原件写入既有异步入库流水线。"""
     encoded = content.encode("utf-8")
     content_hash = hashlib.sha256(encoded).hexdigest()
-    safe_filename = upload_prechecker.sanitize_filename(filename or "飞书文档")
+    safe_filename = upload_prechecker.sanitize_filename(filename or "网页资料")
     if not safe_filename.lower().endswith(".md"):
         safe_filename = f"{safe_filename}.md"
     duplicate = await _find_duplicate_document(db, kb.id, safe_filename, len(encoded), content_hash)
@@ -274,6 +278,37 @@ async def _run_feishu_import_job(job_id: str) -> None:
 # ============================================================
 # 知识库管理
 # ============================================================
+
+@router.post("/bases/{kb_id}/web/preview", response_model=WebUrlPreviewOut)
+async def preview_web_url_import(kb_id: int, request: WebUrlImportRequest, db: AsyncSession = Depends(get_db)):
+    if await db.get(KnowledgeBase, kb_id) is None:
+        raise HTTPException(status_code=404, detail="知识库不存在")
+    try:
+        page = await fetch_public_page(request.url)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.warning(f"网页预览失败: {type(exc).__name__}: {exc}")
+        raise HTTPException(status_code=502, detail="无法读取网页，请稍后重试") from exc
+    return WebUrlPreviewOut(title=page.title, url=page.url, content_preview=page.content[:1200], content_length=len(page.content))
+
+
+@router.post("/bases/{kb_id}/web/import", response_model=WebUrlImportOut)
+async def import_web_url(kb_id: int, request: WebUrlImportRequest, db: AsyncSession = Depends(get_db)):
+    kb = await db.get(KnowledgeBase, kb_id)
+    if kb is None:
+        raise HTTPException(status_code=404, detail="知识库不存在")
+    if kb.index_status == "rebuild_required":
+        raise HTTPException(status_code=409, detail="知识库索引需要重建后才能导入网页")
+    try:
+        page = await fetch_public_page(request.url)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.warning(f"网页导入失败: {type(exc).__name__}: {exc}")
+        raise HTTPException(status_code=502, detail="无法读取网页，请稍后重试") from exc
+    document, duplicate = await _create_text_document(db, kb, page.title, page.content, page.url)
+    return WebUrlImportOut(document=_document_to_out(document, duplicate=duplicate), duplicate=duplicate)
 
 @router.get("/bases", response_model=KnowledgeBaseListOut)
 async def list_knowledge_bases(

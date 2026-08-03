@@ -118,6 +118,22 @@ class FeishuImportJobOut(BaseModel):
     logs: list[dict] = Field(default_factory=list)
 
 
+class WebUrlImportRequest(BaseModel):
+    url: str = Field(..., min_length=12, max_length=2000)
+
+
+class WebUrlPreviewOut(BaseModel):
+    title: str
+    url: str
+    content_preview: str
+    content_length: int
+
+
+class WebUrlImportOut(BaseModel):
+    document: DocumentOut
+    duplicate: bool = False
+
+
 class DocumentListOut(BaseModel):
     """文档列表输出"""
     total: int = Field(..., description="总数")
