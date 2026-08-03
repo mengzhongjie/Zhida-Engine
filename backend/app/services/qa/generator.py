@@ -144,7 +144,8 @@ class AnswerGenerator:
         if relation_question and len(entities) >= 2:
             return not any(all(entity.lower() in result.text.lower() for entity in entities) for result in results)
 
-        # 用户明确授权联网时，单一资料来源通常不足以补全人物/事件背景，允许网络进行交叉补充。
+        # 单一零散本地片段通常不能覆盖需要外部核验的问题。是否值得联网，
+        # 由 _has_external_fact_intent 在后续统一判定，而不是只针对人物问题特判。
         source_keys = {
             str((result.metadata or {}).get("document_id") or (result.metadata or {}).get("filename") or result.chunk_id)
             for result in results
@@ -152,9 +153,64 @@ class AnswerGenerator:
         return AnswerGenerator._explicitly_requests_web(question) and len(source_keys) < 2
 
     @staticmethod
+    def _is_general_explanation_question(question: str) -> bool:
+        """判断是否是无需依赖外部资料的通用释义或方法问题。"""
+        cleaned = re.sub(
+            r"请|帮我|帮忙|上网|联网|网络|网上|网页|互联网|搜索|搜一下|搜|查一下|查|检索",
+            " ", question,
+        ).strip()
+        explanation_pattern = (
+            r"(?:是什么意思|什么含义|什么是|是[什么啥]|定义|含义|解释|"
+            r"怎么理解|有什么用|有什么作用|原理|区别|如何使用|怎么用|教程)"
+        )
+        if not re.search(explanation_pattern, cleaned, flags=re.IGNORECASE):
+            return False
+
+        # 英文、数字、引号中的名称及显式的组织/人物/产品名称，通常是待核实的实体，
+        # 不应被当作普通词义拦截。
+        entity_hint = (
+            r"[A-Za-z0-9]|[《〈【\"“]|"
+            r"(?:公司|集团|大学|学院|医院|政府|部门|平台|产品|品牌|项目|软件|应用|"
+            r"网站|组织|机构|团队|老师|教授|医生|导演|演员|创始人|CEO|作者|是谁|哪位)"
+        )
+        return not bool(re.search(entity_hint, cleaned, flags=re.IGNORECASE))
+
+    @staticmethod
+    def _has_external_fact_intent(question: str) -> bool:
+        """判断缺口能否通过外部事实或技术资料补全，避免词典式问答误触发。"""
+        if AnswerGenerator._is_general_explanation_question(question):
+            return False
+        return bool(re.search(
+            r"(是谁|哪位|全名|真名|身份|关系|关联|联系|认识|合作|同事|同学|搭档|"
+            r"最近|目前|今天|今年|最新|新闻|动态|进展|发布|价格|股价|日期|时间|"
+            r"官网|地址|电话|邮箱|创始人|CEO|公司|机构|组织|团队|人物|事件|政策|"
+            r"报错|错误|异常|失败|故障|不生效|无法|不能|连不上|超时|兼容|支持|"
+            r"安装|部署|配置|导入|导出|接口|开发|数据库|服务|怎么解决|如何解决)|"
+            r"\b[A-Za-z][A-Za-z0-9_-]{1,30}\b",
+            question,
+            flags=re.IGNORECASE,
+        ))
+
+    @staticmethod
+    def _local_source_count(results: list[IndexResult]) -> int:
+        """以独立文档数作为本地证据完整度的轻量代理指标。"""
+        return len({
+            str((result.metadata or {}).get("document_id") or (result.metadata or {}).get("filename") or result.chunk_id)
+            for result in results
+        })
+
+    @staticmethod
     def _needs_web_supplement(question: str, results: list[IndexResult]) -> bool:
-        """联网仅用于补足本地证据缺口；明确指令代表授权，而不是无条件搜索。"""
-        return AnswerGenerator._local_information_gap(question, results)
+        """联网仅用于补足本地缺失的外部事实，不把通用释义自动变成搜索。"""
+        local_gap = AnswerGenerator._local_information_gap(question, results)
+        if AnswerGenerator._explicitly_requests_web(question):
+            return local_gap
+        if AnswerGenerator._is_general_explanation_question(question):
+            return False
+        if not AnswerGenerator._has_external_fact_intent(question):
+            return False
+        # 已发现缺口，或所有证据仅来自一篇文档时，尝试用外部资料交叉补全。
+        return local_gap or AnswerGenerator._local_source_count(results) < 2
 
     @staticmethod
     def _build_web_search_query(question: str, results: list[IndexResult]) -> str:

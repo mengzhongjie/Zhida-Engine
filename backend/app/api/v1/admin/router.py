@@ -141,7 +141,9 @@ async def load_web_search_config(db: AsyncSession) -> None:
     settings.WEB_SEARCH_ENABLED = config.enabled
     settings.WEB_SEARCH_PROVIDER = config.provider
     settings.WEB_SEARCH_MAX_RESULTS = config.max_results
-    settings.WEB_SEARCH_API_KEY = decrypt_api_key(config.api_key)
+    settings.WEB_SEARCH_API_KEY = decrypt_api_key(
+        config.exa_api_key if config.provider == "exa" else config.tavily_api_key
+    )
 
 
 async def load_langfuse_config(db: AsyncSession) -> None:
@@ -196,7 +198,15 @@ async def get_web_search_config(db: AsyncSession = Depends(get_db)):
     config = await db.get(WebSearchConfig, 1)
     if config is None:
         return WebSearchConfigOut(enabled=settings.WEB_SEARCH_ENABLED, provider=settings.WEB_SEARCH_PROVIDER, max_results=settings.WEB_SEARCH_MAX_RESULTS)
-    return WebSearchConfigOut(enabled=config.enabled, provider=config.provider, api_key=mask_api_key(decrypt_api_key(config.api_key)), max_results=config.max_results)
+    return WebSearchConfigOut(
+        enabled=config.enabled,
+        provider=config.provider,
+        tavily_api_key=mask_api_key(decrypt_api_key(config.tavily_api_key)),
+        exa_api_key=mask_api_key(decrypt_api_key(config.exa_api_key)),
+        tavily_configured=bool(config.tavily_api_key),
+        exa_configured=bool(config.exa_api_key),
+        max_results=config.max_results,
+    )
 
 
 @router.put("/web-search", response_model=WebSearchConfigOut)
@@ -206,12 +216,16 @@ async def update_web_search_config(request: WebSearchConfigUpdate, db: AsyncSess
         config = WebSearchConfig(id=1)
         db.add(config)
     config.enabled, config.provider, config.max_results = request.enabled, request.provider, request.max_results
-    if request.api_key:
-        config.api_key = encrypt_api_key(request.api_key)
+    if request.tavily_api_key:
+        config.tavily_api_key = encrypt_api_key(request.tavily_api_key)
+    if request.exa_api_key:
+        config.exa_api_key = encrypt_api_key(request.exa_api_key)
     settings.WEB_SEARCH_ENABLED = config.enabled
     settings.WEB_SEARCH_PROVIDER = config.provider
     settings.WEB_SEARCH_MAX_RESULTS = config.max_results
-    settings.WEB_SEARCH_API_KEY = decrypt_api_key(config.api_key)
+    settings.WEB_SEARCH_API_KEY = decrypt_api_key(
+        config.exa_api_key if config.provider == "exa" else config.tavily_api_key
+    )
     await db.flush()
     return await get_web_search_config(db)
 
@@ -219,16 +233,30 @@ async def update_web_search_config(request: WebSearchConfigUpdate, db: AsyncSess
 @router.post("/web-search/test", response_model=WebSearchTestResponse)
 async def test_web_search_config(request: WebSearchTestRequest, db: AsyncSession = Depends(get_db)):
     config = await db.get(WebSearchConfig, 1)
-    saved_key = decrypt_api_key(config.api_key) if config else ""
+    saved_key = ""
+    if config:
+        saved_key = decrypt_api_key(config.exa_api_key if request.provider == "exa" else config.tavily_api_key)
     api_key = request.api_key or saved_key
     from app.services.qa.web_search import web_search_service
 
-    results = await web_search_service.search_with_config(
-        request.query, request.provider, api_key, request.max_results
-    )
+    try:
+        results = await web_search_service.search_with_config(
+            request.query, request.provider, api_key, request.max_results, raise_errors=True,
+        )
+    except RuntimeError as exc:
+        return WebSearchTestResponse(success=False, message=str(exc)[:300], provider=request.provider)
     if not results:
-        return WebSearchTestResponse(success=False, message="未获取到结果，请检查搜索服务、网络或 API Key")
-    return WebSearchTestResponse(success=True, message="网络检索可用", result_count=len(results))
+        if request.provider in {"tavily", "exa"} and not api_key:
+            provider_name = "Exa" if request.provider == "exa" else "Tavily"
+            return WebSearchTestResponse(success=False, message=f"请先填写或保存 {provider_name} API Key", provider=request.provider)
+        if request.provider == "duckduckgo":
+            return WebSearchTestResponse(
+                success=False,
+                message="DuckDuckGo 未返回结果，可能受网络访问、限流或页面规则影响",
+                provider=request.provider,
+            )
+        return WebSearchTestResponse(success=False, message="未获取到结果，请检查搜索服务、网络或 API Key", provider=request.provider)
+    return WebSearchTestResponse(success=True, message="网络检索可用", provider=request.provider, result_count=len(results))
 
 
 def _invite_code_hash(code: str) -> str:
