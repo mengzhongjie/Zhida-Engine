@@ -115,6 +115,23 @@ async def get_component_health(db: AsyncSession = Depends(get_db)):
         checks.append({"key": "embedding", "name": "向量化服务", "available": ready, "message": embedding_service.model_name})
     except Exception as exc:
         checks.append({"key": "embedding", "name": "向量化服务", "available": False, "message": str(exc)[:100]})
+    try:
+        from app.models.vision_config import VisionConfig
+        vision = (await db.execute(select(VisionConfig).where(
+            VisionConfig.enabled == True,  # noqa: E712
+            (VisionConfig.is_primary == True) | (VisionConfig.is_fallback == True),  # noqa: E712
+        ).order_by(
+            VisionConfig.is_primary.desc(), VisionConfig.is_fallback.desc(), VisionConfig.id.asc(),
+        ))).scalars().first()
+        if vision is None:
+            checks.append({"key": "vision", "name": "视觉模型", "available": False, "configured": False, "message": "未启用"})
+        elif not vision.base_url or not vision.model_name or not vision.api_key:
+            checks.append({"key": "vision", "name": "视觉模型", "available": False, "configured": False, "message": "配置不完整"})
+        else:
+            checks.append({"key": "vision", "name": "视觉模型", "available": vision.last_test_success is True,
+                           "configured": True, "message": vision.model_name if vision.last_test_success is True else "待测试或最近测试失败"})
+    except Exception as exc:
+        checks.append({"key": "vision", "name": "视觉模型", "available": False, "message": str(exc)[:100]})
     if not settings.LANGFUSE_ENABLED:
         checks.append({"key": "langfuse", "name": "Langfuse", "available": False, "configured": False, "message": "未启用"})
     elif not settings.LANGFUSE_PUBLIC_KEY or not settings.LANGFUSE_SECRET_KEY:
@@ -517,7 +534,6 @@ async def get_module_switches():
     前端设置页据此渲染 Toggle 控件。
     """
     return ModuleSwitchesOut(
-        enable_single_flight=settings.ENABLE_SINGLE_FLIGHT,
         enable_source_citation=settings.ENABLE_SOURCE_CITATION,
         enable_rate_limit=settings.ENABLE_RATE_LIMIT,
     )
@@ -535,7 +551,7 @@ async def update_module_switches(
     """
     update_data = request.model_dump(exclude_unset=True)
     for key, value in update_data.items():
-        # 转换为 settings 中的全大写下划线格式（enable_single_flight -> ENABLE_SINGLE_FLIGHT）
+        # 转换为 settings 中的全大写下划线格式。
         attr_name = key.upper()
         if hasattr(settings, attr_name):
             setattr(settings, attr_name, value)
@@ -724,7 +740,6 @@ async def search_memories(request: MemorySearchIn):
             agent_id=request.agent_id,
             run_id=request.run_id,
             limit=request.limit,
-            rerank=request.rerank,
         )
         return memories
     except Exception as e:

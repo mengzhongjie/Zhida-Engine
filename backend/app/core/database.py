@@ -110,11 +110,13 @@ async def init_db():
         import app.models.qa                # noqa: F401
         import app.models.agent             # noqa: F401
         import app.models.embedding_config  # noqa: F401
+        import app.models.embedding_profile # noqa: F401
         import app.models.miniapp           # noqa: F401
         import app.models.web_search_config # noqa: F401
         import app.models.langfuse_config # noqa: F401
         import app.models.feishu_config   # noqa: F401
         import app.models.import_job      # noqa: F401
+        import app.models.vision_config   # noqa: F401
         import app.models.agent_knowledge_base  # noqa: F401
 
         # 创建所有表
@@ -140,6 +142,13 @@ async def _run_compatible_migrations(conn):
         "ALTER TABLE langfuse_configs ADD COLUMN evaluator_model_config_id INTEGER",
         "ALTER TABLE documents ADD COLUMN processing_attempts INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE documents ADD COLUMN source_url VARCHAR(1500)",
+        "ALTER TABLE documents ADD COLUMN source_type VARCHAR(30) NOT NULL DEFAULT 'file'",
+        "ALTER TABLE documents ADD COLUMN source_key VARCHAR(500)",
+        "ALTER TABLE documents ADD COLUMN character_count INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE documents ADD COLUMN web_image_count INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE documents ADD COLUMN vision_image_count INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE documents ADD COLUMN vision_time_ms FLOAT NOT NULL DEFAULT 0",
+        "ALTER TABLE knowledge_bases ADD COLUMN total_characters INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE knowledge_bases ADD COLUMN embedding_model VARCHAR(300)",
         "ALTER TABLE knowledge_bases ADD COLUMN embedding_dimension INTEGER",
         "ALTER TABLE knowledge_bases ADD COLUMN index_space VARCHAR(20)",
@@ -151,8 +160,12 @@ async def _run_compatible_migrations(conn):
         "ALTER TABLE qa_history ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE qa_history ADD COLUMN is_degraded BOOLEAN NOT NULL DEFAULT 0",
         "ALTER TABLE qa_history ADD COLUMN web_search_count INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE qa_history ADD COLUMN request_id VARCHAR(80)",
         "ALTER TABLE web_search_configs ADD COLUMN tavily_api_key TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE web_search_configs ADD COLUMN exa_api_key TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE vision_configs ADD COLUMN name VARCHAR(100) NOT NULL DEFAULT '视觉模型'",
+        "ALTER TABLE vision_configs ADD COLUMN is_primary BOOLEAN NOT NULL DEFAULT 0",
+        "ALTER TABLE vision_configs ADD COLUMN is_fallback BOOLEAN NOT NULL DEFAULT 0",
     ]
     for sql in migrations:
         try:
@@ -216,12 +229,14 @@ async def _create_indexes(conn):
         "CREATE INDEX IF NOT EXISTS idx_documents_kb ON documents(knowledge_base_id)",
         "CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status)",
         "CREATE INDEX IF NOT EXISTS idx_documents_kb_content_hash ON documents(knowledge_base_id, content_hash)",
+        "CREATE INDEX IF NOT EXISTS idx_documents_kb_source_key ON documents(knowledge_base_id, source_key)",
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_documents_kb_content_hash ON documents(knowledge_base_id, content_hash) WHERE content_hash IS NOT NULL",
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_document_chunks_document_parent ON document_chunks(document_id, parent_id)",
         "CREATE INDEX IF NOT EXISTS idx_document_chunks_kb_parent ON document_chunks(knowledge_base_id, parent_id)",
 
         # 问答历史索引
         "CREATE INDEX IF NOT EXISTS idx_qa_history_agent_time ON qa_history(agent_id, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_qa_history_user_request ON qa_history(user_id, request_id)",
         "CREATE INDEX IF NOT EXISTS idx_qa_pairs_agent ON qa_pairs(agent_id)",
 
         "CREATE INDEX IF NOT EXISTS idx_miniapp_users_openid ON miniapp_users(openid)",
