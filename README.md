@@ -38,8 +38,8 @@
 | 框架 | Python 3.11+ / FastAPI / SQLAlchemy (async) |
 | 数据库 | SQLite（aiosqlite） |
 | 向量数据库 | ChromaDB（嵌入式） |
-| 嵌入模型 | sentence-transformers（BAAI/bge-large-zh-v1.5）+ 云端 API |
-| LLM 网关 | litellm + OpenAI 兼容客户端（8 个内置厂商模板） |
+| 嵌入模型 | 云端 Embedding API（OpenAI 兼容） |
+| LLM 网关 | litellm + OpenAI 兼容客户端（云端厂商模板 + 自定义） |
 | 缓存 | diskcache（基于 SQLite） |
 | 文档解析 | pdfplumber, python-docx, openpyxl, pandas |
 | 可选解析 | MinerU（magic-pdf，需额外安装） |

@@ -77,9 +77,8 @@ export default function SettingsPage() {
   const navigate = useNavigate()
   const [templates, setTemplates] = useState<{
     cloud: ProviderTemplate[]
-    local: ProviderTemplate[]
     custom: ProviderTemplate[]
-  }>({ cloud: [], local: [], custom: [] })
+  }>({ cloud: [], custom: [] })
   const [configs, setConfigs] = useState<LLMConfig[]>([])
   const [loading, setLoading] = useState(false)
   const [modalVisible, setModalVisible] = useState(false)
@@ -112,7 +111,6 @@ export default function SettingsPage() {
       // 获取厂商模板（按云端/本地/自定义分组）
       const templateRes = await api.get<{
         cloud: ProviderTemplate[]
-        local: ProviderTemplate[]
         custom: ProviderTemplate[]
       }>('/llm/providers')
       setTemplates(templateRes)
@@ -581,13 +579,6 @@ export default function SettingsPage() {
                 {
                   label: '云端',
                   options: templates.cloud.map(p => ({
-                    label: p.name,
-                    value: p.provider_id,
-                  })),
-                },
-                {
-                  label: '本地',
-                  options: templates.local.map(p => ({
                     label: p.name,
                     value: p.provider_id,
                   })),

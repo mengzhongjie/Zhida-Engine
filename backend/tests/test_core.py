@@ -52,7 +52,6 @@ try:
         ProviderTemplate,
         get_provider_by_id,
         get_cloud_providers,
-        get_local_providers,
         get_all_provider_ids,
     )
 
@@ -61,15 +60,13 @@ try:
 
     # 按分类统计
     cloud = get_cloud_providers()
-    local = get_local_providers()
     print(f"  ✅ 云端厂商: {len(cloud)} 个")
-    print(f"  ✅ 本地厂商: {len(local)} 个")
 
     # 检查每个模板的关键字段
     for t in BUILTIN_PROVIDER_TEMPLATES:
         assert t.provider_id, f"{t.name}: provider_id 为空"
         assert t.name, f"name 为空"
-        assert t.category in (ProviderCategory.CLOUD, ProviderCategory.LOCAL, ProviderCategory.CUSTOM), f"{t.name}: 无效分类"
+        assert t.category in (ProviderCategory.CLOUD, ProviderCategory.CUSTOM), f"{t.name}: 无效分类"
         assert t.default_model or t.provider_id == "custom", f"{t.name}: default_model 为空"
         assert t.base_url or t.provider_id == "custom", f"{t.name}: base_url 为空"
         print(f"  ✅ {t.icon} {t.name} ({t.provider_id}): {t.default_model}")
@@ -81,10 +78,8 @@ try:
     assert ds.default_model == "deepseek-v4-pro"
     print(f"  ✅ 按 ID 查询 DeepSeek: {ds.name} / {ds.default_model}")
 
-    ollama = get_provider_by_id("ollama")
-    assert ollama is not None
-    assert ollama.requires_api_key == False
-    print(f"  ✅ Ollama 不需要 API Key: {ollama.requires_api_key}")
+    assert get_provider_by_id("ollama") is None
+    print("  ✅ 本地 Ollama 模板未包含在产品配置中")
 
     custom = get_provider_by_id("custom")
     assert custom is not None
@@ -93,7 +88,7 @@ try:
 
     ids = get_all_provider_ids()
     assert "deepseek" in ids
-    assert "ollama" in ids
+    assert "ollama" not in ids
     assert "custom" in ids
     print(f"  ✅ 所有厂商 ID: {ids}")
 

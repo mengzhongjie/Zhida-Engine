@@ -6,11 +6,6 @@
       <view style="padding: 8rpx 16rpx;" bindtap="loadAgents">⟳ 刷新</view>
     </view>
   </view>
-  <view class="card" style="margin-bottom: 20rpx;">
-    <view style="font-weight: 600; margin-bottom: 14rpx;">兑换新邀请码</view>
-    <input placeholder="输入管理员发放的新邀请码以更新额度" value="{{inviteCode}}" bindinput="onInviteInput" style="border: 1rpx solid #dbe3ef; border-radius: 12rpx; padding: 18rpx; margin-bottom: 16rpx;" />
-    <view class="primary" bindtap="redeemInvite">{{redeeming ? '兑换中…' : '兑换邀请码'}}</view>
-  </view>
   <block wx:for="{{agents}}" wx:key="id">
     <view class="card" bindtap="openAgent" data-id="{{item.id}}" data-name="{{item.name}}">
       <view style="display: flex; align-items: center; font-size: 32rpx; font-weight: 600;">

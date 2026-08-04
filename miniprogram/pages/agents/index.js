@@ -1,7 +1,7 @@
 import { callGateway } from '../../utils/gateway'
 
 Page({
-  data: { agents: [], inviteCode: '', redeeming: false, refreshing: false },
+  data: { agents: [], refreshing: false },
 
   onShow() {
     this.loadAgents()
@@ -38,22 +38,4 @@ Page({
     wx.navigateTo({ url: '/pages/sessions/index' })
   },
 
-  onInviteInput(event) {
-    this.setData({ inviteCode: event.detail.value })
-  },
-
-  async redeemInvite() {
-    const inviteCode = this.data.inviteCode.trim()
-    if (!inviteCode) return wx.showToast({ title: '请输入邀请码', icon: 'none' })
-    this.setData({ redeeming: true })
-    try {
-      const user = await callGateway('claimInvite', { invite_code: inviteCode })
-      this.setData({ inviteCode: '' })
-      wx.showToast({ title: `额度已更新：${user.daily_question_limit}/天`, icon: 'none' })
-    } catch (error) {
-      wx.showToast({ title: error.message || '邀请码无效', icon: 'none' })
-    } finally {
-      this.setData({ redeeming: false })
-    }
-  },
 })

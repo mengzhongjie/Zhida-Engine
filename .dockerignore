@@ -8,3 +8,4 @@ frontend-admin/dist
 __pycache__
 *.pyc
 .env
+tools/MediaCrawler
