@@ -2,10 +2,10 @@
 智答引擎（ZhiDa Engine）—— 向量化配置 Pydantic Schema
 
 用于 Embedding 模型配置的请求/响应数据校验和序列化。
-支持本地模型（BGE 等）和云端 API（OpenAI 兼容）两种模式。
+仅支持云端 Embedding API（OpenAI 兼容）。
 """
 
-from typing import Optional
+from typing import Literal, Optional
 from pydantic import BaseModel, Field
 
 
@@ -19,12 +19,7 @@ class EmbeddingConfigOut(BaseModel):
 
     包含当前使用的向量化模型类型、参数等信息。
     """
-    # 模式: local（本地模型）/ cloud（云端 API）
-    mode: str = Field("local", description="向量化模式: local=本地模型, cloud=云端API")
-
-    # 本地模型配置
-    local_model: str = Field("BAAI/bge-large-zh-v1.5", description="本地模型名称")
-    local_device: str = Field("cpu", description="运行设备: cpu/cuda")
+    mode: Literal["cloud"] = Field("cloud", description="向量化模式：云端 API")
 
     # 云端 API 配置
     cloud_base_url: str = Field("", description="云端 API 基础地址")
@@ -42,9 +37,7 @@ class EmbeddingConfigUpdate(BaseModel):
     """
     更新 Embedding 配置请求
     """
-    mode: Optional[str] = Field(None, description="向量化模式: local/cloud")
-    local_model: Optional[str] = Field(None, description="本地模型名称")
-    local_device: Optional[str] = Field(None, description="运行设备: cpu/cuda")
+    mode: Optional[Literal["cloud"]] = Field(None, description="向量化模式：云端 API")
     cloud_base_url: Optional[str] = Field(None, description="云端 API 基础地址")
     cloud_api_key: Optional[str] = Field(None, description="云端 API Key（空字符串表示不修改）")
     cloud_model: Optional[str] = Field(None, description="云端模型名称")
@@ -55,9 +48,7 @@ class EmbeddingTestRequest(BaseModel):
     """
     测试 Embedding 连接请求
     """
-    mode: str = Field(..., description="测试模式: local/cloud")
-    local_model: Optional[str] = Field(None, description="本地模型名称")
-    local_device: Optional[str] = Field(None, description="运行设备")
+    mode: Literal["cloud"] = Field("cloud", description="测试云端 API")
     cloud_base_url: Optional[str] = Field(None, description="云端 API 基础地址")
     cloud_api_key: Optional[str] = Field(None, description="云端 API Key")
     cloud_model: Optional[str] = Field(None, description="云端模型名称")

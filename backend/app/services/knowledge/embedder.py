@@ -1,13 +1,11 @@
 """
 智答引擎（ZhiDa Engine）—— 向量化服务
 
-默认使用 BAAI/bge-large-zh-v1.5 本地模型（1024 维），
-支持切换云端 Embedding API。
+使用云端 Embedding API（OpenAI 兼容）。
 
 抽象 EmbeddingService 接口，方便切换不同实现。
 """
 
-import time
 from abc import ABC, abstractmethod
 
 from loguru import logger
@@ -28,7 +26,7 @@ def _prepare_query(model_name: str, query: str) -> str:
 
 class EmbeddingService(ABC):
     """
-    Embedding 服务抽象接口 —— 支持本地和云端实现
+    Embedding 服务抽象接口。
 
     所有 Embedding 实现必须继承此接口。
     """
@@ -63,95 +61,6 @@ class EmbeddingService(ABC):
     def model_name(self) -> str:
         """模型名称"""
         ...
-
-
-class LocalBGEEmbedding(EmbeddingService):
-    """
-    本地 BGE Embedding 服务 —— 使用 sentence-transformers
-
-    优点：
-    - 完全免费，无需 API Key
-    - 数据不出机器
-    - 中文嵌入 SOTA
-
-    缺点：
-    - 首次加载模型需要下载（约 1.3GB）
-    - 需要 CPU/GPU 资源
-    """
-
-    def __init__(
-        self,
-        model_name: str = "BAAI/bge-large-zh-v1.5",
-        device: str = "cpu",
-    ):
-        self._model_name = model_name
-        self._device = device
-        self._model = None
-        self._dimension = 1024  # BGE-large-zh 输出 1024 维
-
-    @property
-    def dimension(self) -> int:
-        return self._dimension
-
-    @property
-    def model_name(self) -> str:
-        return self._model_name
-
-    async def _load_model(self):
-        """延迟加载模型"""
-        if self._model is not None:
-            return
-
-        logger.info(f"正在加载 Embedding 模型: {self._model_name} (device={self._device})")
-
-        try:
-            from sentence_transformers import SentenceTransformer
-            self._model = SentenceTransformer(self._model_name, device=self._device)
-            logger.info(f"Embedding 模型加载完成，维度: {self._model.get_sentence_embedding_dimension()}")
-        except Exception as e:
-            logger.error(f"Embedding 模型加载失败: {e}")
-            raise
-
-    async def is_ready(self) -> bool:
-        """检查模型是否已加载"""
-        return self._model is not None
-
-    async def embed_text(self, text: str) -> list[float]:
-        """将单段文本转为向量"""
-        await self._load_model()
-
-        # sentence-transformers 的 encode 是同步的
-        embedding = self._model.encode(
-            text,
-            normalize_embeddings=True,  # 归一化，便于余弦相似度计算
-            show_progress_bar=False,
-        )
-
-        return embedding.tolist()
-
-    async def embed_texts(self, texts: list[str]) -> list[list[float]]:
-        """批量将文本转为向量"""
-        if not texts:
-            return []
-
-        await self._load_model()
-
-        start_time = time.time()
-
-        embeddings = self._model.encode(
-            texts,
-            normalize_embeddings=True,
-            show_progress_bar=False,
-            batch_size=32,  # 批量处理
-        )
-
-        elapsed = time.time() - start_time
-        logger.debug(f"批量向量化: {len(texts)} 条文本, 耗时 {elapsed:.2f}s")
-
-        return embeddings.tolist()
-
-    async def embed_query(self, query: str) -> list[float]:
-        return await self.embed_text(_prepare_query(self.model_name, query))
 
 
 class CloudEmbedding(EmbeddingService):
@@ -313,40 +222,21 @@ class CloudEmbedding(EmbeddingService):
 
 def create_embedding_service() -> EmbeddingService:
     """
-    创建 Embedding 服务实例 —— 根据配置选择本地或云端
+    创建云端 Embedding 服务实例。
 
-    读取 settings 中的 EMBEDDING_MODE 配置：
-    - local: 使用本地 BGE 模型（sentence-transformers）
-    - cloud: 使用云端 OpenAI 兼容 API
+    缺少凭据时仍保持云端实现，由健康检查和实际请求返回明确配置错误；
+    不会回退到本地模型或下载模型权重。
     """
-    mode = getattr(settings, "EMBEDDING_MODE", "local")
-
-    if mode == "cloud":
-        base_url = getattr(settings, "EMBEDDING_CLOUD_BASE_URL", "")
-        api_key = getattr(settings, "EMBEDDING_CLOUD_API_KEY", "")
-        model = getattr(settings, "EMBEDDING_CLOUD_MODEL", "text-embedding-3-small")
-        dimension = getattr(settings, "EMBEDDING_CLOUD_DIMENSION", 1536)
-
-        if base_url and api_key and model:
-            logger.info(f"创建云端 Embedding 服务: {model} @ {base_url}")
-            return CloudEmbedding(
-                base_url=base_url,
-                api_key=api_key,
-                model_name=model,
-                dimension=dimension,
-            )
-        else:
-            logger.warning("云端 Embedding 配置不完整，回退到本地模型")
-            return LocalBGEEmbedding(
-                model_name=settings.EMBEDDING_MODEL,
-                device=settings.EMBEDDING_DEVICE,
-            )
+    settings.EMBEDDING_MODE = "cloud"
+    base_url = getattr(settings, "EMBEDDING_CLOUD_BASE_URL", "")
+    api_key = getattr(settings, "EMBEDDING_CLOUD_API_KEY", "")
+    model = getattr(settings, "EMBEDDING_CLOUD_MODEL", "text-embedding-3-small")
+    dimension = getattr(settings, "EMBEDDING_CLOUD_DIMENSION", 1536)
+    if not base_url or not api_key:
+        logger.warning("云端 Embedding 配置不完整，等待在管理台完成配置")
     else:
-        logger.info(f"创建本地 Embedding 服务: {settings.EMBEDDING_MODEL}")
-        return LocalBGEEmbedding(
-            model_name=settings.EMBEDDING_MODEL,
-            device=settings.EMBEDDING_DEVICE,
-        )
+        logger.info(f"创建云端 Embedding 服务: {model} @ {base_url}")
+    return CloudEmbedding(base_url=base_url, api_key=api_key, model_name=model, dimension=dimension)
 
 
 class EmbeddingServiceProxy(EmbeddingService):

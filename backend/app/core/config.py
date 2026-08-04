@@ -98,11 +98,8 @@ class Settings(BaseSettings):
     def trusted_hosts(self) -> list[str]:
         return [host.strip() for host in self.TRUSTED_HOSTS.split(",") if host.strip()]
 
-    # ---- Embedding 模型 ----
-    # 默认使用本地 BGE 模型，无需 API Key
-    EMBEDDING_MODE: str = "local"  # local / cloud
-    EMBEDDING_MODEL: str = "BAAI/bge-large-zh-v1.5"
-    EMBEDDING_DEVICE: str = "cpu"  # cpu / cuda
+    # ---- 云端 Embedding 模型 ----
+    EMBEDDING_MODE: str = "cloud"
     # 云端 Embedding 配置（OpenAI 兼容）
     EMBEDDING_CLOUD_BASE_URL: str = ""
     EMBEDDING_CLOUD_API_KEY: str = ""

@@ -2,7 +2,7 @@
 智答引擎（ZhiDa Engine）—— 向量化配置 API 路由
 
 提供 Embedding 模型配置的查询、更新、测试连接等接口。
-支持本地模型（BGE 等）和云端 API（OpenAI 兼容）两种模式切换。
+仅提供云端 Embedding API（OpenAI 兼容）配置、测试与切换。
 """
 
 import time
@@ -10,6 +10,7 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, Depends, Query
 from loguru import logger
 from pydantic import BaseModel
+from typing import Literal
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -25,11 +26,7 @@ from app.schemas.embedding import (
     EmbeddingTestRequest,
     EmbeddingTestResponse,
 )
-from app.services.knowledge.embedder import (
-    embedding_service,
-    LocalBGEEmbedding,
-    CloudEmbedding,
-)
+from app.services.knowledge.embedder import embedding_service, CloudEmbedding
 from app.services.knowledge.document_processor import schedule_knowledge_base_rebuild
 from app.services.knowledge.embedding_providers import (
     BUILTIN_EMBEDDING_PROVIDERS,
@@ -44,9 +41,7 @@ class EmbeddingProfileRequest(BaseModel):
     name: str = "向量模型"
     provider_id: str = "custom"
     provider_name: str = "自定义"
-    mode: str = "local"
-    local_model: str = "BAAI/bge-large-zh-v1.5"
-    local_device: str = "cpu"
+    mode: Literal["cloud"] = "cloud"
     cloud_base_url: str = ""
     cloud_api_key: str | None = None
     cloud_model: str = "text-embedding-3-small"
@@ -58,12 +53,11 @@ def _profile_out(item: EmbeddingProfile) -> dict:
     return {
         "id": item.id, "name": item.name, "provider_id": item.provider_id,
         "provider_name": item.provider_name, "mode": item.mode,
-        "local_model": item.local_model, "local_device": item.local_device,
         "cloud_base_url": item.cloud_base_url,
         "cloud_api_key": mask_api_key(decrypt_api_key(item.cloud_api_key)),
         "cloud_model": item.cloud_model, "cloud_dimension": item.cloud_dimension,
-        "model": item.local_model if item.mode == "local" else item.cloud_model,
-        "dimension": item.cloud_dimension if item.mode == "cloud" else None,
+        "model": item.cloud_model,
+        "dimension": item.cloud_dimension,
         "is_primary": item.is_primary, "is_active": item.is_active,
         "last_test_at": item.last_test_at, "last_test_success": item.last_test_success,
         "last_error": item.last_error,
@@ -73,16 +67,18 @@ def _profile_out(item: EmbeddingProfile) -> dict:
 async def _ensure_embedding_profile(db: AsyncSession) -> None:
     # scalar 可能是 0/None；不要依赖 SQLAlchemy Row 的真值，避免每次读取
     # 配置页都错误地重新种子化一条“当前向量模型”。
-    existing_id = (await db.execute(select(EmbeddingProfile.id).limit(1))).scalar_one_or_none()
+    existing_id = (await db.execute(
+        select(EmbeddingProfile.id).where(EmbeddingProfile.mode == "cloud").limit(1)
+    )).scalar_one_or_none()
     if existing_id is not None:
         return
     current = (await db.execute(select(EmbeddingConfig).where(EmbeddingConfig.id == 1))).scalar_one_or_none()
     item = EmbeddingProfile(
-        name="当前向量模型", provider_id="local" if not current or current.mode == "local" else "custom",
-        provider_name="本地模型" if not current or current.mode == "local" else "云端 API",
-        mode=current.mode if current else getattr(settings, "EMBEDDING_MODE", "local"),
-        local_model=current.local_model if current else settings.EMBEDDING_MODEL,
-        local_device=current.local_device if current else settings.EMBEDDING_DEVICE,
+        name="当前向量模型", provider_id="custom",
+        provider_name="云端 API",
+        mode="cloud",
+        local_model="",
+        local_device="",
         cloud_base_url=current.cloud_base_url if current else getattr(settings, "EMBEDDING_CLOUD_BASE_URL", ""),
         cloud_api_key=current.cloud_api_key if current else getattr(settings, "EMBEDDING_CLOUD_API_KEY", ""),
         cloud_model=current.cloud_model if current else getattr(settings, "EMBEDDING_CLOUD_MODEL", "text-embedding-3-small"),
@@ -96,7 +92,7 @@ async def _ensure_embedding_profile(db: AsyncSession) -> None:
 @router.get("/profiles")
 async def list_embedding_profiles(db: AsyncSession = Depends(get_db)):
     await _ensure_embedding_profile(db)
-    items = (await db.execute(select(EmbeddingProfile).order_by(
+    items = (await db.execute(select(EmbeddingProfile).where(EmbeddingProfile.mode == "cloud").order_by(
         EmbeddingProfile.is_primary.desc(), EmbeddingProfile.updated_at.desc(),
     ))).scalars().all()
     return [_profile_out(item) for item in items]
@@ -104,14 +100,14 @@ async def list_embedding_profiles(db: AsyncSession = Depends(get_db)):
 
 @router.post("/profiles")
 async def create_embedding_profile(request: EmbeddingProfileRequest, db: AsyncSession = Depends(get_db)):
-    if request.mode not in {"local", "cloud"}:
-        raise HTTPException(status_code=422, detail="向量模式只能是 local 或 cloud")
-    if request.mode == "cloud" and (not request.cloud_base_url or not request.cloud_model or not request.cloud_api_key):
+    if request.mode != "cloud":
+        raise HTTPException(status_code=422, detail="仅支持云端向量模型")
+    if not request.cloud_base_url or not request.cloud_model or not request.cloud_api_key:
         raise HTTPException(status_code=422, detail="请填写完整的云端向量配置")
     item = EmbeddingProfile(
         name=request.name.strip(), provider_id=request.provider_id, provider_name=request.provider_name,
-        mode=request.mode, is_active=request.is_active, local_model=request.local_model,
-        local_device=request.local_device, cloud_base_url=request.cloud_base_url.strip().rstrip("/"),
+        mode="cloud", is_active=request.is_active, local_model="",
+        local_device="", cloud_base_url=request.cloud_base_url.strip().rstrip("/"),
         cloud_api_key=encrypt_api_key(request.cloud_api_key) if request.cloud_api_key else "",
         cloud_model=request.cloud_model, cloud_dimension=request.cloud_dimension,
     )
@@ -125,13 +121,19 @@ async def update_embedding_profile(profile_id: int, request: EmbeddingProfileReq
     item = await db.get(EmbeddingProfile, profile_id)
     if item is None:
         raise HTTPException(status_code=404, detail="向量配置不存在")
+    if request.mode != "cloud":
+        raise HTTPException(status_code=422, detail="仅支持云端向量模型")
+    if not request.cloud_base_url or not request.cloud_model:
+        raise HTTPException(status_code=422, detail="请填写完整的云端向量配置")
+    if not request.cloud_api_key and not decrypt_api_key(item.cloud_api_key):
+        raise HTTPException(status_code=422, detail="请填写云端向量 API Key")
     if item.is_primary:
-        changed = (request.mode != item.mode or request.local_model != item.local_model or
-                   request.cloud_model != item.cloud_model or request.cloud_dimension != item.cloud_dimension)
+        changed = (item.mode != "cloud" or request.cloud_model != item.cloud_model or
+                   request.cloud_dimension != item.cloud_dimension)
         if changed and (await db.execute(select(KnowledgeBase.id).where(KnowledgeBase.chunk_count > 0))).first():
             raise HTTPException(status_code=409, detail="主向量配置已被索引使用；请新增配置并通过‘设为主模型’执行重建切换")
     item.name, item.provider_id, item.provider_name = request.name.strip(), request.provider_id, request.provider_name
-    item.mode, item.local_model, item.local_device = request.mode, request.local_model, request.local_device
+    item.mode, item.local_model, item.local_device = "cloud", "", ""
     item.cloud_base_url = request.cloud_base_url.strip().rstrip("/")
     item.cloud_model, item.cloud_dimension, item.is_active = request.cloud_model, request.cloud_dimension, request.is_active
     if request.cloud_api_key:
@@ -157,9 +159,8 @@ async def test_embedding_profile(profile_id: int, db: AsyncSession = Depends(get
         raise HTTPException(status_code=404, detail="向量配置不存在")
     started = time.time()
     try:
-        service = (CloudEmbedding(base_url=item.cloud_base_url, api_key=decrypt_api_key(item.cloud_api_key),
-                                  model_name=item.cloud_model, dimension=item.cloud_dimension)
-                   if item.mode == "cloud" else LocalBGEEmbedding(item.local_model, item.local_device))
+        service = CloudEmbedding(base_url=item.cloud_base_url, api_key=decrypt_api_key(item.cloud_api_key),
+                                 model_name=item.cloud_model, dimension=item.cloud_dimension)
         result = await service.embed_text("测试连接")
         item.last_test_at, item.last_test_success, item.last_error = datetime.utcnow(), True, None
         return EmbeddingTestResponse(success=True, message="连接成功", latency_ms=(time.time()-started)*1000, dimension=len(result))
@@ -173,13 +174,15 @@ async def activate_embedding_profile(profile_id: int, rebuild: bool = Query(Fals
     item = await db.get(EmbeddingProfile, profile_id)
     if item is None or not item.is_active:
         raise HTTPException(status_code=404, detail="可用向量配置不存在")
+    if item.mode != "cloud":
+        raise HTTPException(status_code=422, detail="该旧本地向量配置不能使用，请新建云端向量配置")
     affected = list((await db.execute(select(KnowledgeBase).where(KnowledgeBase.chunk_count > 0))).scalars())
     if affected and not rebuild:
         raise HTTPException(status_code=409, detail={"message": "切换向量模型需要重建现有知识库索引", "requires_rebuild": True,
                                                      "knowledge_base_count": len(affected)})
     for other in (await db.execute(select(EmbeddingProfile))).scalars():
         other.is_primary = other.id == item.id
-    settings.EMBEDDING_MODE, settings.EMBEDDING_MODEL, settings.EMBEDDING_DEVICE = item.mode, item.local_model, item.local_device
+    settings.EMBEDDING_MODE = "cloud"
     settings.EMBEDDING_CLOUD_BASE_URL, settings.EMBEDDING_CLOUD_API_KEY = item.cloud_base_url, item.cloud_api_key
     settings.EMBEDDING_CLOUD_MODEL, settings.EMBEDDING_CLOUD_DIMENSION = item.cloud_model, item.cloud_dimension
     _reload_embedding_service()
@@ -211,15 +214,17 @@ async def load_embedding_config_from_db(db: AsyncSession) -> bool:
         return False
 
     # 将数据库配置同步到 settings
-    settings.EMBEDDING_MODE = config.mode
-    settings.EMBEDDING_MODEL = config.local_model
-    settings.EMBEDDING_DEVICE = config.local_device
+    if config.mode != "cloud":
+        logger.warning("检测到旧本地向量配置，已忽略；请在管理台新建云端向量配置")
+        settings.EMBEDDING_MODE = "cloud"
+        return False
+    settings.EMBEDDING_MODE = "cloud"
     settings.EMBEDDING_CLOUD_BASE_URL = config.cloud_base_url
     settings.EMBEDDING_CLOUD_API_KEY = config.cloud_api_key  # 数据库中存的是加密后的
     settings.EMBEDDING_CLOUD_MODEL = config.cloud_model
     settings.EMBEDDING_CLOUD_DIMENSION = config.cloud_dimension
 
-    logger.info(f"从数据库加载向量化配置: mode={config.mode}, model={config.local_model if config.mode == 'local' else config.cloud_model}")
+    logger.info(f"从数据库加载云端向量化配置: model={config.cloud_model}")
     return True
 
 
@@ -236,9 +241,9 @@ async def save_embedding_config_to_db(db: AsyncSession) -> EmbeddingConfig:
         config = EmbeddingConfig(id=1)
         db.add(config)
 
-    config.mode = getattr(settings, "EMBEDDING_MODE", "local")
-    config.local_model = settings.EMBEDDING_MODEL
-    config.local_device = settings.EMBEDDING_DEVICE
+    config.mode = "cloud"
+    config.local_model = ""
+    config.local_device = ""
     config.cloud_base_url = getattr(settings, "EMBEDDING_CLOUD_BASE_URL", "")
     config.cloud_api_key = getattr(settings, "EMBEDDING_CLOUD_API_KEY", "")
     config.cloud_model = getattr(settings, "EMBEDDING_CLOUD_MODEL", "text-embedding-3-small")
@@ -354,9 +359,7 @@ async def autofill_embedding_provider(request: dict):
 def _get_config_out() -> EmbeddingConfigOut:
     """获取当前 Embedding 配置输出（不含 is_ready，需调用方单独检查）"""
     return EmbeddingConfigOut(
-        mode=getattr(settings, "EMBEDDING_MODE", "local"),
-        local_model=settings.EMBEDDING_MODEL,
-        local_device=settings.EMBEDDING_DEVICE,
+        mode="cloud",
         cloud_base_url=getattr(settings, "EMBEDDING_CLOUD_BASE_URL", ""),
         cloud_api_key=mask_api_key(decrypt_api_key(getattr(settings, "EMBEDDING_CLOUD_API_KEY", ""))),
         cloud_model=getattr(settings, "EMBEDDING_CLOUD_MODEL", "text-embedding-3-small"),
@@ -369,25 +372,12 @@ def _get_config_out() -> EmbeddingConfigOut:
 
 def _reload_embedding_service():
     """重新加载 Embedding 服务实例（配置变更后调用）"""
-    mode = getattr(settings, "EMBEDDING_MODE", "local")
-    if mode == "cloud":
-        base_url = getattr(settings, "EMBEDDING_CLOUD_BASE_URL", "")
-        api_key = decrypt_api_key(getattr(settings, "EMBEDDING_CLOUD_API_KEY", ""))
-        model = getattr(settings, "EMBEDDING_CLOUD_MODEL", "text-embedding-3-small")
-        dimension = getattr(settings, "EMBEDDING_CLOUD_DIMENSION", 1536)
-        new_service = CloudEmbedding(
-            base_url=base_url,
-            api_key=api_key,
-            model_name=model,
-            dimension=dimension,
-        )
-        embedding_service.switch_to(new_service)
-    else:
-        new_service = LocalBGEEmbedding(
-            model_name=settings.EMBEDDING_MODEL,
-            device=settings.EMBEDDING_DEVICE,
-        )
-        embedding_service.switch_to(new_service)
+    settings.EMBEDDING_MODE = "cloud"
+    base_url = getattr(settings, "EMBEDDING_CLOUD_BASE_URL", "")
+    api_key = decrypt_api_key(getattr(settings, "EMBEDDING_CLOUD_API_KEY", ""))
+    model = getattr(settings, "EMBEDDING_CLOUD_MODEL", "text-embedding-3-small")
+    dimension = getattr(settings, "EMBEDDING_CLOUD_DIMENSION", 1536)
+    embedding_service.switch_to(CloudEmbedding(base_url=base_url, api_key=api_key, model_name=model, dimension=dimension))
 
 
 # ============================================================
@@ -399,7 +389,7 @@ async def get_embedding_config():
     """
     获取当前向量化配置
 
-    返回当前使用的向量化模式（本地/云端）、模型名称、维度等信息。
+    返回当前使用的云端向量模型、模型名称、维度等信息。
     """
     is_ready = False
     try:
@@ -420,18 +410,18 @@ async def update_embedding_config(
     """
     更新向量化配置
 
-    支持切换本地/云端模式、修改模型参数等。
-    更新后自动重载 Embedding 服务实例，并持久化到数据库。
+    更新云端模型参数后自动重载服务，并持久化到数据库。
     """
     update_data = request.model_dump(exclude_unset=True)
+    if update_data.get("mode", "cloud") != "cloud":
+        raise HTTPException(status_code=422, detail="仅支持云端向量模型")
     logger.info(f"更新向量化配置: {list(update_data.keys())}")
 
     # 向量模型、模式或维度改变后，新旧向量无法比较。轻量方案不做在线迁移，明确要求先重建。
-    index_fields = {"mode", "model", "local_model", "cloud_model", "cloud_dimension"}
+    index_fields = {"mode", "cloud_model", "cloud_dimension"}
     if index_fields.intersection(update_data):
         current = {
-            "mode": settings.EMBEDDING_MODE,
-            "local_model": settings.EMBEDDING_MODEL,
+            "mode": "cloud",
             "cloud_model": getattr(settings, "EMBEDDING_CLOUD_MODEL", ""),
             "cloud_dimension": getattr(settings, "EMBEDDING_CLOUD_DIMENSION", 1536),
         }
@@ -443,7 +433,6 @@ async def update_embedding_config(
                 names = "、".join(name for _, name in affected[:5])
                 raise HTTPException(status_code=409, detail=f"已有知识库索引（{names}）使用当前向量配置；请先重建索引后再切换模型或维度")
 
-    setting_keys = {"local_model": "EMBEDDING_MODEL", "local_device": "EMBEDDING_DEVICE"}
     for key, value in update_data.items():
         # API Key 特殊处理：加密存储
         if key == "cloud_api_key":
@@ -458,7 +447,7 @@ async def update_embedding_config(
             continue
 
         # 其他配置项直接映射到 settings
-        setting_key = setting_keys.get(key, f"EMBEDDING_{key.upper()}")
+        setting_key = f"EMBEDDING_{key.upper()}"
         if hasattr(settings, setting_key):
             setattr(settings, setting_key, value)
             logger.info(f"  {key}: {value}")
@@ -492,61 +481,27 @@ async def test_embedding_connection(
     """
     测试向量化连接
 
-    支持测试本地模型加载或云端 API 连接。
+    仅测试云端 API 连接。
     不修改当前配置，仅用于验证参数是否正确。
     """
     start_time = time.time()
 
     try:
-        if request.mode == "cloud":
-            base_url = request.cloud_base_url or getattr(settings, "EMBEDDING_CLOUD_BASE_URL", "")
-            api_key = request.cloud_api_key or decrypt_api_key(
-                getattr(settings, "EMBEDDING_CLOUD_API_KEY", "")
-            )
-            model_name = request.cloud_model or getattr(settings, "EMBEDDING_CLOUD_MODEL", "")
-            if not base_url or not api_key or not model_name:
-                return EmbeddingTestResponse(
-                    success=False,
-                    message="请填写完整的云端配置，或先保存一组可复用的配置",
-                )
-
-            test_service = CloudEmbedding(
-                base_url=base_url,
-                api_key=api_key,
-                model_name=model_name,
-            )
-
-            # 发送测试请求
-            result = await test_service.embed_text("测试连接")
-            latency_ms = (time.time() - start_time) * 1000
-
+        base_url = request.cloud_base_url or getattr(settings, "EMBEDDING_CLOUD_BASE_URL", "")
+        api_key = request.cloud_api_key or decrypt_api_key(
+            getattr(settings, "EMBEDDING_CLOUD_API_KEY", "")
+        )
+        model_name = request.cloud_model or getattr(settings, "EMBEDDING_CLOUD_MODEL", "")
+        if not base_url or not api_key or not model_name:
             return EmbeddingTestResponse(
-                success=True,
-                message=f"连接成功！向量维度: {len(result)}",
-                latency_ms=round(latency_ms, 2),
-                dimension=len(result),
+                success=False,
+                message="请填写完整的云端配置，或先保存一组可复用的配置",
             )
-
-        else:
-            # 测试本地模型
-            model_name = request.local_model or settings.EMBEDDING_MODEL
-            device = request.local_device or settings.EMBEDDING_DEVICE
-
-            test_service = LocalBGEEmbedding(
-                model_name=model_name,
-                device=device,
-            )
-
-            # 尝试加载模型并测试
-            result = await test_service.embed_text("测试连接")
-            latency_ms = (time.time() - start_time) * 1000
-
-            return EmbeddingTestResponse(
-                success=True,
-                message=f"模型加载成功！向量维度: {len(result)}",
-                latency_ms=round(latency_ms, 2),
-                dimension=len(result),
-            )
+        test_service = CloudEmbedding(base_url=base_url, api_key=api_key, model_name=model_name)
+        result = await test_service.embed_text("测试连接")
+        latency_ms = (time.time() - start_time) * 1000
+        return EmbeddingTestResponse(success=True, message=f"连接成功！向量维度: {len(result)}",
+                                     latency_ms=round(latency_ms, 2), dimension=len(result))
 
     except Exception as e:
         latency_ms = (time.time() - start_time) * 1000

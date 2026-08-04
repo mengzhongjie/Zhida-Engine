@@ -18,9 +18,8 @@ class EmbeddingConfig(Base):
     只有一条记录（id=1），应用启动时加载，修改后更新。
 
     字段说明：
-    - mode: 向量化模式（local/cloud）
-    - local_model: 本地模型名称
-    - local_device: 本地运行设备（cpu/cuda）
+    - mode: 固定为 cloud
+    - local_model/local_device: 历史兼容字段，不再使用
     - cloud_base_url: 云端 API 基础地址
     - cloud_api_key: 云端 API Key（加密存储）
     - cloud_model: 云端模型名称
@@ -32,11 +31,11 @@ class EmbeddingConfig(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
 
     # 模式
-    mode = Column(String(20), default="local", comment="向量化模式: local/cloud")
+    mode = Column(String(20), default="cloud", comment="向量化模式：cloud")
 
-    # 本地模型配置
-    local_model = Column(String(200), default="BAAI/bge-large-zh-v1.5", comment="本地模型名称")
-    local_device = Column(String(20), default="cpu", comment="运行设备: cpu/cuda")
+    # 历史兼容字段；保留列以兼容已有 SQLite 数据库，不参与运行配置。
+    local_model = Column(String(200), default="", comment="历史兼容字段")
+    local_device = Column(String(20), default="", comment="历史兼容字段")
 
     # 云端 API 配置
     cloud_base_url = Column(String(500), default="", comment="云端 API 基础地址")
