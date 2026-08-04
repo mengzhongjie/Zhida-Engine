@@ -9,10 +9,11 @@ services:
       ZHIDA_API_PORT: "18900"
       ZHIDA_DATA_DIR: "/data"
       ZHIDA_ADMIN_AUTH_REQUIRED: "true"
+      ZHIDA_ADMIN_BOOTSTRAP_USERNAME: "${ZHIDA_ADMIN_BOOTSTRAP_USERNAME:?set an admin username in .env}"
+      ZHIDA_ADMIN_BOOTSTRAP_PASSWORD: "${ZHIDA_ADMIN_BOOTSTRAP_PASSWORD:?set a strong admin password in .env}"
+      ZHIDA_AUTH_SESSION_SECRET: "${ZHIDA_AUTH_SESSION_SECRET:?set a 32+ character session secret in .env}"
       ZHIDA_TRUSTED_HOSTS: "${ZHIDA_TRUSTED_HOSTS:?set your HTTPS domain in .env}"
       ZHIDA_CORS_ORIGINS: "${ZHIDA_CORS_ORIGINS:?set your HTTPS admin origin in .env}"
-      ZHIDA_MINIPROGRAM_GATEWAY_SECRET: "${ZHIDA_MINIPROGRAM_GATEWAY_SECRET:?set in .env}"
-      ZHIDA_ADMIN_OPENIDS: "${ZHIDA_ADMIN_OPENIDS:?set in .env}"
       ZHIDA_EMBEDDING_MODE: "cloud"
     volumes:
       - ./data:/data

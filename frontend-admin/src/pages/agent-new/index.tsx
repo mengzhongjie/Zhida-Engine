@@ -94,7 +94,7 @@ export default function AgentNew() {
       }
 
       message.success(`Agent "${formData.name}" 创建成功！`)
-      navigate(`/agents/${agent.id}`)
+      navigate('/agents')
     } catch {
       message.error('创建失败，请重试')
     } finally {

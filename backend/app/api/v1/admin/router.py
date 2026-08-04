@@ -7,15 +7,11 @@
 from datetime import datetime, date, timedelta, time as dt_time
 import platform
 import sys
-import hashlib
 import json
-import secrets
-import hmac
-import time
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Request, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, delete, text
+from sqlalchemy import select, func, text
 from loguru import logger
 
 from app.core.config import settings
@@ -25,9 +21,7 @@ from app.models.agent import Agent
 from app.models.knowledge import KnowledgeBase, Document
 from app.models.qa import QAHistory
 from app.models.llm_config import LLMConfig
-from app.models.miniapp import Invitation, InvitationClaim, InvitationDailyUsage, MiniAppUser
 from app.models.web_search_config import WebSearchConfig
-from app.models.langfuse_config import LangfuseConfig
 from app.schemas.admin import (
     DashboardStatsOut,
     ModuleSwitchesOut,
@@ -45,14 +39,6 @@ from app.schemas.admin import (
     WebSearchConfigUpdate,
     WebSearchTestRequest,
     WebSearchTestResponse,
-    LangfuseConfigOut,
-    LangfuseConfigUpdate,
-)
-from app.schemas.miniapp import (
-    InvitationCreate,
-    InvitationCreateOut,
-    InvitationDailyLimitUpdate,
-    InvitationOut,
 )
 from app.services.cache.query_cache import query_cache
 from app.services.cache.rate_limiter import rate_limiter
@@ -132,22 +118,6 @@ async def get_component_health(db: AsyncSession = Depends(get_db)):
                            "configured": True, "message": vision.model_name if vision.last_test_success is True else "待测试或最近测试失败"})
     except Exception as exc:
         checks.append({"key": "vision", "name": "视觉模型", "available": False, "message": str(exc)[:100]})
-    if not settings.LANGFUSE_ENABLED:
-        checks.append({"key": "langfuse", "name": "Langfuse", "available": False, "configured": False, "message": "未启用"})
-    elif not settings.LANGFUSE_PUBLIC_KEY or not settings.LANGFUSE_SECRET_KEY:
-        checks.append({"key": "langfuse", "name": "Langfuse", "available": False, "configured": False, "message": "缺少访问凭据"})
-    else:
-        try:
-            import httpx
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                response = await client.get(
-                    f"{settings.LANGFUSE_HOST.rstrip('/')}/api/public/health",
-                    auth=(settings.LANGFUSE_PUBLIC_KEY, settings.LANGFUSE_SECRET_KEY),
-                )
-            checks.append({"key": "langfuse", "name": "Langfuse", "available": response.is_success, "configured": True,
-                           "message": "Cloud 连接正常" if response.is_success else f"服务返回 HTTP {response.status_code}"})
-        except Exception as exc:
-            checks.append({"key": "langfuse", "name": "Langfuse", "available": False, "configured": True, "message": str(exc)[:100]})
     return {"items": checks, "checked_at": datetime.utcnow().isoformat()}
 
 
@@ -161,53 +131,6 @@ async def load_web_search_config(db: AsyncSession) -> None:
     settings.WEB_SEARCH_API_KEY = decrypt_api_key(
         config.exa_api_key if config.provider == "exa" else config.tavily_api_key
     )
-
-
-async def load_langfuse_config(db: AsyncSession) -> None:
-    config = await db.get(LangfuseConfig, 1)
-    if config is None:
-        return
-    settings.LANGFUSE_ENABLED = config.enabled
-    settings.LANGFUSE_HOST = config.host
-    settings.LANGFUSE_PUBLIC_KEY = decrypt_api_key(config.public_key)
-    settings.LANGFUSE_SECRET_KEY = decrypt_api_key(config.secret_key)
-    settings.LANGFUSE_EVALUATOR_ENABLED = config.evaluator_enabled
-    settings.LANGFUSE_EVALUATOR_MODEL_CONFIG_ID = config.evaluator_model_config_id
-
-
-@router.get("/langfuse", response_model=LangfuseConfigOut)
-async def get_langfuse_config(db: AsyncSession = Depends(get_db)):
-    config = await db.get(LangfuseConfig, 1)
-    if config is None:
-        return LangfuseConfigOut(enabled=settings.LANGFUSE_ENABLED, host=settings.LANGFUSE_HOST)
-    return LangfuseConfigOut(enabled=config.enabled, host=config.host, public_key=mask_api_key(decrypt_api_key(config.public_key)), secret_key=mask_api_key(decrypt_api_key(config.secret_key)), evaluator_enabled=config.evaluator_enabled, evaluator_model_config_id=config.evaluator_model_config_id)
-
-
-@router.put("/langfuse", response_model=LangfuseConfigOut)
-async def update_langfuse_config(request: LangfuseConfigUpdate, db: AsyncSession = Depends(get_db)):
-    config = await db.get(LangfuseConfig, 1)
-    if config is None:
-        config = LangfuseConfig(id=1)
-        db.add(config)
-    if request.evaluator_enabled:
-        if request.evaluator_model_config_id is None:
-            raise HTTPException(status_code=422, detail="请选择独立评测模型")
-        evaluator = await db.get(LLMConfig, request.evaluator_model_config_id)
-        if evaluator is None or not evaluator.is_active:
-            raise HTTPException(status_code=422, detail="评测模型不存在或未启用")
-        if "deepseek" in f"{evaluator.provider_id} {evaluator.model_name}".lower():
-            raise HTTPException(status_code=422, detail="评测模型不能使用 DeepSeek，请选择独立的非 DeepSeek 模型")
-    config.enabled, config.host = request.enabled, request.host.rstrip("/")
-    config.evaluator_enabled = request.evaluator_enabled
-    config.evaluator_model_config_id = request.evaluator_model_config_id
-    if request.public_key: config.public_key = encrypt_api_key(request.public_key)
-    if request.secret_key: config.secret_key = encrypt_api_key(request.secret_key)
-    settings.LANGFUSE_ENABLED, settings.LANGFUSE_HOST = config.enabled, config.host
-    settings.LANGFUSE_PUBLIC_KEY, settings.LANGFUSE_SECRET_KEY = decrypt_api_key(config.public_key), decrypt_api_key(config.secret_key)
-    settings.LANGFUSE_EVALUATOR_ENABLED = config.evaluator_enabled
-    settings.LANGFUSE_EVALUATOR_MODEL_CONFIG_ID = config.evaluator_model_config_id
-    await db.flush()
-    return await get_langfuse_config(db)
 
 
 @router.get("/web-search", response_model=WebSearchConfigOut)
@@ -274,160 +197,6 @@ async def test_web_search_config(request: WebSearchTestRequest, db: AsyncSession
             )
         return WebSearchTestResponse(success=False, message="未获取到结果，请检查搜索服务、网络或 API Key", provider=request.provider)
     return WebSearchTestResponse(success=True, message="网络检索可用", provider=request.provider, result_count=len(results))
-
-
-def _invite_code_hash(code: str) -> str:
-    return hashlib.sha256(code.strip().upper().encode("utf-8")).hexdigest()
-
-
-async def _invitation_out(db: AsyncSession, invitation: Invitation) -> InvitationOut:
-    if invitation.status == "active" and invitation.expires_at and invitation.expires_at < datetime.utcnow():
-        invitation.status = "expired"
-    claim_result = await db.execute(
-        select(InvitationClaim).where(InvitationClaim.invitation_id == invitation.id)
-    )
-    claim = claim_result.scalar_one_or_none()
-    usage_today = 0
-    if claim:
-        usage_result = await db.execute(
-            select(InvitationDailyUsage.question_count).where(
-                InvitationDailyUsage.claim_id == claim.id,
-                InvitationDailyUsage.usage_date == date.today(),
-            )
-        )
-        usage_today = min(max(usage_result.scalar() or 0, 0), invitation.daily_question_limit)
-    return InvitationOut(
-        id=invitation.id,
-        code_hint=invitation.code_hint,
-        daily_question_limit=invitation.daily_question_limit,
-        expires_at=invitation.expires_at,
-        note=invitation.note,
-        status=invitation.status,
-        claimed_at=claim.claimed_at if claim else None,
-        claimed_by_user_id=claim.user_id if claim else None,
-        created_at=invitation.created_at,
-        usage_today=usage_today,
-    )
-
-
-def _validate_miniapp_gateway(request: Request) -> str:
-    secret = settings.MINIPROGRAM_GATEWAY_SECRET
-    openid = request.headers.get("X-Miniapp-Openid", "").strip()
-    timestamp = request.headers.get("X-Miniapp-Timestamp", "")
-    signature = request.headers.get("X-Miniapp-Signature", "")
-    if not secret or not openid or not timestamp or not signature:
-        raise HTTPException(status_code=401, detail="缺少小程序网关签名")
-    try:
-        timestamp_int = int(timestamp)
-    except ValueError as exc:
-        raise HTTPException(status_code=401, detail="无效的小程序网关时间戳") from exc
-    if abs(time.time() - timestamp_int) > settings.MINIPROGRAM_SIGNATURE_TTL_SECONDS:
-        raise HTTPException(status_code=401, detail="小程序网关签名已过期")
-    expected = hmac.new(
-        secret.encode("utf-8"), f"{timestamp}.{openid}".encode("utf-8"), hashlib.sha256
-    ).hexdigest()
-    if not hmac.compare_digest(expected, signature):
-        raise HTTPException(status_code=401, detail="无效的小程序网关签名")
-    return openid
-
-
-# ============================================================
-# 邀请制小程序管理
-# ============================================================
-
-@router.post("/invitations", response_model=InvitationCreateOut)
-async def create_invitation(request: InvitationCreate, db: AsyncSession = Depends(get_db)):
-    """创建一次性邀请码。明文只在此响应返回，之后不可找回。"""
-    if request.expires_at and request.expires_at <= datetime.utcnow():
-        raise HTTPException(status_code=400, detail="失效时间必须晚于当前时间")
-
-    code = secrets.token_hex(8).upper()
-    invitation = Invitation(
-        code_hash=_invite_code_hash(code),
-        code_hint=code[-6:],
-        daily_question_limit=request.daily_question_limit,
-        expires_at=request.expires_at,
-        note=request.note,
-    )
-    db.add(invitation)
-    await db.flush()
-    output = await _invitation_out(db, invitation)
-    return InvitationCreateOut(**output.model_dump(), invite_code=code)
-
-
-@router.get("/invitations", response_model=list[InvitationOut])
-async def list_invitations(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Invitation).order_by(Invitation.created_at.desc()))
-    return [await _invitation_out(db, invitation) for invitation in result.scalars()]
-
-
-@router.delete("/invitations/{invitation_id}")
-async def delete_invitation(invitation_id: int, db: AsyncSession = Depends(get_db)):
-    """删除邀请码；显式清理关联记录以兼容旧版 SQLite 的外键定义。"""
-    invitation = await db.get(Invitation, invitation_id)
-    if invitation is None:
-        raise HTTPException(status_code=404, detail="邀请码不存在")
-    # 显式删除领取记录，兼容旧版 SQLite 的外键定义。
-    await db.execute(delete(InvitationClaim).where(InvitationClaim.invitation_id == invitation.id))
-    await db.delete(invitation)
-    await db.flush()
-    return {"message": "邀请码已删除", "id": invitation_id}
-
-
-@router.put("/invitations/{invitation_id}/daily-limit", response_model=InvitationOut)
-async def update_invitation_daily_limit(
-    invitation_id: int,
-    request: InvitationDailyLimitUpdate,
-    db: AsyncSession = Depends(get_db),
-):
-    """修改一张邀请码的每日问答次数，不影响其他邀请码。"""
-    invitation = await db.get(Invitation, invitation_id)
-    if invitation is None:
-        raise HTTPException(status_code=404, detail="邀请码不存在")
-    output = await _invitation_out(db, invitation)
-    if request.daily_question_limit < output.usage_today:
-        raise HTTPException(
-            status_code=400,
-            detail=f"不能低于该邀请码今日已使用的 {output.usage_today} 次；请明天再下调",
-        )
-    invitation.daily_question_limit = request.daily_question_limit
-    await db.flush()
-    return await _invitation_out(db, invitation)
-
-
-@router.post("/invitations/{invitation_id}/revoke", response_model=InvitationOut)
-async def revoke_invitation(invitation_id: int, db: AsyncSession = Depends(get_db)):
-    """失效未领取的邀请码；已领取的邀请码请撤销其用户访问权限。"""
-    invitation = await db.get(Invitation, invitation_id)
-    if invitation is None:
-        raise HTTPException(status_code=404, detail="邀请码不存在")
-    claim_result = await db.execute(select(InvitationClaim.id).where(InvitationClaim.invitation_id == invitation.id))
-    if claim_result.scalar_one_or_none() is not None:
-        raise HTTPException(status_code=409, detail="邀请码已领取，请撤销对应用户访问权限")
-    invitation.status = "revoked"
-    await db.flush()
-    return await _invitation_out(db, invitation)
-
-
-@router.post("/invitations/{invitation_id}/revoke-user", response_model=InvitationOut)
-async def revoke_invited_user(invitation_id: int, db: AsyncSession = Depends(get_db)):
-    """撤销已领取邀请码用户的小程序访问资格。"""
-    invitation = await db.get(Invitation, invitation_id)
-    if invitation is None:
-        raise HTTPException(status_code=404, detail="邀请码不存在")
-    claim_result = await db.execute(
-        select(InvitationClaim).where(InvitationClaim.invitation_id == invitation.id)
-    )
-    claim = claim_result.scalar_one_or_none()
-    if claim is None:
-        raise HTTPException(status_code=409, detail="邀请码尚未领取")
-    user = await db.get(MiniAppUser, claim.user_id)
-    if user:
-        user.is_active = False
-        user.revoked_at = datetime.utcnow()
-    invitation.status = "revoked"
-    await db.flush()
-    return await _invitation_out(db, invitation)
 
 
 # ============================================================

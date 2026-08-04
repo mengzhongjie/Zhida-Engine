@@ -67,11 +67,6 @@ const SEARCH_PROVIDERS = [
   { id: 'duckduckgo', name: 'DuckDuckGo', description: '免费实验搜索，无需密钥', keyRequired: false },
   { id: 'bing_rss', name: 'Bing RSS', description: '免费 RSS 降级通道，无需密钥', keyRequired: false },
 ]
-interface LangfuseConfig {
-  enabled: boolean; host: string; public_key: string; secret_key: string
-  evaluator_enabled: boolean; evaluator_model_config_id: number | null
-}
-
 export default function SettingsPage() {
   const { section } = useParams()
   const navigate = useNavigate()
@@ -94,9 +89,6 @@ export default function SettingsPage() {
   const [webSearchModalOpen, setWebSearchModalOpen] = useState(false)
   const [webSearchEditingProvider, setWebSearchEditingProvider] = useState('tavily')
   const [webSearchHealth, setWebSearchHealth] = useState<Record<string, WebSearchHealth>>({})
-  const [langfuseConfig, setLangfuseConfig] = useState<LangfuseConfig | null>(null)
-  const [langfuseForm] = Form.useForm()
-  const [langfuseSaving, setLangfuseSaving] = useState(false)
 
   const loadWebSearchConfig = useCallback(async () => {
     try {
@@ -135,18 +127,6 @@ export default function SettingsPage() {
   }, [loadData])
 
   useEffect(() => { loadWebSearchConfig() }, [loadWebSearchConfig])
-
-  const loadLangfuseConfig = useCallback(async () => {
-    try { const config = await api.get<LangfuseConfig>('/admin/langfuse'); setLangfuseConfig(config); langfuseForm.setFieldsValue({ ...config, public_key: '', secret_key: '' }) }
-    catch { message.error('加载 Langfuse 配置失败') }
-  }, [langfuseForm])
-  useEffect(() => { loadLangfuseConfig() }, [loadLangfuseConfig])
-  const saveLangfuseConfig = async () => {
-    const values = await langfuseForm.validateFields(); setLangfuseSaving(true)
-    try { const saved = await api.put<LangfuseConfig>('/admin/langfuse', values); setLangfuseConfig(saved); langfuseForm.setFieldsValue({ ...saved, public_key: '', secret_key: '' }); message.success('Langfuse 配置已保存') }
-    catch (error: any) { message.error(error?.response?.data?.detail || '保存失败') }
-    finally { setLangfuseSaving(false) }
-  }
 
   const saveWebSearchConfig = async () => {
     const values = await webSearchForm.validateFields()
@@ -447,26 +427,6 @@ export default function SettingsPage() {
       ),
     },
     {
-      key: 'langfuse',
-      label: 'Langfuse 观测',
-      children: (
-        <Card title="Langfuse Cloud" className="web-search-card" extra={<Tag color={langfuseConfig?.enabled ? 'success' : 'default'}>{langfuseConfig?.enabled ? '采集中' : '未启用'}</Tag>}>
-          <Alert type="info" showIcon style={{ marginBottom: 20 }} message="可选的问答链路观测" description="启用后会将问题、回答、模型、Token、检索/生成耗时与降级状态发送到 Langfuse Cloud。请仅在允许上传这些问答内容时启用。" />
-          <Form form={langfuseForm} layout="vertical" style={{ maxWidth: 620 }} initialValues={{ host: 'https://cloud.langfuse.com' }}>
-            <Form.Item name="enabled" label="启用 Langfuse Cloud" valuePropName="checked"><Switch /></Form.Item>
-            <Form.Item name="host" label="服务地址" rules={[{ required: true }]}><Input placeholder="https://cloud.langfuse.com" /></Form.Item>
-            <Form.Item name="public_key" label="Public Key" extra={langfuseConfig?.public_key ? `当前：${langfuseConfig.public_key}；留空表示不修改` : ''}><Input.Password autoComplete="new-password" placeholder="pk-lf-..." /></Form.Item>
-            <Form.Item name="secret_key" label="Secret Key" extra={langfuseConfig?.secret_key ? `当前：${langfuseConfig.secret_key}；留空表示不修改` : ''}><Input.Password autoComplete="new-password" placeholder="sk-lf-..." /></Form.Item>
-            <Divider>RAG 自动评测（独立模型）</Divider>
-            <Alert type="warning" showIcon style={{ marginBottom: 16 }} message="评测模型不继承用户对话或主模型上下文" description="每轮只读取当前问题、召回父块和最终回答；DeepSeek 不可选。评分会写回对应 Langfuse Trace。" />
-            <Form.Item name="evaluator_enabled" label="启用自动 RAG 评测" valuePropName="checked"><Switch /></Form.Item>
-            <Form.Item noStyle shouldUpdate={(prev, cur) => prev.evaluator_enabled !== cur.evaluator_enabled}>{({ getFieldValue }) => getFieldValue('evaluator_enabled') && <Form.Item name="evaluator_model_config_id" label="独立评测模型" rules={[{ required: true, message: '请选择非 DeepSeek 的评测模型' }]} extra="先在 LLM 配置中新增模型；该模型不需要设为主模型或降级模型。"><Select placeholder="选择评测模型" options={configs.filter(item => item.is_active && !`${item.provider_id} ${item.model_name}`.toLowerCase().includes('deepseek')).map(item => ({ value: item.id, label: `${item.provider_name} / ${item.model_name}` }))} /></Form.Item>}</Form.Item>
-            <Button type="primary" onClick={saveLangfuseConfig} loading={langfuseSaving}>保存 Langfuse 配置</Button>
-          </Form>
-        </Card>
-      ),
-    },
-    {
       key: 'modules',
       label: '功能开关',
       children: (
@@ -534,7 +494,7 @@ export default function SettingsPage() {
       ),
     },
   ]
-  const tabKey = ({ models: 'llm', search: 'web-search', langfuse: 'langfuse', runtime: 'system' }[section || ''] || 'llm')
+  const tabKey = ({ models: 'llm', search: 'web-search', runtime: 'system' }[section || ''] || 'llm')
   const activeItem = tabItems.find(item => item.key === tabKey)
 
   return (

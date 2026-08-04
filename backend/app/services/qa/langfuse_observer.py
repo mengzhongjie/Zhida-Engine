@@ -1,4 +1,4 @@
-"""可选 Langfuse Cloud 观测；SDK/网络异常绝不影响问答。"""
+"""仅开发部署使用的 Langfuse 观测；SDK/网络异常绝不影响问答。"""
 import json
 
 from loguru import logger

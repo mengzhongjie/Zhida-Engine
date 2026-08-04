@@ -1,1 +1,0 @@
-{ "desc": "智答助手小程序", "rules": [{ "action": "allow", "page": "*" }] }

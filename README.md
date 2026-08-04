@@ -1,6 +1,6 @@
 # 智答引擎（ZhiDa Engine）
 
-> 基于 RAG 架构的个人 AI 知识助手，通过微信小程序提供个人知识问答。
+> 基于 RAG 架构的个人 AI 知识助手，通过内置管理台提供知识问答与运营管理。
 
 ---
 
@@ -22,7 +22,8 @@
 - **📚 知识库管理** — 上传 PDF/DOCX/Excel/MD/TXT/CSV/JSON 等文档，自动解析、切分、向量化
 - **🔍 RAG 问答** — 基于混合检索（向量 + 关键词）的智能问答，支持来源引用
 - **🤖 Agent 管理** — 创建 AI 助手，绑定知识库和 LLM 配置
-- **📱 微信小程序** — 邀请码激活、会话历史与问答来源展示
+- **💬 管理台对话** — 选择已启用 Agent，直接使用其知识库进行对话
+- **🔐 网页访问控制** — 管理员使用账号、密码和图形验证码登录；用户使用受 Agent 授权的兑换码登录
 - **🧠 长期记忆** — 基于 Mem0 的跨会话个性化记忆
 - **🔒 格式校验** — 上传文件自动检测真实类型，防止扩展名伪装，确保数据安全
 - **⚡ 可选 MinerU 解析** — 可选集成 MinerU 引擎，支持复杂 PDF 布局/OCR/公式识别
@@ -141,8 +142,6 @@ docker compose up -d
 │   │       └── cache/              # 缓存服务
 │   └── tests/
 ├── frontend-admin/                 # React 管理后台
-├── miniprogram/                    # 微信小程序
-├── cloudfunctions/                 # CloudBase 云函数
 ├── docs/
 ├── API_DOCS.md
 ├── ARCHITECTURE.md
@@ -183,6 +182,20 @@ ENABLE_STREAMING          # 流式输出
 ENABLE_SOURCE_CITATION    # 来源引用
 ```
 
+### 网页登录与兑换码
+
+首次部署前，在私有的 `backend/.env` 配置管理员账号、密码和认证密钥。服务第一次启动时会创建该管理员；如数据库中已存在管理员，不会覆盖其密码。
+
+```env
+ZHIDA_ADMIN_BOOTSTRAP_USERNAME=自行设置管理员账号
+ZHIDA_ADMIN_BOOTSTRAP_PASSWORD=自行设置强密码
+ZHIDA_AUTH_SESSION_SECRET=请设置至少32位随机字符串
+```
+
+> 安全提示：`backend/.env` 已被 Git 忽略，不应将实际管理员凭据提交到仓库或写入公开文档。部署到公网前请使用唯一的强密码与认证密钥。
+
+管理员通过 `POST /api/v1/auth/admin/access-codes` 创建兑换码并指定可访问的 Agent；接口返回的 24 位兑换码只显示这一次，数据库只保存其 HMAC 哈希。每个兑换码均带独立的每日问答上限。
+
 ---
 
 ## API 文档
@@ -202,7 +215,6 @@ ENABLE_SOURCE_CITATION    # 来源引用
 | `/api/v1/channels/{type}/login/qrcode` | POST | 生成登录二维码 |
 | `/api/v1/qa/ask` | POST | 提问 |
 | `/api/v1/admin/settings` | GET/PUT | 系统设置 |
-| `/api/v1/miniapp/*` | GET/POST | CloudBase 签名的小程序接口 |
 
 ---
 
@@ -243,7 +255,7 @@ curl -X POST http://127.0.0.1:18900/api/v1/knowledge/bases/12/attach \
   -H 'Content-Type: application/json' \
   -d '{"agent_id":3}'
 
-# 启动：启动即启用，也即对已授权的小程序用户可见
+# 启动：启动后即可在管理台对话页和外部问答 API 中使用
 curl -X POST http://127.0.0.1:18900/api/v1/agents/3/start
 ```
 

@@ -177,16 +177,16 @@ export default function AgentDetail() {
       </div>
 
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
-        <Col xs={12} sm={8}><Card><Statistic title="今日消息" value={agent.today_messages} /></Card></Col>
-        <Col xs={12} sm={8}><Card><Statistic title="今日回答" value={agent.today_answers} /></Card></Col>
-        <Col xs={12} sm={8}><Card><Statistic title="成功率" value={agent.success_rate} suffix="%" /></Card></Col>
+        <Col xs={8} sm={8}><Card><Statistic title="今日消息" value={agent.today_messages} /></Card></Col>
+        <Col xs={8} sm={8}><Card><Statistic title="今日回答" value={agent.today_answers} /></Card></Col>
+        <Col xs={8} sm={8}><Card><Statistic title="成功率" value={agent.success_rate} suffix="%" /></Card></Col>
       </Row>
 
       <Card>
         <Tabs activeKey={activeTab} onChange={setActiveTab} items={[
           {
             key: 'overview', label: '概览', children: (
-              <Card size="small" title="Agent 概览" extra={<Button icon={<EditOutlined />} onClick={() => { nameForm.setFieldsValue({ name: agent.name, description: agent.description }); setEditingName(true) }}>编辑</Button>}><Descriptions bordered column={2}>
+              <Card size="small" title="Agent 概览" extra={<Button icon={<EditOutlined />} onClick={() => { nameForm.setFieldsValue({ name: agent.name, description: agent.description }); setEditingName(true) }}>编辑</Button>}><Descriptions className="agent-overview-descriptions" bordered column={2}>
                 <Descriptions.Item label="名称">{agent.name}</Descriptions.Item>
                 <Descriptions.Item label="状态">{statusTag}</Descriptions.Item>
                 <Descriptions.Item label="回复方式">AI 回复</Descriptions.Item>

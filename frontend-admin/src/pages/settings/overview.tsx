@@ -1,6 +1,6 @@
 import { Card, Col, Row, Tag, Typography } from 'antd'
 import { Link } from 'react-router-dom'
-import { ApiOutlined, DatabaseOutlined, EyeOutlined, GlobalOutlined, CloudOutlined, SafetyCertificateOutlined, SettingOutlined } from '@ant-design/icons'
+import { ApiOutlined, DatabaseOutlined, EyeOutlined, GlobalOutlined, CloudOutlined, SafetyCertificateOutlined } from '@ant-design/icons'
 import styles from './index.module.css'
 
 const { Title, Text } = Typography
@@ -11,7 +11,6 @@ const entries = [
   { to: '/settings/vision', icon: <EyeOutlined />, title: '视觉模型', desc: '主模型与降级模型，用于网页和云文档图片', tag: '可选' },
   { to: '/settings/search', icon: <GlobalOutlined />, title: '网络检索', desc: '仅在本地知识不足时补充信息', tag: '可选' },
   { to: '/settings/sources', icon: <CloudOutlined />, title: '云文档配置', desc: '连接外部云文档与知识内容来源', tag: '扩展' },
-  { to: '/settings/langfuse', icon: <SettingOutlined />, title: 'Langfuse 观测', desc: '问答 Trace 与独立模型 RAG 评测', tag: '观测' },
   { to: '/settings/system', icon: <SafetyCertificateOutlined />, title: '系统信息', desc: '本地运行状态、备份与数据一致性核验', tag: '本地' },
 ]
 

@@ -9,6 +9,7 @@ import time
 from datetime import datetime
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 
@@ -30,6 +31,19 @@ from app.services.cache.query_cache import query_cache
 from app.services.qa.generator import answer_generator
 
 router = APIRouter(prefix="/qa", tags=["问答"])
+
+
+def _sources_from_answer(sources: list[dict]) -> list[QASource]:
+    """将内部检索结果转换为 API 来源结构，供普通与流式回答共用。"""
+    return [
+        QASource(
+            document_name=item.get("metadata", {}).get("filename", "未知"),
+            chunk_text=item.get("text", ""),
+            score=item.get("score", 0.0),
+            source_type=item.get("metadata", {}).get("source_type", "document"),
+        )
+        for item in sources
+    ]
 
 
 # ============================================================
@@ -94,15 +108,7 @@ async def ask_question(
         agent_id=request.agent_id,
         reply_mode=agent.reply_mode,
     )
-    sources = [
-        QASource(
-            document_name=item.get("metadata", {}).get("filename", "未知"),
-            chunk_text=item.get("text", ""),
-            score=item.get("score", 0.0),
-            source_type=item.get("metadata", {}).get("source_type", "document"),
-        )
-        for item in answer.sources
-    ]
+    sources = _sources_from_answer(answer.sources)
 
     elapsed_ms = (time.time() - start_time) * 1000
 
@@ -137,6 +143,80 @@ async def ask_question(
         response_time_ms=elapsed_ms,
         model_used=answer.model_used,
         from_cache=answer.is_cache_hit,
+    )
+
+
+@router.post("/stream")
+async def stream_question(
+    request: QAAskRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """以 SSE 推送真实模型增量，并在结束时附带引用题目和运行信息。"""
+    agent = await db.get(Agent, request.agent_id)
+    if agent is None or not agent.is_active:
+        raise HTTPException(status_code=404, detail="Agent 不存在或未启用")
+
+    kb_result = await db.execute(
+        select(KnowledgeBase.id)
+        .join(AgentKnowledgeBase, AgentKnowledgeBase.knowledge_base_id == KnowledgeBase.id)
+        .where(AgentKnowledgeBase.agent_id == request.agent_id, KnowledgeBase.is_active == True)  # noqa: E712
+    )
+    knowledge_base_ids = [str(kb_id) for kb_id in kb_result.scalars()]
+
+    async def event_stream():
+        started = time.time()
+        answer_parts: list[str] = []
+        completed = None
+
+        def capture_completed(result):
+            nonlocal completed
+            completed = result
+
+        try:
+            async for chunk in answer_generator.generate_stream(
+                knowledge_base_ids=knowledge_base_ids,
+                question=request.question,
+                agent_id=request.agent_id,
+                user_id=request.user_id,
+                on_complete=capture_completed,
+            ):
+                answer_parts.append(chunk)
+                yield f"event: delta\ndata: {json.dumps({'content': chunk}, ensure_ascii=False)}\n\n"
+
+            result = completed
+            sources = _sources_from_answer(result.sources if result else [])
+            elapsed_ms = (time.time() - started) * 1000
+            try:
+                db.add(QAHistory(
+                    agent_id=request.agent_id,
+                    question=request.question,
+                    answer="".join(answer_parts),
+                    sources=json.dumps([source.model_dump() for source in sources], ensure_ascii=False),
+                    total_time_ms=elapsed_ms,
+                    is_cache_hit=False,
+                    channel="web",
+                    chat_id=request.chat_id,
+                    user_id=request.user_id,
+                    is_degraded=bool(result and result.degraded),
+                    web_search_count=result.web_search_count if result else 0,
+                ))
+                await db.commit()
+            except Exception:
+                await db.rollback()
+
+            payload = {
+                "sources": [source.model_dump() for source in sources],
+                "response_time_ms": elapsed_ms,
+                "model_used": result.model_used if result else "",
+            }
+            yield f"event: done\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+        except Exception as exc:
+            yield f"event: error\ndata: {json.dumps({'detail': str(exc)}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 

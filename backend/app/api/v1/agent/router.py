@@ -214,7 +214,7 @@ async def start_agent(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    启动 Agent —— 准备小程序问答所需的运行环境
+    启动 Agent —— 准备管理台与 API 问答所需的运行环境
 
     启动时自动创建沙箱：
     - 初始化 Agent 独立数据目录（DATA_DIR/agents/{agent_id}/）
