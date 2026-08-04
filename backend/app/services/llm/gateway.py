@@ -139,7 +139,7 @@ class LLMGateway:
         """根据配置构建 OpenAI 兼容客户端"""
         base_url = config.base_url
         # 解密 API Key 后使用（加密存储，运行时解密）
-        api_key = decrypt_api_key(config.api_key) or "not-needed"  # Ollama 不需要真实 key
+        api_key = decrypt_api_key(config.api_key)
 
         client = AsyncOpenAI(
             base_url=base_url,

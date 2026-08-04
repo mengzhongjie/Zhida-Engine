@@ -165,7 +165,7 @@ class MemoryService:
                 # 转换为 Mem0 配置
                 api_key = decrypt_api_key(config.api_key) if config.api_key else ""
 
-                # Mem0 支持的 provider: openai, anthropic, ollama, groq, together 等
+                # Mem0 使用 OpenAI 兼容格式承载当前云端模型。
                 # 我们用 OpenAI 兼容格式
                 provider = self._map_provider(config.provider)
 
@@ -197,8 +197,8 @@ class MemoryService:
             Mem0 embedder 配置字典，或 None
         """
         try:
-            if settings.EMBEDDING_MODE == "cloud" and settings.EMBEDDING_CLOUD_BASE_URL:
-                # 云端模式：使用 OpenAI 兼容接口
+            if settings.EMBEDDING_CLOUD_BASE_URL:
+                # 使用云端 OpenAI 兼容接口。
                 return {
                     "provider": "openai",
                     "config": {
@@ -207,14 +207,8 @@ class MemoryService:
                         "api_key": settings.EMBEDDING_CLOUD_API_KEY or "sk-xxx",
                     },
                 }
-            else:
-                # 本地模式：使用 HuggingFace sentence-transformers
-                return {
-                    "provider": "huggingface",
-                    "config": {
-                        "model": settings.EMBEDDING_MODEL,
-                    },
-                }
+            logger.warning("[Memory] 未配置云端 Embedding，记忆层暂不可用")
+            return None
 
         except Exception as e:
             logger.warning(f"[Memory] 获取 Embedding 配置失败: {e}")

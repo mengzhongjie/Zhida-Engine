@@ -27,7 +27,6 @@ from app.schemas.llm_config import (
 from app.services.llm.provider_templates import (
     get_provider_by_id,
     get_cloud_providers,
-    get_local_providers,
 )
 
 router = APIRouter(prefix="/llm", tags=["LLM 配置"])
@@ -97,19 +96,18 @@ def _config_to_out(config: LLMConfig) -> LLMConfigOut:
 @router.get("/providers", response_model=ProviderTemplateListOut)
 async def list_providers():
     """
-    获取所有厂商模板列表 —— 按云端/本地/自定义分组
+    获取所有厂商模板列表 —— 按云端/自定义分组
 
     前端用于渲染厂商选择下拉框。
     """
     cloud = [_template_to_out(t) for t in get_cloud_providers()]
-    local = [_template_to_out(t) for t in get_local_providers()]
     # 自定义模板单独处理
     custom = []
     custom_template = get_provider_by_id("custom")
     if custom_template:
         custom = [_template_to_out(custom_template)]
 
-    return ProviderTemplateListOut(cloud=cloud, local=local, custom=custom)
+    return ProviderTemplateListOut(cloud=cloud, local=[], custom=custom)
 
 
 @router.post("/providers/autofill", response_model=ProviderAutoFillResponse)
@@ -165,6 +163,8 @@ async def create_config(
     db: AsyncSession = Depends(get_db),
 ):
     """创建 LLM 配置"""
+    if request.provider_id == "ollama":
+        raise HTTPException(status_code=422, detail="不再支持本地模型配置，请使用云端 API")
     # 如果设为主模型，先将该 Agent 的其他主模型取消
     if request.is_primary:
         primary_query = select(LLMConfig).where(

@@ -1,7 +1,7 @@
 """
 智答引擎（ZhiDa Engine）—— LLM 厂商模板定义
 
-内置 8 个主流厂商模板 + 1 个自定义模板。
+内置云端厂商模板和 1 个自定义模板。
 用户选择厂商后自动填充 base_url、默认模型列表等字段，只需手动填入 API Key。
 同时支持完全自定义配置，所有字段均可手动输入。
 """
@@ -16,9 +16,8 @@ from dataclasses import dataclass, field
 # ============================================================
 
 class ProviderCategory(str, Enum):
-    """厂商分类 —— 云端 API 或 本地部署"""
+    """厂商分类 —— 云端 API 或自定义兼容服务"""
     CLOUD = "cloud"      # 云端 API（需要 API Key）
-    LOCAL = "local"      # 本地部署（Ollama 等，无需 API Key）
     CUSTOM = "custom"    # 自定义（用户自行填写所有字段）
 
 
@@ -34,7 +33,7 @@ class ProviderTemplate:
     Attributes:
         provider_id: 厂商唯一标识（如 "deepseek"、"openai"）
         name: 厂商显示名称（如 "DeepSeek"）
-        category: 厂商分类（云端/本地/自定义）
+        category: 厂商分类（云端/自定义）
         base_url: API 基础地址（OpenAI 兼容格式）
         default_model: 默认推荐模型
         available_models: 可用模型列表
@@ -200,31 +199,6 @@ BUILTIN_PROVIDER_TEMPLATES: list[ProviderTemplate] = [
         docs_url="https://console.volcengine.com/ark/",
     ),
 
-    # ---- 本地厂商 ----
-
-    ProviderTemplate(
-        provider_id="ollama",
-        name="Ollama（本地）",
-        category=ProviderCategory.LOCAL,
-        base_url="http://localhost:11434/v1",
-        default_model="qwen3:14b",
-        available_models=[
-            "qwen3:14b",            # 通义千问 3 14B 参数，推荐
-            "qwen3:7b",             # 7B 参数，轻量快速
-            "deepseek-r2:8b",       # DeepSeek R2 8B
-            "deepseek-r2:14b",      # DeepSeek R2 14B
-            "llama4:8b",            # Meta Llama 4
-            "mistral:7b",           # Mistral 7B
-            "phi4:14b",             # Microsoft Phi-4
-            "gemma3:12b",           # Google Gemma 3
-        ],
-        requires_api_key=False,
-        api_key_label="",
-        icon="🖥️",
-        description="本地大模型运行平台，完全免费，数据不出机器，需先安装 Ollama",
-        docs_url="https://ollama.com/download",
-    ),
-
     # ---- 自定义 ----
 
     ProviderTemplate(
@@ -263,11 +237,6 @@ def get_providers_by_category(category: ProviderCategory) -> list[ProviderTempla
 def get_cloud_providers() -> list[ProviderTemplate]:
     """获取所有云端厂商"""
     return get_providers_by_category(ProviderCategory.CLOUD)
-
-
-def get_local_providers() -> list[ProviderTemplate]:
-    """获取所有本地厂商"""
-    return get_providers_by_category(ProviderCategory.LOCAL)
 
 
 def get_all_provider_ids() -> list[str]:

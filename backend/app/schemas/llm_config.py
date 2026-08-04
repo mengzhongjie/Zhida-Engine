@@ -17,7 +17,7 @@ class ProviderTemplateOut(BaseModel):
     """厂商模板输出 —— 前端厂商选择下拉框使用"""
     provider_id: str = Field(..., description="厂商唯一标识")
     name: str = Field(..., description="厂商显示名称")
-    category: str = Field(..., description="分类: cloud/local/custom")
+    category: str = Field(..., description="分类: cloud/custom")
     base_url: str = Field(..., description="API 基础地址")
     default_model: str = Field(..., description="默认推荐模型")
     available_models: list[str] = Field(default_factory=list, description="可用模型列表")
@@ -31,7 +31,7 @@ class ProviderTemplateOut(BaseModel):
 class ProviderTemplateListOut(BaseModel):
     """厂商模板列表输出 —— 按分类分组"""
     cloud: list[ProviderTemplateOut] = Field(default_factory=list, description="云端厂商")
-    local: list[ProviderTemplateOut] = Field(default_factory=list, description="本地厂商")
+    local: list[ProviderTemplateOut] = Field(default_factory=list, description="兼容旧客户端，始终为空")
     custom: list[ProviderTemplateOut] = Field(default_factory=list, description="自定义")
 
 
