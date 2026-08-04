@@ -111,13 +111,12 @@ async def init_db():
         import app.models.agent             # noqa: F401
         import app.models.embedding_config  # noqa: F401
         import app.models.embedding_profile # noqa: F401
-        import app.models.miniapp           # noqa: F401
         import app.models.web_search_config # noqa: F401
-        import app.models.langfuse_config # noqa: F401
         import app.models.feishu_config   # noqa: F401
         import app.models.import_job      # noqa: F401
         import app.models.vision_config   # noqa: F401
         import app.models.agent_knowledge_base  # noqa: F401
+        import app.models.auth              # noqa: F401
 
         # 创建所有表
         await conn.run_sync(Base.metadata.create_all)
@@ -138,8 +137,6 @@ async def _run_compatible_migrations(conn):
         "ALTER TABLE documents ADD COLUMN total_time_ms FLOAT NOT NULL DEFAULT 0",
         "ALTER TABLE documents ADD COLUMN processing_stage VARCHAR(30)",
         "ALTER TABLE documents ADD COLUMN failed_stage VARCHAR(30)",
-        "ALTER TABLE langfuse_configs ADD COLUMN evaluator_enabled BOOLEAN NOT NULL DEFAULT 0",
-        "ALTER TABLE langfuse_configs ADD COLUMN evaluator_model_config_id INTEGER",
         "ALTER TABLE documents ADD COLUMN processing_attempts INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE documents ADD COLUMN source_url VARCHAR(1500)",
         "ALTER TABLE documents ADD COLUMN source_type VARCHAR(30) NOT NULL DEFAULT 'file'",
@@ -154,18 +151,20 @@ async def _run_compatible_migrations(conn):
         "ALTER TABLE knowledge_bases ADD COLUMN index_space VARCHAR(20)",
         "ALTER TABLE knowledge_bases ADD COLUMN index_version VARCHAR(40)",
         "ALTER TABLE knowledge_bases ADD COLUMN index_status VARCHAR(30) NOT NULL DEFAULT 'ready'",
-        "ALTER TABLE miniapp_users ADD COLUMN daily_question_limit INTEGER NOT NULL DEFAULT 0",
-        "ALTER TABLE invitation_claims ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT 1",
         "ALTER TABLE qa_history ADD COLUMN input_tokens INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE qa_history ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE qa_history ADD COLUMN is_degraded BOOLEAN NOT NULL DEFAULT 0",
         "ALTER TABLE qa_history ADD COLUMN web_search_count INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE qa_history ADD COLUMN request_id VARCHAR(80)",
+        "ALTER TABLE qa_history ADD COLUMN conversation_id VARCHAR(48)",
+        "ALTER TABLE qa_history ADD COLUMN owner_type VARCHAR(20)",
+        "ALTER TABLE qa_history ADD COLUMN owner_id INTEGER",
         "ALTER TABLE web_search_configs ADD COLUMN tavily_api_key TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE web_search_configs ADD COLUMN exa_api_key TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE vision_configs ADD COLUMN name VARCHAR(100) NOT NULL DEFAULT '视觉模型'",
         "ALTER TABLE vision_configs ADD COLUMN is_primary BOOLEAN NOT NULL DEFAULT 0",
         "ALTER TABLE vision_configs ADD COLUMN is_fallback BOOLEAN NOT NULL DEFAULT 0",
+        "ALTER TABLE captcha_challenges ADD COLUMN image_svg TEXT",
     ]
     for sql in migrations:
         try:
@@ -187,16 +186,6 @@ async def _run_compatible_migrations(conn):
     except Exception:
         pass
 
-    # 将旧的一对一绑定迁移为领取历史；重复启动可安全执行。
-    try:
-        await conn.execute(text(
-            "INSERT OR IGNORE INTO invitation_claims (invitation_id, user_id, claimed_at) "
-            "SELECT id, claimed_by_user_id, COALESCE(claimed_at, created_at) "
-            "FROM invitations WHERE claimed_by_user_id IS NOT NULL"
-        ))
-    except Exception:
-        # 首次建库或旧库尚未创建邀请表时，下一次启动会补齐。
-        pass
     try:
         await conn.execute(text("INSERT OR IGNORE INTO agent_knowledge_bases (agent_id, knowledge_base_id) SELECT agent_id, id FROM knowledge_bases WHERE agent_id IS NOT NULL"))
     except Exception:
@@ -237,12 +226,12 @@ async def _create_indexes(conn):
         # 问答历史索引
         "CREATE INDEX IF NOT EXISTS idx_qa_history_agent_time ON qa_history(agent_id, created_at)",
         "CREATE INDEX IF NOT EXISTS idx_qa_history_user_request ON qa_history(user_id, request_id)",
+        "CREATE INDEX IF NOT EXISTS idx_qa_history_conversation ON qa_history(conversation_id, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_access_code_agents_code_agent ON access_code_agents(access_code_id, agent_id)",
+        "CREATE INDEX IF NOT EXISTS idx_access_code_daily_usage_date ON access_code_daily_usage(usage_date)",
+        "CREATE INDEX IF NOT EXISTS idx_conversations_owner_time ON conversations(owner_type, owner_id, updated_at)",
         "CREATE INDEX IF NOT EXISTS idx_qa_pairs_agent ON qa_pairs(agent_id)",
 
-        "CREATE INDEX IF NOT EXISTS idx_miniapp_users_openid ON miniapp_users(openid)",
-        "CREATE INDEX IF NOT EXISTS idx_invitations_status_expires ON invitations(status, expires_at)",
-        "CREATE INDEX IF NOT EXISTS idx_invitation_claims_user_time ON invitation_claims(user_id, claimed_at)",
-        "CREATE INDEX IF NOT EXISTS idx_miniapp_sessions_user_time ON miniapp_sessions(user_id, updated_at)",
         "CREATE INDEX IF NOT EXISTS idx_admin_sessions_expires ON admin_sessions(expires_at)",
     ]
 

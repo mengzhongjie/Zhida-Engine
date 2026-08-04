@@ -37,6 +37,9 @@ class QAHistory(Base):
     chat_id = Column(String(200), nullable=True, comment="群聊/私聊 ID")
     user_id = Column(String(200), nullable=True, comment="提问用户 ID")
     request_id = Column(String(80), nullable=True, index=True, comment="客户端请求幂等 ID")
+    conversation_id = Column(String(48), nullable=True, index=True)
+    owner_type = Column(String(20), nullable=True, index=True)
+    owner_id = Column(Integer, nullable=True, index=True)
 
     # 用户反馈（用于优化检索精度）
     feedback = Column(String(20), nullable=True, comment="用户反馈: helpful/not_helpful/flagged")

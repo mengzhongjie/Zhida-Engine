@@ -14,7 +14,7 @@ import asyncio
 import hashlib
 import re
 from pathlib import Path
-from typing import Optional, AsyncIterator
+from typing import Optional, AsyncIterator, Callable
 from dataclasses import dataclass, field
 
 from loguru import logger
@@ -576,6 +576,7 @@ class AnswerGenerator:
         temperature: float = 0.7,
         agent_id: Optional[int] = None,
         user_id: Optional[str] = None,
+        on_complete: Optional[Callable[[AnswerResult], None]] = None,
     ) -> AsyncIterator[str]:
         """
         流式生成回答 —— 逐 token 返回
@@ -673,6 +674,19 @@ class AnswerGenerator:
                         "degraded": degraded,
                     },
                 ))
+            if on_complete:
+                try:
+                    on_complete(AnswerResult(
+                        answer=answer_text,
+                        sources=self._unique_sources(results) if results else [],
+                        retrieval_time_ms=retrieval_time,
+                        generation_time_ms=generation_time,
+                        model_used=model_used,
+                        degraded=degraded,
+                        web_search_count=web_search_count,
+                    ))
+                except Exception as callback_error:
+                    logger.warning(f"流式回答完成回调失败: {callback_error}")
 
 
 # 全局回答生成器实例

@@ -13,7 +13,7 @@ from typing import Optional
 from pydantic_settings import BaseSettings
 
 
-# 与启动目录无关，始终读取 backend/.env，便于桌面端和本地小程序联调。
+# 与启动目录无关，始终读取 backend/.env，便于本地与容器部署。
 _BACKEND_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 
 
@@ -131,15 +131,11 @@ class Settings(BaseSettings):
     MAX_REQUEST_SIZE_MB: int = 10  # 最大请求体大小
     API_KEY_ENCRYPT_ENABLED: bool = True  # API Key 加密存储
 
-    # ---- 小程序网关 ----
-    # CloudBase 云函数使用此密钥对 OpenID 和时间戳签名；生产环境必须设置。
-    MINIPROGRAM_GATEWAY_SECRET: str = ""
-    MINIPROGRAM_SIGNATURE_TTL_SECONDS: int = 300
-    # 仅本地联调：必须同时 DEBUG=true，并与小程序中设置的测试 OpenID 完全匹配。
-    MINIPROGRAM_DEV_OPENID: str = ""
-    ADMIN_OPENIDS: str = ""  # 逗号分隔的管理员微信 OpenID 白名单
-    ADMIN_SESSION_TTL_SECONDS: int = 28800
-    ADMIN_AUTH_REQUIRED: bool = False  # 云端部署时设为 true
+    ADMIN_BOOTSTRAP_USERNAME: str = ""
+    ADMIN_BOOTSTRAP_PASSWORD: str = ""
+    AUTH_SESSION_SECRET: str = ""
+    AUTH_USER_SESSION_DAYS: int = 7
+    AUTH_ADMIN_SESSION_HOURS: int = 8
 
     # ---- 网络检索（RAG 未命中时的补充能力）----
     WEB_SEARCH_ENABLED: bool = False
@@ -147,7 +143,7 @@ class Settings(BaseSettings):
     WEB_SEARCH_API_KEY: str = ""
     WEB_SEARCH_MAX_RESULTS: int = 3
 
-    # ---- Langfuse Cloud 可选观测 ----
+    # ---- 仅开发部署使用的 Langfuse 观测（不在应用内配置或展示）----
     LANGFUSE_ENABLED: bool = False
     LANGFUSE_HOST: str = "https://cloud.langfuse.com"
     LANGFUSE_PUBLIC_KEY: str = ""

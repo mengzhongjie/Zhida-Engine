@@ -55,7 +55,7 @@ def setup_logging():
 
 def create_app():
     """创建 FastAPI 应用实例"""
-    from fastapi import FastAPI
+    from fastapi import FastAPI, Depends
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.middleware.trustedhost import TrustedHostMiddleware
     from fastapi.staticfiles import StaticFiles
@@ -73,11 +73,12 @@ def create_app():
         # 初始化向量化配置（从数据库加载）
         from app.core.database import async_session_factory
         from app.api.v1.embedding.router import init_embedding_config
-        from app.api.v1.admin.router import load_langfuse_config, load_web_search_config
+        from app.api.v1.admin.router import load_web_search_config
+        from app.api.v1.auth.router import ensure_bootstrap_admin
         async with async_session_factory() as db:
+            await ensure_bootstrap_admin(db)
             await init_embedding_config(db)
             await load_web_search_config(db)
-            await load_langfuse_config(db)
 
         # 单机后台任务没有外部队列；启动时恢复上次中断的文档处理。
         from app.services.knowledge.document_processor import resume_unfinished_document_processing
@@ -127,38 +128,38 @@ def create_app():
     # ================================================================
     # 注册 API 路由
     # ================================================================
+    from app.api.v1.auth.router import router as auth_router, require_admin
+    from app.api.v1.user.router import router as user_router
+    app.include_router(auth_router, prefix="/api/v1")
+    app.include_router(user_router, prefix="/api/v1")
 
     # LLM 配置
     from app.api.v1.config.router import router as llm_config_router
-    app.include_router(llm_config_router, prefix="/api/v1")
+    app.include_router(llm_config_router, prefix="/api/v1", dependencies=[Depends(require_admin)])
 
     # Agent 管理
     from app.api.v1.agent.router import router as agent_router
-    app.include_router(agent_router, prefix="/api/v1")
+    app.include_router(agent_router, prefix="/api/v1", dependencies=[Depends(require_admin)])
 
     # 知识库管理
     from app.api.v1.knowledge.router import router as knowledge_router
-    app.include_router(knowledge_router, prefix="/api/v1")
+    app.include_router(knowledge_router, prefix="/api/v1", dependencies=[Depends(require_admin)])
 
     # 问答
     from app.api.v1.qa.router import router as qa_router
-    app.include_router(qa_router, prefix="/api/v1")
+    app.include_router(qa_router, prefix="/api/v1", dependencies=[Depends(require_admin)])
 
     # 管理后台
     from app.api.v1.admin.router import router as admin_router
-    app.include_router(admin_router, prefix="/api/v1")
+    app.include_router(admin_router, prefix="/api/v1", dependencies=[Depends(require_admin)])
 
     # 向量化配置
     from app.api.v1.embedding.router import router as embedding_router
-    app.include_router(embedding_router, prefix="/api/v1")
+    app.include_router(embedding_router, prefix="/api/v1", dependencies=[Depends(require_admin)])
 
     # 视觉模型配置
     from app.api.v1.vision.router import router as vision_router
-    app.include_router(vision_router, prefix="/api/v1")
-
-    # 小程序邀请制问答接口（仅接受 CloudBase 网关签名请求）
-    from app.api.v1.miniapp.router import router as miniapp_router
-    app.include_router(miniapp_router, prefix="/api/v1")
+    app.include_router(vision_router, prefix="/api/v1", dependencies=[Depends(require_admin)])
 
     # ================================================================
     # 前端静态文件服务（生产环境：前端构建产物嵌入 .exe）
