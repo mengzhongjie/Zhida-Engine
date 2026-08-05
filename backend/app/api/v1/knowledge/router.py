@@ -1106,15 +1106,31 @@ async def upload_document_to_kb(
             detail=f"不支持的文件类型: {file_ext}，支持: {', '.join(sorted(allowed_types))}",
         )
 
-    # 读入文件内容
-    content = await file.read()
-
-    # 文件大小校验
-    if len(content) > settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024:
-        raise HTTPException(
-            status_code=400,
-            detail=f"文件大小超过限制（{settings.MAX_UPLOAD_SIZE_MB}MB）",
-        )
+    # 读入文件内容（流式写入临时文件，边写边校验大小，超限不占内存）
+    max_bytes = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
+    tmp_path = os.path.join(str(settings.DATA_DIR), f".upload_tmp_{uuid.uuid4().hex}")
+    total = 0
+    try:
+        with open(tmp_path, "wb") as sink:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > max_bytes:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"文件大小超过限制（{settings.MAX_UPLOAD_SIZE_MB}MB）",
+                    )
+                sink.write(chunk)
+        # 大小在限制内，读回内存供后续预检/哈希（≤ MAX_UPLOAD_SIZE_MB，可控）
+        with open(tmp_path, "rb") as source:
+            content = source.read()
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
 
     # ---- 上传前预检（格式验证 + 文件名清洗 + 损坏检测）----
     if settings.ENABLE_FORMAT_CHECK:

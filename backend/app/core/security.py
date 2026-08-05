@@ -153,9 +153,8 @@ def encrypt_api_key(api_key: str) -> str:
         return base64.b64encode(combined).decode()
 
     except ImportError:
-        # cryptography 未安装，使用简单 Base64 编码（非安全，仅防明文暴露）
-        logger.warning("cryptography 未安装，API Key 使用 Base64 编码存储")
-        return base64.b64encode(api_key.encode()).decode()
+        # cryptography 是硬依赖，缺失时拒绝降级到不安全的 Base64 编码。
+        raise RuntimeError("cryptography 未安装，无法安全加密 API Key，请先安装依赖") from None
 
 
 def decrypt_api_key(encrypted: str) -> str:
@@ -185,14 +184,11 @@ def decrypt_api_key(encrypted: str) -> str:
         raise ValueError("无法使用当前或旧格式密钥解密")
 
     except ImportError:
-        try:
-            return base64.b64decode(encrypted).decode()
-        except Exception:
-            return encrypted
+        raise RuntimeError("cryptography 未安装，无法解密 API Key，请先安装依赖") from None
     except Exception:
-        # 解密失败（可能换了机器），返回原始值
+        # 解密失败（可能换了机器或密钥损坏），返回空值以阻断使用无效 Key。
         logger.warning("API Key 解密失败，可能更换了机器")
-        return encrypted
+        return ""
 
 
 def mask_api_key(api_key: str) -> str:
@@ -385,9 +381,15 @@ def secure_data_directory():
             logger.warning(f"Windows 数据目录权限加固失败: {e}")
     else:
         # Unix/Linux/macOS: chmod 0o700
+        # 除 DATA_DIR/log_dir 外，向量库与缓存子目录同样需要加固，
+        # 避免子目录在父目录收紧权限前被宽松创建。
         try:
-            os.chmod(data_dir, 0o700)
-            os.chmod(log_dir, 0o700)
+            for directory in (data_dir, log_dir, str(settings.chroma_dir), str(settings.cache_dir)):
+                try:
+                    os.chmod(directory, 0o700)
+                except FileNotFoundError:
+                    os.makedirs(directory, exist_ok=True)
+                    os.chmod(directory, 0o700)
             logger.info(f"数据目录权限已加固 (0o700): {data_dir}")
         except Exception as e:
             logger.warning(f"数据目录权限加固失败: {e}")

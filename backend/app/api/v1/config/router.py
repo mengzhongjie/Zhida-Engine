@@ -240,7 +240,7 @@ async def update_config(
             logger.info(f"  api_key: 收到值长度={len(value) if value else 0}, is_none={value is None}, is_empty={value == ''}")
             if value is not None and value != "":
                 encrypted = encrypt_api_key(value)
-                logger.info(f"  api_key: 加密后长度={len(encrypted)}, 前4位={encrypted[:4]}")
+                logger.info(f"  api_key: 已加密更新, 加密后长度={len(encrypted)}")
                 setattr(config, key, encrypted)
             else:
                 logger.info(f"  api_key: 跳过（空值不修改）")
@@ -311,7 +311,7 @@ async def test_configured_model(
         raise HTTPException(status_code=404, detail="LLM 配置不存在")
 
     decrypted_key = decrypt_api_key(config.api_key)
-    logger.info(f"测试配置 {config_id}: api_key原始长度={len(config.api_key)}, 解密后长度={len(decrypted_key)}, 解密后最后4位={decrypted_key[-4:] if decrypted_key and len(decrypted_key)>=4 else decrypted_key}")
+    logger.info(f"测试配置 {config_id}: api_key原始长度={len(config.api_key)}, 解密后长度={len(decrypted_key)}")
 
     test_result = await llm_gateway.test_connection(
         base_url=config.base_url,

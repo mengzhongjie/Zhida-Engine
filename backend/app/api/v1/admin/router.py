@@ -529,7 +529,7 @@ async def list_memories(
         return memories
     except Exception as e:
         logger.error(f"获取记忆列表失败: {e}")
-        raise HTTPException(status_code=500, detail=f"获取记忆列表失败: {str(e)}")
+        raise HTTPException(status_code=500, detail="内部服务错误")
 
 
 @router.post("/memory/search", response_model=list[MemoryItemOut])
@@ -553,7 +553,7 @@ async def search_memories(request: MemorySearchIn):
         return memories
     except Exception as e:
         logger.error(f"搜索记忆失败: {e}")
-        raise HTTPException(status_code=500, detail=f"搜索记忆失败: {str(e)}")
+        raise HTTPException(status_code=500, detail="内部服务错误")
 
 
 @router.get("/memory/{memory_id}", response_model=MemoryItemOut)
@@ -573,7 +573,7 @@ async def get_memory(memory_id: str):
         raise
     except Exception as e:
         logger.error(f"获取记忆失败: {e}")
-        raise HTTPException(status_code=500, detail=f"获取记忆失败: {str(e)}")
+        raise HTTPException(status_code=500, detail="内部服务错误")
 
 
 @router.post("/memory", response_model=dict)
@@ -596,7 +596,7 @@ async def add_memory(request: MemoryAddIn):
         return result
     except Exception as e:
         logger.error(f"添加记忆失败: {e}")
-        raise HTTPException(status_code=500, detail=f"添加记忆失败: {str(e)}")
+        raise HTTPException(status_code=500, detail="内部服务错误")
 
 
 @router.put("/memory/{memory_id}", response_model=dict)
@@ -616,7 +616,7 @@ async def update_memory(memory_id: str, request: MemoryUpdateIn):
         raise
     except Exception as e:
         logger.error(f"更新记忆失败: {e}")
-        raise HTTPException(status_code=500, detail=f"更新记忆失败: {str(e)}")
+        raise HTTPException(status_code=500, detail="内部服务错误")
 
 
 @router.delete("/memory/{memory_id}", response_model=dict)
@@ -636,7 +636,7 @@ async def delete_memory(memory_id: str):
         raise
     except Exception as e:
         logger.error(f"删除记忆失败: {e}")
-        raise HTTPException(status_code=500, detail=f"删除记忆失败: {str(e)}")
+        raise HTTPException(status_code=500, detail="内部服务错误")
 
 
 @router.delete("/memory", response_model=dict)
@@ -662,7 +662,7 @@ async def clear_memories(
         return {"success": success}
     except Exception as e:
         logger.error(f"清空记忆失败: {e}")
-        raise HTTPException(status_code=500, detail=f"清空记忆失败: {str(e)}")
+        raise HTTPException(status_code=500, detail="内部服务错误")
 
 
 @router.get("/memory/history/{memory_id}", response_model=list[dict])
@@ -678,4 +678,4 @@ async def get_memory_history(memory_id: str, limit: int = 50):
         return history
     except Exception as e:
         logger.error(f"获取记忆历史失败: {e}")
-        raise HTTPException(status_code=500, detail=f"获取记忆历史失败: {str(e)}")
+        raise HTTPException(status_code=500, detail="内部服务错误")

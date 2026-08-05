@@ -70,13 +70,12 @@ export default function Chat() {
     setInput('')
     setAsking(true)
     try {
-      const token = localStorage.getItem('zhida_admin_token')
       const response = await fetch('/api/v1/qa/stream', {
         method: 'POST',
+        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
           'X-Chat-Id': sessionIdRef.current,
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({
           agent_id: agentId,

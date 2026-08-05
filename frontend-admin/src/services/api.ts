@@ -42,11 +42,8 @@ apiClient.interceptors.response.use(
   }
 )
 
-apiClient.interceptors.request.use((config) => {
-  const token = localStorage.getItem('zhida_admin_token')
-  if (token) config.headers.Authorization = `Bearer ${token}`
-  return config
-})
+// 认证走 HttpOnly Cookie（zhida_admin_session / zhida_user_session），
+// 无需前端手动附加 Authorization header。
 
 // 便捷方法
 export const api = {

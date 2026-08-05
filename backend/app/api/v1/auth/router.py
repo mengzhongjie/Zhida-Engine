@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import Response as RawResponse
+from loguru import logger
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -103,7 +104,7 @@ def _decrypt_access_code(ciphertext: str | None) -> str | None:
 
 def _password_hash(password: str) -> str:
     salt = os.urandom(16)
-    digest = hashlib.scrypt(password.encode(), salt=salt, n=2**14, r=8, p=1)
+    digest = hashlib.scrypt(password.encode(), salt=salt, n=2**16, r=8, p=1)
     return f"scrypt${base64.b64encode(salt).decode()}${base64.b64encode(digest).decode()}"
 
 
@@ -111,7 +112,7 @@ def _verify_password(password: str, stored: str) -> bool:
     try:
         _, salt_b64, digest_b64 = stored.split("$", 2)
         expected = base64.b64decode(digest_b64)
-        actual = hashlib.scrypt(password.encode(), salt=base64.b64decode(salt_b64), n=2**14, r=8, p=1)
+        actual = hashlib.scrypt(password.encode(), salt=base64.b64decode(salt_b64), n=2**16, r=8, p=1)
         return hmac.compare_digest(actual, expected)
     except Exception:
         return False
@@ -254,12 +255,34 @@ async def require_user(request: Request, response: Response, db: AsyncSession = 
 
 
 async def ensure_bootstrap_admin(db: AsyncSession) -> None:
-    if not settings.ADMIN_BOOTSTRAP_USERNAME or not settings.ADMIN_BOOTSTRAP_PASSWORD:
+    """首次启动时引导创建管理员。
+
+    - DEBUG（本地开发）：沿用 .env 中的账号密码，方便调试。
+    - 生产（DEBUG=False）：密码为空或为常见弱密码时，自动生成随机密码，
+      仅在本进程控制台打印一次，供首次登录；强烈要求登录后立即修改。
+    """
+    username = (settings.ADMIN_BOOTSTRAP_USERNAME or "").strip()
+    password = settings.ADMIN_BOOTSTRAP_PASSWORD or ""
+    if not username:
         return
     existing = (await db.execute(select(AdminUser.id).limit(1))).scalar_one_or_none()
-    if existing is None:
-        db.add(AdminUser(username=settings.ADMIN_BOOTSTRAP_USERNAME.strip(), password_hash=_password_hash(settings.ADMIN_BOOTSTRAP_PASSWORD)))
-        await db.commit()
+    if existing is not None:
+        return
+
+    effective = password
+    if not settings.DEBUG:
+        weak = not password or len(password) < 8 or password.lower() in {"123456", "admin", "password", "admin123"}
+        if weak:
+            effective = secrets.token_urlsafe(12)
+            logger.warning(
+                f"生产模式检测到弱引导密码，已自动生成随机密码。"
+                f"请在首次登录后立即修改。账号: {username}"
+            )
+            # 仅控制台输出，不写入日志文件，避免明文残留。
+            print(f"\n[ZhidaEngine] 初始管理员账号: {username}  随机密码: {effective}\n", flush=True)
+
+    db.add(AdminUser(username=username, password_hash=_password_hash(effective)))
+    await db.commit()
 
 
 @router.get("/captcha")

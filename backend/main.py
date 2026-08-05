@@ -23,6 +23,7 @@ import uvicorn
 from loguru import logger
 
 from app.core.config import settings
+from app.core.security import log_sanitize_filter
 
 
 def setup_logging():
@@ -35,6 +36,7 @@ def setup_logging():
         level=settings.LOG_LEVEL,
         format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan> | <level>{message}</level>",
         colorize=True,
+        filter=log_sanitize_filter,
     )
 
     # 文件输出（按天轮转）
@@ -46,6 +48,7 @@ def setup_logging():
         rotation="00:00",  # 每天午夜轮转
         retention="30 days",  # 保留 30 天
         encoding="utf-8",
+        filter=log_sanitize_filter,
     )
 
     logger.info(f"启动 {settings.APP_NAME} v{settings.APP_VERSION}")
@@ -110,6 +113,8 @@ def create_app():
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.trusted_hosts)
 
     # CORS 只允许明确声明的管理台开发地址或正式域名。
+    if "*" in settings.cors_origins:
+        logger.warning("CORS 配置包含通配符 origin；配合 allow_credentials=True 会导致浏览器拒绝携带 Cookie，请改为明确域名列表")
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
