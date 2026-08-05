@@ -9,8 +9,12 @@ import ReactDOM from 'react-dom/client'
 import { HashRouter } from 'react-router-dom'
 import { ConfigProvider } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
-import App from './App'
 import './index.css'
+
+const target = import.meta.env.VITE_APP_TARGET === 'user' ? 'user' : 'admin'
+const App = target === 'user'
+  ? (await import('./UserApp')).default
+  : (await import('./App')).default
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

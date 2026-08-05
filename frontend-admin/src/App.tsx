@@ -36,7 +36,7 @@ function RoleGate({ role }: { role: 'admin' | 'user' }) {
 function App() {
   return (
     <Routes>
-      <Route path="/login" element={<LoginPage />} />
+      <Route path="/login" element={<LoginPage fixedRole="admin" />} />
       <Route element={<RoleGate role="user" />}><Route path="/user" element={<UserPage />} /></Route>
       <Route element={<RoleGate role="admin" />}><Route path="/" element={<MainLayout />}>
         <Route index element={<Dashboard />} />

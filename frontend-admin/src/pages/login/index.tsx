@@ -14,7 +14,7 @@ function readableError(detail: unknown, fallback: string) {
       if (typeof item === 'string') return item
       if (item && typeof item === 'object' && 'msg' in item && typeof item.msg === 'string') {
         const field = Array.isArray((item as { loc?: unknown }).loc) ? (item as { loc: unknown[] }).loc.at(-1) : ''
-        const label = field === 'password' ? '密码' : field === 'username' ? '管理员账号' : field === 'access_code' ? '兑换码' : field === 'captcha_answer' ? '图形验证码' : '输入内容'
+        const label = field === 'password' ? '密码' : field === 'username' ? '管理员账号' : field === 'access_code' ? '激活码' : field === 'captcha_answer' ? '图形验证码' : '输入内容'
         const minimum = (item as { ctx?: { min_length?: unknown } }).ctx?.min_length
         if (typeof minimum === 'number' && item.msg.includes('at least')) return `${label}至少需要 ${minimum} 个字符`
         if (item.msg.includes('Field required')) return `请填写${label}`
@@ -28,10 +28,10 @@ function readableError(detail: unknown, fallback: string) {
   return fallback
 }
 
-export default function LoginPage() {
+export default function LoginPage({ fixedRole }: { fixedRole?: 'user' | 'admin' }) {
   const navigate = useNavigate()
   const [form] = Form.useForm()
-  const [role, setRole] = useState<'user' | 'admin'>('user')
+  const [role, setRole] = useState<'user' | 'admin'>(fixedRole || 'user')
   const [captcha, setCaptcha] = useState<Captcha>()
   const [loading, setLoading] = useState(false)
 
@@ -87,17 +87,17 @@ export default function LoginPage() {
         <div className="login-form-heading">
           <Text className="login-eyebrow">WELCOME</Text>
           <Title level={3}>{role === 'user' ? '登录你的助手' : '登录管理台'}</Title>
-          <Text type="secondary">{role === 'user' ? '使用管理员提供的兑换码进入。' : '使用管理员账号安全进入系统。'}</Text>
+          <Text type="secondary">{role === 'user' ? '使用管理员提供的一次性激活码首次进入。' : '使用管理员账号安全进入系统。'}</Text>
         </div>
-        <Segmented block value={role} onChange={value => setRole(value as 'user' | 'admin')} options={[{ label: '用户登录', value: 'user' }, { label: '管理端', value: 'admin' }]} />
+        {!fixedRole && <Segmented block value={role} onChange={value => setRole(value as 'user' | 'admin')} options={[{ label: '用户登录', value: 'user' }, { label: '管理端', value: 'admin' }]} />}
         <Form form={form} layout="vertical" onFinish={submit} className="login-form">
           {role === 'user'
-            ? <Form.Item name="access_code" label="兑换码" rules={[{ required: true, message: '请输入兑换码' }, { min: 16, message: '兑换码长度不正确' }]}><Input prefix={<LockOutlined />} placeholder="输入兑换码" autoComplete="one-time-code" /></Form.Item>
+            ? <Form.Item name="access_code" label="激活码" rules={[{ required: true, message: '请输入激活码' }, { min: 16, message: '激活码长度不正确' }]}><Input prefix={<LockOutlined />} placeholder="输入一次性激活码" autoComplete="one-time-code" /></Form.Item>
             : <><Form.Item name="username" label="管理员账号" rules={[{ required: true, message: '请输入管理员账号' }]}><Input prefix={<SafetyCertificateOutlined />} autoComplete="username" /></Form.Item><Form.Item name="password" label="密码" rules={[{ required: true, message: '请输入密码' }]}><Input.Password prefix={<LockOutlined />} autoComplete="current-password" /></Form.Item></>}
           <Form.Item name="captcha_answer" label="图形验证码" rules={[{ required: true, message: '请输入验证码' }]}>
             <div className="captcha-row"><Input placeholder="验证码" autoComplete="off" /><button type="button" className="captcha-image" onClick={() => void loadCaptcha()} title="点击更换验证码">{captcha ? <img src={captcha.image_url} alt="图形验证码" onError={() => { setCaptcha(undefined); message.error('验证码图片无法显示，请点击刷新') }} /> : <span>点击加载</span>}</button></div>
           </Form.Item>
-          <Button type="primary" htmlType="submit" block loading={loading}>登录</Button>
+          <Button type="primary" htmlType="submit" block loading={loading}>{role === 'user' ? '激活并进入' : '登录'}</Button>
         </Form>
       </Card>
     </div>

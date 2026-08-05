@@ -14,11 +14,13 @@ import {
   MessageOutlined,
   MenuOutlined,
   KeyOutlined,
+  LogoutOutlined,
 } from '@ant-design/icons'
 import zhidaLogo from '../assets/zhida-logo.png'
 
 const { Sider, Content } = Layout
 const { Text } = Typography
+const mobileViewportQuery = '(max-width: 820px), (hover: none) and (pointer: coarse)'
 
 // 导航菜单配置
 const menuItems = [
@@ -58,13 +60,19 @@ export default function MainLayout() {
   const navigate = useNavigate()
   const location = useLocation()
   const [collapsed, setCollapsed] = useState(false)
-  const [mobile, setMobile] = useState(() => window.innerWidth <= 720)
+  const [mobile, setMobile] = useState(() => window.matchMedia(mobileViewportQuery).matches)
   const [mobileOpen, setMobileOpen] = useState(false)
 
+  const logout = async () => {
+    await fetch('/api/v1/auth/logout', { method: 'POST', credentials: 'include' }).catch(() => undefined)
+    navigate('/login', { replace: true })
+  }
+
   useEffect(() => {
-    const update = () => setMobile(window.innerWidth <= 720)
-    window.addEventListener('resize', update)
-    return () => window.removeEventListener('resize', update)
+    const query = window.matchMedia(mobileViewportQuery)
+    const update = () => setMobile(query.matches)
+    query.addEventListener('change', update)
+    return () => query.removeEventListener('change', update)
   }, [])
 
   // 当前选中的菜单项
@@ -86,7 +94,7 @@ export default function MainLayout() {
       <Content className="app-content">
         <header className="app-topbar">
           <div className="app-topbar-title">{mobile && <Button className="mobile-menu-trigger" type="text" icon={<MenuOutlined />} onClick={() => setMobileOpen(true)} />}<Text type="secondary">智答引擎 / 管理台</Text></div>
-          <Tag color="success">本地服务</Tag>
+          <div className="app-topbar-actions"><Tag color="success">本地服务</Tag><Button size="small" icon={<LogoutOutlined />} onClick={() => void logout()}>退出</Button></div>
         </header>
         <Outlet />
       </Content>
