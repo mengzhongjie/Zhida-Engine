@@ -21,9 +21,12 @@ class AccessCode(Base):
     id = Column(Integer, primary_key=True)
     code_hash = Column(String(64), unique=True, nullable=False, index=True)
     code_hint = Column(String(12), nullable=False)
+    # 用部署密钥加密保存，仅供已认证管理员重新复制；登录校验仍只使用哈希。
+    code_ciphertext = Column(Text, nullable=True)
     daily_question_limit = Column(Integer, default=50, nullable=False)
     expires_at = Column(DateTime, nullable=True)
     status = Column(String(20), default="active", nullable=False, index=True)
+    claimed_at = Column(DateTime, nullable=True)
     note = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
@@ -47,7 +50,8 @@ class AccessCodeDailyUsage(Base):
 class WebUser(Base):
     __tablename__ = "web_users"
     id = Column(Integer, primary_key=True)
-    access_code_id = Column(Integer, ForeignKey("access_codes.id", ondelete="RESTRICT"), nullable=False, index=True)
+    # 一个激活码只能绑定一个匿名用户，数据库唯一约束是并发领取的最终防线。
+    access_code_id = Column(Integer, ForeignKey("access_codes.id", ondelete="RESTRICT"), nullable=False, unique=True, index=True)
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     last_login_at = Column(DateTime, nullable=True)

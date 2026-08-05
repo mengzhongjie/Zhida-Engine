@@ -24,6 +24,11 @@ apiClient.interceptors.response.use(
   (error) => {
     if (error.response) {
       const { status, data } = error.response
+      // 管理员会话过期时不能只停留在业务页报“加载失败”。统一回到登录页，
+      // 避免兑换码、知识库等页面把鉴权错误误报成数据问题。
+      if (status === 401 && window.location.hash !== '#/login') {
+        window.location.hash = '#/login'
+      }
       // 限流错误
       if (status === 429) {
         console.warn('请求过于频繁:', data.detail)

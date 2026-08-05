@@ -9,7 +9,7 @@
 
 from fastapi import Request, HTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import Response
+from starlette.responses import JSONResponse, Response
 
 from loguru import logger
 
@@ -35,7 +35,24 @@ class SecurityMiddleware(BaseHTTPMiddleware):
         "Server": "",                                   # 隐藏服务器信息
     }
 
+    @staticmethod
+    def _is_local_request(request: Request) -> bool:
+        host = (request.url.hostname or "").lower()
+        return host in {"localhost", "127.0.0.1", "::1"}
+
+    @staticmethod
+    def _is_https(request: Request) -> bool:
+        forwarded = request.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip().lower()
+        return request.url.scheme == "https" or forwarded == "https"
+
     async def dispatch(self, request: Request, call_next):
+        is_https = self._is_https(request)
+
+        # 公网用户端和管理端只接受 HTTPS；回环地址保留本地开发体验。
+        # 反向代理必须传递 X-Forwarded-Proto，README 已提供对应配置。
+        if settings.AUTH_REQUIRE_HTTPS and not self._is_local_request(request) and not is_https:
+            return JSONResponse(status_code=426, content={"detail": "公网访问必须使用 HTTPS"})
+
         # 1. 请求体大小限制
         content_length = request.headers.get("content-length")
         if content_length:
@@ -65,5 +82,8 @@ class SecurityMiddleware(BaseHTTPMiddleware):
                     response.headers[header_name] = header_value
             if request.url.path.startswith("/api/"):
                 response.headers.setdefault("Cache-Control", "no-store")
+            # 浏览器一旦通过 HTTPS 访问过公网域名，后续请求不允许降级回 HTTP。
+            if is_https and not self._is_local_request(request):
+                response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 
         return response

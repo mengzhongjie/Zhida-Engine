@@ -55,10 +55,9 @@ def setup_logging():
 
 def create_app():
     """创建 FastAPI 应用实例"""
-    from fastapi import FastAPI, Depends
+    from fastapi import FastAPI, Depends, Request
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.middleware.trustedhost import TrustedHostMiddleware
-    from fastapi.staticfiles import StaticFiles
     from fastapi.responses import FileResponse
     from contextlib import asynccontextmanager
 
@@ -79,6 +78,8 @@ def create_app():
             await ensure_bootstrap_admin(db)
             await init_embedding_config(db)
             await load_web_search_config(db)
+            from app.api.v1.admin.router import load_persona_presets
+            await load_persona_presets(db)
 
         # 单机后台任务没有外部队列；启动时恢复上次中断的文档处理。
         from app.services.knowledge.document_processor import resume_unfinished_document_processing
@@ -164,7 +165,10 @@ def create_app():
     # ================================================================
     # 前端静态文件服务（生产环境：前端构建产物嵌入 .exe）
     # ================================================================
-    static_dir = os.path.join(os.path.dirname(__file__), "static")
+    static_admin_dir = os.path.join(os.path.dirname(__file__), "static-admin")
+    static_user_dir = os.path.join(os.path.dirname(__file__), "static-user")
+    # 兼容仍使用旧构建目录的本地开发环境；正式部署只使用两个独立产物。
+    legacy_static_dir = os.path.join(os.path.dirname(__file__), "static")
     # 健康检查端点（必须在 SPA 通配路由之前注册，避免被拦截）
     @app.get("/health")
     async def health_check():
@@ -174,12 +178,17 @@ def create_app():
             "version": settings.APP_VERSION,
         }
 
-    if os.path.isdir(static_dir) and os.path.exists(os.path.join(static_dir, "index.html")):
-        # 挂载静态资源（JS/CSS/图片等）
-        app.mount("/assets", StaticFiles(directory=os.path.join(static_dir, "assets")), name="assets")
+    if any(os.path.exists(os.path.join(path, "index.html")) for path in (static_admin_dir, static_user_dir, legacy_static_dir)):
+        def _static_root(request: Request) -> str:
+            host = request.headers.get("host", "").split(":", 1)[0].lower()
+            if host in settings.user_app_hosts and os.path.exists(os.path.join(static_user_dir, "index.html")):
+                return static_user_dir
+            if os.path.exists(os.path.join(static_admin_dir, "index.html")):
+                return static_admin_dir
+            return legacy_static_dir
 
         @app.get("/{full_path:path}")
-        async def serve_spa(full_path: str = ""):
+        async def serve_spa(request: Request, full_path: str = ""):
             """
             SPA 回退路由 —— 所有非 API 路径返回 index.html
 
@@ -191,10 +200,15 @@ def create_app():
                 from fastapi.responses import JSONResponse
                 return JSONResponse({"detail": "Not Found"}, status_code=404)
 
-            index_path = os.path.join(static_dir, "index.html")
-            return FileResponse(index_path)
+            static_root = _static_root(request)
+            normalized = os.path.normpath(full_path).lstrip(os.sep)
+            # 静态文件只从当前站点对应目录读取，禁止通过路径跳出构建目录。
+            candidate = os.path.join(static_root, normalized)
+            if normalized and not normalized.startswith("..") and os.path.isfile(candidate):
+                return FileResponse(candidate)
+            return FileResponse(os.path.join(static_root, "index.html"))
 
-        logger.info(f"前端静态文件已挂载: {static_dir}")
+        logger.info(f"前端静态文件已挂载: admin={static_admin_dir}, user={static_user_dir}")
     else:
         logger.info("未找到前端静态文件，跳过挂载（开发模式请使用 npm run dev）")
 

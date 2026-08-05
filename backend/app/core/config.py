@@ -89,6 +89,9 @@ class Settings(BaseSettings):
     API_PORT: int = 18900  # 本地回环，不对外暴露
     CORS_ORIGINS: str = "http://localhost:5173,http://127.0.0.1:5173"
     TRUSTED_HOSTS: str = "localhost,127.0.0.1,::1"
+    # 这些主机名返回仅含用户对话功能的独立前端；管理端使用其余受信主机名。
+    # 生产环境示例：app.example.com。保持 Cookie 为 host-only，避免跨端携带。
+    USER_APP_HOSTS: str = ""
 
     @property
     def cors_origins(self) -> list[str]:
@@ -97,6 +100,10 @@ class Settings(BaseSettings):
     @property
     def trusted_hosts(self) -> list[str]:
         return [host.strip() for host in self.TRUSTED_HOSTS.split(",") if host.strip()]
+
+    @property
+    def user_app_hosts(self) -> set[str]:
+        return {host.strip().lower() for host in self.USER_APP_HOSTS.split(",") if host.strip()}
 
     # ---- 云端 Embedding 模型 ----
     EMBEDDING_MODE: str = "cloud"
@@ -136,6 +143,8 @@ class Settings(BaseSettings):
     AUTH_SESSION_SECRET: str = ""
     AUTH_USER_SESSION_DAYS: int = 7
     AUTH_ADMIN_SESSION_HOURS: int = 8
+    # 公网请求必须由 HTTPS 反向代理进入；localhost/回环地址保留 HTTP 开发能力。
+    AUTH_REQUIRE_HTTPS: bool = True
 
     # ---- 网络检索（RAG 未命中时的补充能力）----
     WEB_SEARCH_ENABLED: bool = False

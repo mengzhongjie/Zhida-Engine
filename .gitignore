@@ -60,6 +60,8 @@ node_modules/
 frontend-admin/dist/
 frontend-admin/build/
 backend/static/
+backend/static-admin/
+backend/static-user/
 .yarn/
 .pnpm/
 

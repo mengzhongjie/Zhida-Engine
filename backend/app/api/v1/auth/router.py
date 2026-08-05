@@ -13,13 +13,15 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import Response as RawResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import get_db
 from app.models.agent import Agent
-from app.models.auth import AccessCode, AccessCodeAgent, AdminUser, AuthSession, CaptchaChallenge, WebUser
+from app.models.auth import AccessCode, AccessCodeAgent, AccessCodeDailyUsage, AdminUser, AuthSession, CaptchaChallenge, Conversation, WebUser
+from app.models.qa import QAHistory
+from app.services.memory.memory_service import memory_service
 
 router = APIRouter(prefix="/auth", tags=["认证"])
 _attempts: dict[str, list[float]] = {}
@@ -73,6 +75,30 @@ def _hash_access_code(code: str) -> str:
 
 def _hash_token(token: str) -> str:
     return hmac.new(_pepper().encode(), token.encode(), hashlib.sha256).hexdigest()
+
+
+def _encrypt_access_code(code: str) -> str:
+    """用部署会话密钥加密兑换码，便于管理员以后重新复制。"""
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    key = hashlib.sha256(f"{_pepper()}:access-code:v1".encode()).digest()
+    nonce = os.urandom(12)
+    ciphertext = AESGCM(key).encrypt(nonce, code.encode(), b"zhida-access-code-v1")
+    return "v1:" + base64.b64encode(nonce + ciphertext).decode()
+
+
+def _decrypt_access_code(ciphertext: str | None) -> str | None:
+    if not ciphertext or not ciphertext.startswith("v1:"):
+        return None
+    try:
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+        combined = base64.b64decode(ciphertext[3:])
+        key = hashlib.sha256(f"{_pepper()}:access-code:v1".encode()).digest()
+        return AESGCM(key).decrypt(combined[:12], combined[12:], b"zhida-access-code-v1").decode()
+    except Exception:
+        # 部署密钥改变后旧密文不可恢复，但哈希登录仍不受影响。
+        return None
 
 
 def _password_hash(password: str) -> str:
@@ -132,21 +158,71 @@ async def _verify_captcha(payload: CaptchaVerifyIn, purpose: str, db: AsyncSessi
     await db.delete(challenge)
 
 
-async def _issue_session(response: Response, db: AsyncSession, role: str, principal_id: int) -> None:
+async def _issue_session(request: Request, response: Response, db: AsyncSession, role: str, principal_id: int) -> None:
+    # 登录时顺便回收历史过期记录；无需额外定时任务或 Redis。
+    await db.execute(delete(AuthSession).where(AuthSession.expires_at <= datetime.utcnow()))
     token = secrets.token_urlsafe(32)
-    expires = datetime.utcnow() + (timedelta(hours=settings.AUTH_ADMIN_SESSION_HOURS) if role == "admin" else timedelta(days=settings.AUTH_USER_SESSION_DAYS))
+    expires = _session_expiry(role)
     db.add(AuthSession(
         token_hash=_hash_token(token), role=role, expires_at=expires,
         admin_id=principal_id if role == "admin" else None,
         user_id=principal_id if role == "user" else None,
     ))
-    response.set_cookie(
-        key=f"zhida_{role}_session", value=token, httponly=True,
-        secure=not settings.DEBUG, samesite="lax", max_age=int((expires - datetime.utcnow()).total_seconds()), path="/",
+    _set_session_cookie(request, response, role, token, expires)
+
+
+def _session_expiry(role: str) -> datetime:
+    """返回某类会话的滑动有效期终点。"""
+    return datetime.utcnow() + (
+        timedelta(hours=settings.AUTH_ADMIN_SESSION_HOURS)
+        if role == "admin"
+        else timedelta(days=settings.AUTH_USER_SESSION_DAYS)
     )
 
 
-async def _principal(request: Request, db: AsyncSession, role: str):
+def _session_ttl(role: str) -> timedelta:
+    return (
+        timedelta(hours=settings.AUTH_ADMIN_SESSION_HOURS)
+        if role == "admin"
+        else timedelta(days=settings.AUTH_USER_SESSION_DAYS)
+    )
+
+
+def _request_is_https(request: Request) -> bool:
+    forwarded = request.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip().lower()
+    return request.url.scheme == "https" or forwarded == "https"
+
+
+def _set_session_cookie(request: Request, response: Response, role: str, token: str, expires: datetime) -> None:
+    """集中设置 Cookie，避免登录和续期的属性不一致。"""
+    response.set_cookie(
+        key=f"zhida_{role}_session",
+        # Cookie 的值不会在续期时改变，只有 Max-Age 被刷新。
+        value=token,
+        httponly=True,
+        # 本地回环调试允许 HTTP；公网由安全中间件强制 HTTPS，因此必须带 Secure。
+        secure=_request_is_https(request),
+        samesite="strict",
+        max_age=max(0, int((expires - datetime.utcnow()).total_seconds())),
+        path="/",
+    )
+
+
+async def _maybe_refresh_session(request: Request, response: Response, session: AuthSession, token: str, role: str) -> None:
+    """在接近到期时延长会话，避免高频请求反复写入 SQLite。
+
+    续期阈值是完整有效期的三分之一。管理员的 8 小时窗口与用户的
+    7 天窗口都会在正常使用中滑动延长，但会话本身从不绕过账号或兑换码校验。
+    """
+    now = datetime.utcnow()
+    if session.expires_at - now > _session_ttl(role) / 3:
+        return
+    expires = _session_expiry(role)
+    session.expires_at = expires
+    _set_session_cookie(request, response, role, token, expires)
+
+
+async def _principal(request: Request, response: Response, db: AsyncSession, role: str):
     token = request.cookies.get(f"zhida_{role}_session")
     if not token:
         raise HTTPException(status_code=401, detail="请先登录")
@@ -159,17 +235,22 @@ async def _principal(request: Request, db: AsyncSession, role: str):
     principal = await db.get(AdminUser if role == "admin" else WebUser, session.admin_id if role == "admin" else session.user_id)
     if principal is None or not principal.is_active:
         raise HTTPException(status_code=401, detail="账号不可用")
+    if role == "user":
+        code = await db.get(AccessCode, principal.access_code_id)
+        if code is None or code.status != "claimed" or (code.expires_at and code.expires_at < datetime.utcnow()):
+            raise HTTPException(status_code=401, detail="访问资格已失效，请联系管理员")
+    await _maybe_refresh_session(request, response, session, token, role)
     return principal
 
 
-async def require_admin(request: Request, db: AsyncSession = Depends(get_db)) -> AdminUser:
+async def require_admin(request: Request, response: Response, db: AsyncSession = Depends(get_db)) -> AdminUser:
     _require_session_secret()
-    return await _principal(request, db, "admin")
+    return await _principal(request, response, db, "admin")
 
 
-async def require_user(request: Request, db: AsyncSession = Depends(get_db)) -> WebUser:
+async def require_user(request: Request, response: Response, db: AsyncSession = Depends(get_db)) -> WebUser:
     _require_session_secret()
-    return await _principal(request, db, "user")
+    return await _principal(request, response, db, "user")
 
 
 async def ensure_bootstrap_admin(db: AsyncSession) -> None:
@@ -213,16 +294,31 @@ async def user_login(payload: UserLoginIn, request: Request, response: Response,
         await _verify_captcha(payload, "user", db)
         # 验证码与登录凭证各只使用一次，即使兑换码失效也不允许复用验证码。
         await db.commit()
-        code = (await db.execute(select(AccessCode).where(AccessCode.code_hash == _hash_access_code(payload.access_code)))).scalar_one_or_none()
+        code_hash = _hash_access_code(payload.access_code)
+        code = (await db.execute(select(AccessCode).where(AccessCode.code_hash == code_hash))).scalar_one_or_none()
         if code is None or code.status != "active" or (code.expires_at and code.expires_at < datetime.utcnow()):
-            raise HTTPException(status_code=401, detail="兑换码或验证码错误")
+            raise HTTPException(status_code=401, detail="激活码无效、已使用或已过期")
+        # 条件更新确保并发请求中只有一个能完成领取。领取后立即销毁可恢复明文，
+        # 管理员只能重置资格，不能再读取用户已经使用过的凭据。
+        claimed_at = datetime.utcnow()
+        claimed = await db.execute(
+            update(AccessCode).where(
+                AccessCode.id == code.id,
+                AccessCode.code_hash == code_hash,
+                AccessCode.status == "active",
+            ).values(status="claimed", claimed_at=claimed_at, code_ciphertext=None)
+        )
+        if claimed.rowcount != 1:
+            raise HTTPException(status_code=409, detail="激活码已被使用，请联系管理员")
         user = (await db.execute(select(WebUser).where(WebUser.access_code_id == code.id))).scalar_one_or_none()
         if user is None:
             user = WebUser(access_code_id=code.id)
             db.add(user)
             await db.flush()
         user.last_login_at = datetime.utcnow()
-        await _issue_session(response, db, "user", user.id)
+        # 用户端与管理端使用不同 Cookie 名称。两种身份可在本机开发环境并存，
+        # 不能因用户激活而清除管理端会话（Cookie 不区分 5173/5174 端口）。
+        await _issue_session(request, response, db, "user", user.id)
         return {"role": "user", "user_id": user.id}
     except HTTPException:
         _record_failed_attempt(key)
@@ -241,7 +337,8 @@ async def admin_login(payload: AdminLoginIn, request: Request, response: Respons
         if admin is None or not admin.is_active or not _verify_password(payload.password, admin.password_hash):
             raise HTTPException(status_code=401, detail="账号、密码或验证码错误")
         admin.last_login_at = datetime.utcnow()
-        await _issue_session(response, db, "admin", admin.id)
+        # 不清除用户端会话；正式部署中两个站点由不同主机名隔离，开发环境可并行测试。
+        await _issue_session(request, response, db, "admin", admin.id)
         return {"role": "admin", "username": admin.username}
     except HTTPException:
         _record_failed_attempt(key)
@@ -261,11 +358,11 @@ async def logout(request: Request, response: Response, db: AsyncSession = Depend
 
 
 @router.get("/me")
-async def get_me(request: Request, db: AsyncSession = Depends(get_db)):
+async def get_me(request: Request, response: Response, db: AsyncSession = Depends(get_db)):
     _require_session_secret()
     for role in ("admin", "user"):
         try:
-            principal = await _principal(request, db, role)
+            principal = await _principal(request, response, db, role)
             return {"role": role, "id": principal.id, "username": getattr(principal, "username", None)}
         except HTTPException:
             continue
@@ -274,14 +371,17 @@ async def get_me(request: Request, db: AsyncSession = Depends(get_db)):
 
 @router.post("/admin/access-codes")
 async def create_access_code(payload: AccessCodeCreateIn, response: Response, db: AsyncSession = Depends(get_db), _: AdminUser = Depends(require_admin)):
-    agents = (await db.execute(select(Agent.id).where(Agent.id.in_(payload.agent_ids)))).scalars().all()
+    agents = (await db.execute(select(Agent.id).where(
+        Agent.id.in_(payload.agent_ids), Agent.is_active == True,  # noqa: E712
+    ))).scalars().all()
     if len(set(agents)) != len(set(payload.agent_ids)):
-        raise HTTPException(status_code=422, detail="包含不存在的 Agent")
+        raise HTTPException(status_code=422, detail="包含不存在或未启用的 Agent，请先在 Agent 管理中启动")
     created = []
     for _ in range(payload.count):
         code_text = _new_access_code()
         code = AccessCode(
-            code_hash=_hash_access_code(code_text), code_hint=code_text[-8:], note=payload.note,
+            code_hash=_hash_access_code(code_text), code_hint=code_text[-8:],
+            code_ciphertext=_encrypt_access_code(code_text), note=payload.note,
             daily_question_limit=payload.daily_question_limit,
             expires_at=datetime.utcnow() + timedelta(days=payload.expires_days) if payload.expires_days else None,
         )
@@ -294,7 +394,7 @@ async def create_access_code(payload: AccessCodeCreateIn, response: Response, db
 
 
 async def _access_code_out(code: AccessCode, db: AsyncSession) -> dict:
-    if code.status == "active" and code.expires_at and code.expires_at < datetime.utcnow():
+    if code.status in {"active", "claimed"} and code.expires_at and code.expires_at < datetime.utcnow():
         code.status = "expired"
     agent_rows = (await db.execute(
         select(Agent.id, Agent.name).join(AccessCodeAgent, AccessCodeAgent.agent_id == Agent.id)
@@ -304,7 +404,8 @@ async def _access_code_out(code: AccessCode, db: AsyncSession) -> dict:
     return {
         "id": code.id, "code_hint": code.code_hint, "status": code.status,
         "daily_question_limit": code.daily_question_limit, "usage_today": usage.question_count if usage else 0,
-        "expires_at": code.expires_at, "note": code.note, "created_at": code.created_at,
+        "expires_at": code.expires_at, "claimed_at": code.claimed_at,
+        "note": code.note, "created_at": code.created_at,
         "agents": [{"id": agent_id, "name": name} for agent_id, name in agent_rows],
     }
 
@@ -313,6 +414,73 @@ async def _access_code_out(code: AccessCode, db: AsyncSession) -> dict:
 async def list_access_codes(db: AsyncSession = Depends(get_db), _: AdminUser = Depends(require_admin)):
     codes = (await db.execute(select(AccessCode).order_by(AccessCode.created_at.desc()))).scalars().all()
     return {"items": [await _access_code_out(code, db) for code in codes]}
+
+
+async def _rotate_access_code_value(code: AccessCode, db: AsyncSession) -> str:
+    """为不可恢复的历史记录换发新值，并撤销使用旧值建立的会话。"""
+    code_text = _new_access_code()
+    code.code_hash = _hash_access_code(code_text)
+    code.code_hint = code_text[-8:]
+    code.code_ciphertext = _encrypt_access_code(code_text)
+    user_ids = select(WebUser.id).where(WebUser.access_code_id == code.id)
+    await db.execute(delete(AuthSession).where(AuthSession.user_id.in_(user_ids)))
+    return code_text
+
+
+@router.post("/admin/access-codes/{code_id}/copy")
+async def copy_access_code(code_id: int, db: AsyncSession = Depends(get_db), _: AdminUser = Depends(require_admin)):
+    """仅返回尚未领取的激活码；领取后不再允许恢复明文。"""
+    code = await db.get(AccessCode, code_id)
+    if code is None:
+        raise HTTPException(status_code=404, detail="兑换码不存在")
+    if code.status != "active":
+        raise HTTPException(status_code=409, detail="激活码已领取或失效，不能再次查看")
+    code_text = _decrypt_access_code(code.code_ciphertext)
+    rotated = code_text is None
+    if rotated:
+        code_text = await _rotate_access_code_value(code, db)
+    return {"id": code.id, "access_code": code_text, "code_hint": code.code_hint, "rotated": rotated}
+
+
+@router.post("/admin/access-codes/copy/batch")
+async def copy_access_codes(payload: AccessCodeBatchIn, db: AsyncSession = Depends(get_db), _: AdminUser = Depends(require_admin)):
+    codes = (await db.execute(
+        select(AccessCode).where(AccessCode.id.in_(set(payload.ids))).order_by(AccessCode.created_at.desc())
+    )).scalars().all()
+    if not codes:
+        raise HTTPException(status_code=404, detail="未找到可复制的兑换码")
+    items, rotated_count, unavailable_count = [], 0, 0
+    for code in codes:
+        if code.status != "active":
+            unavailable_count += 1
+            continue
+        code_text = _decrypt_access_code(code.code_ciphertext)
+        if code_text is None:
+            code_text = await _rotate_access_code_value(code, db)
+            rotated_count += 1
+        items.append({"id": code.id, "access_code": code_text})
+    if not items:
+        raise HTTPException(status_code=409, detail="所选激活码均已领取或失效")
+    return {"items": items, "rotated_count": rotated_count, "unavailable_count": unavailable_count}
+
+
+@router.post("/admin/access-codes/{code_id}/reset-activation")
+async def reset_access_code_activation(code_id: int, db: AsyncSession = Depends(get_db), _: AdminUser = Depends(require_admin)):
+    """用户丢失 Cookie 时换发新的一次性激活码，并撤销旧设备会话。"""
+    code = await db.get(AccessCode, code_id)
+    if code is None:
+        raise HTTPException(status_code=404, detail="兑换码不存在")
+    if code.status in {"revoked", "expired"} or (code.expires_at and code.expires_at <= datetime.utcnow()):
+        raise HTTPException(status_code=409, detail="已停用或过期的访问资格不能重置")
+    code_text = _new_access_code()
+    code.code_hash = _hash_access_code(code_text)
+    code.code_hint = code_text[-8:]
+    code.code_ciphertext = _encrypt_access_code(code_text)
+    code.status = "active"
+    code.claimed_at = None
+    user_ids = select(WebUser.id).where(WebUser.access_code_id == code.id)
+    await db.execute(delete(AuthSession).where(AuthSession.user_id.in_(user_ids)))
+    return {"id": code.id, "access_code": code_text, "code_hint": code.code_hint}
 
 
 @router.put("/admin/access-codes/{code_id}/daily-limit")
@@ -333,7 +501,28 @@ async def revoke_access_code(code_id: int, db: AsyncSession = Depends(get_db), _
     if code is None:
         raise HTTPException(status_code=404, detail="兑换码不存在")
     code.status = "revoked"
+    user_ids = select(WebUser.id).where(WebUser.access_code_id == code.id)
+    await db.execute(delete(AuthSession).where(AuthSession.user_id.in_(user_ids)))
     return {"success": True, "id": code.id}
+
+
+async def _delete_access_code_users(db: AsyncSession, code_ids: list[int]) -> None:
+    user_ids = list((await db.execute(
+        select(WebUser.id).where(WebUser.access_code_id.in_(code_ids))
+    )).scalars().all())
+    if not user_ids:
+        return
+    # 会话与问答历史属于用户隐私；删除访问资格时同步清理，避免留下孤儿数据。
+    await db.execute(delete(AuthSession).where(AuthSession.user_id.in_(user_ids)))
+    await db.execute(delete(QAHistory).where(QAHistory.owner_type == "user", QAHistory.owner_id.in_(user_ids)))
+    await db.execute(delete(Conversation).where(Conversation.owner_type == "user", Conversation.owner_id.in_(user_ids)))
+    await db.execute(delete(WebUser).where(WebUser.id.in_(user_ids)))
+    # 长期记忆不在 SQLite；尽力按用户隔离键删除，失败不会阻止主库的隐私删除。
+    for user_id in user_ids:
+        try:
+            await memory_service.delete_all(user_id=f"user:{user_id}")
+        except Exception:
+            pass
 
 
 @router.delete("/admin/access-codes/{code_id}")
@@ -343,7 +532,7 @@ async def delete_access_code(code_id: int, db: AsyncSession = Depends(get_db), _
         raise HTTPException(status_code=404, detail="兑换码不存在")
     # 兑换码是网页用户的唯一登录凭据。删除时一并清理对应用户与会话，
     # 以满足外键约束并立即撤销已登录设备的访问权限。
-    await db.execute(delete(WebUser).where(WebUser.access_code_id == code.id))
+    await _delete_access_code_users(db, [code.id])
     await db.delete(code)
     return {"success": True, "id": code_id}
 
@@ -354,6 +543,6 @@ async def batch_delete_access_codes(payload: AccessCodeBatchIn, db: AsyncSession
     existing = (await db.execute(select(AccessCode.id).where(AccessCode.id.in_(ids)))).scalars().all()
     if not existing:
         raise HTTPException(status_code=404, detail="未找到可删除的兑换码")
-    await db.execute(delete(WebUser).where(WebUser.access_code_id.in_(existing)))
+    await _delete_access_code_users(db, list(existing))
     await db.execute(delete(AccessCode).where(AccessCode.id.in_(existing)))
     return {"success": True, "deleted": len(existing)}

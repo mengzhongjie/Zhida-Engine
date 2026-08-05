@@ -23,7 +23,7 @@
 - **🔍 RAG 问答** — 基于混合检索（向量 + 关键词）的智能问答，支持来源引用
 - **🤖 Agent 管理** — 创建 AI 助手，绑定知识库和 LLM 配置
 - **💬 管理台对话** — 选择已启用 Agent，直接使用其知识库进行对话
-- **🔐 网页访问控制** — 管理员使用账号、密码和图形验证码登录；用户使用受 Agent 授权的兑换码登录
+- **🔐 网页访问控制** — 管理员使用账号、密码和图形验证码登录；用户使用受 Agent 授权的一次性激活码登录
 - **🧠 长期记忆** — 基于 Mem0 的跨会话个性化记忆
 - **🔒 格式校验** — 上传文件自动检测真实类型，防止扩展名伪装，确保数据安全
 - **⚡ 可选 MinerU 解析** — 可选集成 MinerU 引擎，支持复杂 PDF 布局/OCR/公式识别
@@ -54,7 +54,7 @@
 | 框架 | React 19 / TypeScript 6 |
 | 构建工具 | Vite 8 |
 | UI 组件 | Ant Design 6 |
-| 部署 | 构建产物嵌入 FastAPI 静态文件服务 |
+| 部署 | 用户端、管理端分别构建；由 FastAPI 按站点主机名提供 |
 
 ---
 
@@ -78,17 +78,42 @@ python main.py
 cd frontend-admin
 npm install
 npm run dev
+# 用户端开发服务器（独立入口）
+npm run dev:user
 ```
 
-前端开发服务器在 `http://localhost:5173`，API 请求自动代理到后端 18900 端口。
+管理端开发服务器在 `http://localhost:5173`，用户端在 `http://localhost:5174`；二者均将 API 请求代理到后端 18900 端口。
 
 ### 生产构建
 
 ```bash
 cd frontend-admin
 npm run build
-# 构建产物输出到 backend/static/，由 FastAPI 直接 serve
+# 构建产物分别输出到 backend/static-admin/ 和 backend/static-user/
 ```
+
+### 公网双站点部署
+
+生产环境应为两个站点配置不同的 HTTPS 主机名，例如 `admin.example.com`（管理端）和 `app.example.com`（用户端）。两站点都反向代理 `/api/` 到同一后端，并保留原始 `Host` 请求头；后端据此提供对应前端。Cookie 使用 host-only 策略，因此用户站不会携带管理员会话 Cookie。
+
+```nginx
+location / {
+  proxy_pass http://127.0.0.1:18900;
+  proxy_set_header Host $host;
+  proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+同时在私有 `.env` 中声明两个公网主机名：
+
+```env
+ZHIDA_TRUSTED_HOSTS=admin.example.com,app.example.com
+ZHIDA_USER_APP_HOSTS=app.example.com
+ZHIDA_CORS_ORIGINS=https://admin.example.com,https://app.example.com
+ZHIDA_AUTH_REQUIRE_HTTPS=true
+```
+
+必须在 HTTPS 后运行；公网 HTTP 请求会被拒绝，认证 Cookie 使用 `HttpOnly + Secure + SameSite=Strict`，并在 HTTPS 响应中下发 HSTS。反向代理必须保留 `Host` 并传递 `X-Forwarded-Proto`，否则后端无法正确判断安全连接。
 
 ### Docker 部署
 
@@ -190,11 +215,14 @@ ENABLE_SOURCE_CITATION    # 来源引用
 ZHIDA_ADMIN_BOOTSTRAP_USERNAME=自行设置管理员账号
 ZHIDA_ADMIN_BOOTSTRAP_PASSWORD=自行设置强密码
 ZHIDA_AUTH_SESSION_SECRET=请设置至少32位随机字符串
+ZHIDA_USER_APP_HOSTS=app.example.com
 ```
 
 > 安全提示：`backend/.env` 已被 Git 忽略，不应将实际管理员凭据提交到仓库或写入公开文档。部署到公网前请使用唯一的强密码与认证密钥。
 
-管理员通过 `POST /api/v1/auth/admin/access-codes` 创建兑换码并指定可访问的 Agent；接口返回的 24 位兑换码只显示这一次，数据库只保存其 HMAC 哈希。每个兑换码均带独立的每日问答上限。
+管理员通过 `POST /api/v1/auth/admin/access-codes` 创建一次性激活码并指定可访问的 Agent。激活码在用户首次登录后立即变为“已激活”，完整码密文会被销毁，无法被管理员再次复制、也无法被第二个人用于登录。每个激活码只绑定一个匿名用户身份，因此历史会话、长期记忆和每日额度不会在不同持码人之间共享。
+
+会话使用 `HttpOnly + Secure + SameSite=Strict` Cookie。管理员默认有效期为 8 小时、用户默认为 7 天；在剩余有效期低于完整周期三分之一时，正常请求会触发一次滑动续期。用户清除浏览器数据或长期未访问导致 Cookie 失效时，管理员可在管理台“重置登录”换发一枚新的单次激活码；旧设备会立即下线，用户历史仍保留。停用、过期、删除访问资格或退出登录都会立即阻断后续会话；删除会同时清理该用户的会话与问答记录。
 
 ---
 

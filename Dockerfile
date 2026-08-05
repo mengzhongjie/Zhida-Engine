@@ -1,4 +1,4 @@
-# 管理台构建阶段：将 React 静态资源打包到后端的 static/ 目录。
+# 前端构建阶段：生成相互独立的用户端和管理端静态资源。
 FROM node:22-alpine AS frontend-build
 
 WORKDIR /app
@@ -18,7 +18,8 @@ COPY backend/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY backend/ ./
-COPY --from=frontend-build /app/backend/static ./static
+COPY --from=frontend-build /app/backend/static-admin ./static-admin
+COPY --from=frontend-build /app/backend/static-user ./static-user
 
 RUN useradd --create-home appuser && mkdir -p /data && chown -R appuser:appuser /app /data
 USER appuser
