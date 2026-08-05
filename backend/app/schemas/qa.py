@@ -5,7 +5,7 @@
 """
 
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 from pydantic import BaseModel, Field
 
 
@@ -21,6 +21,7 @@ class QAAskRequest(BaseModel):
     chat_type: Optional[str] = Field(None, description="聊天类型: private/group")
     user_id: Optional[str] = Field(None, description="提问用户 ID")
     stream: bool = Field(False, description="是否流式输出")
+    response_detail: Literal["concise", "detailed"] = Field("concise", description="本轮回答详略")
 
 
 class QASource(BaseModel):

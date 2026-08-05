@@ -44,6 +44,8 @@ def _agent_to_out(agent: Agent) -> AgentOut:
         avatar=agent.avatar,
         is_active=agent.is_active,
         status=agent.status,
+        persona_preset=agent.persona_preset or "professional",
+        persona_custom_instruction=agent.persona_custom_instruction,
         created_at=agent.created_at,
         updated_at=agent.updated_at,
     )
@@ -100,11 +102,15 @@ async def create_agent(
 
     Agent 创建后默认为 stopped 状态，需要手动启动。
     """
+    if request.persona_preset == "custom" and not (request.persona_custom_instruction or "").strip():
+        raise HTTPException(status_code=422, detail="自定义人格需要填写提示词")
     agent = Agent(
         name=request.name,
         description=request.description or "",
         avatar=request.avatar or "",
         reply_mode="ai",
+        persona_preset=request.persona_preset,
+        persona_custom_instruction=request.persona_custom_instruction if request.persona_preset == "custom" else None,
         is_active=False,
         status="stopped",
     )
@@ -172,6 +178,10 @@ async def update_agent(
         raise HTTPException(status_code=404, detail="Agent 不存在")
 
     update_data = request.model_dump(exclude_unset=True)
+    if update_data.get("persona_preset") == "custom" and not (update_data.get("persona_custom_instruction") or agent.persona_custom_instruction or "").strip():
+        raise HTTPException(status_code=422, detail="自定义人格需要填写提示词")
+    if update_data.get("persona_preset") and update_data["persona_preset"] != "custom":
+        update_data["persona_custom_instruction"] = None
     for key, value in update_data.items():
         setattr(agent, key, value)
 

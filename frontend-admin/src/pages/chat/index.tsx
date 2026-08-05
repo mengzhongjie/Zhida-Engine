@@ -1,14 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Alert, Button, Empty, Select, Spin, Tag, Typography, message } from 'antd'
+import { Alert, Button, Empty, Select, Segmented, Spin, Typography, message } from 'antd'
 import { SendOutlined } from '@ant-design/icons'
 import { api } from '@/services/api'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 
 const { Text } = Typography
 
 type Agent = { id: number; name: string; description?: string; avatar?: string; is_active: boolean }
 type Source = { document_name: string; chunk_text: string; score: number; source_type: string }
 type Answer = { answer: string; sources: Source[]; response_time_ms: number; model_used: string; from_cache: boolean }
-type ChatMessage = { id: string; role: 'user' | 'assistant'; content: string; sources?: Source[]; meta?: Pick<Answer, 'response_time_ms' | 'model_used' | 'from_cache'>; pending?: boolean }
+type ChatMessage = { id: string; role: 'user' | 'assistant'; content: string; sources?: Source[]; meta?: Pick<Answer, 'response_time_ms' | 'model_used' | 'from_cache'>; pending?: boolean; streaming?: boolean }
 
 const createId = () => globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`
 
@@ -19,6 +21,7 @@ export default function Chat() {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [loadingAgents, setLoadingAgents] = useState(true)
   const [asking, setAsking] = useState(false)
+  const [responseDetail, setResponseDetail] = useState<'concise' | 'detailed'>('concise')
   const [mobile, setMobile] = useState(() => window.innerWidth <= 720)
   const bottomRef = useRef<HTMLDivElement>(null)
   const sessionIdRef = useRef(`admin-${createId()}`)
@@ -63,7 +66,7 @@ export default function Chat() {
     if (!question || !agentId || asking) return
     const userMessage: ChatMessage = { id: createId(), role: 'user', content: question }
     const pendingId = createId()
-    setMessages(previous => [...previous, userMessage, { id: pendingId, role: 'assistant', content: '', pending: true }])
+    setMessages(previous => [...previous, userMessage, { id: pendingId, role: 'assistant', content: '', pending: true, streaming: true }])
     setInput('')
     setAsking(true)
     try {
@@ -82,6 +85,7 @@ export default function Chat() {
           chat_type: 'private',
           user_id: 'admin-console',
           stream: true,
+          response_detail: responseDetail,
         }),
       })
       if (!response.ok || !response.body) {
@@ -97,13 +101,14 @@ export default function Chat() {
         const data = JSON.parse(rawData)
         if (event === 'delta') {
           setMessages(previous => previous.map(item => item.id === pendingId ? {
-            ...item, pending: false, content: item.content + (data.content || ''),
+            ...item, pending: false, streaming: true, content: item.content + (data.content || ''),
           } : item))
         } else if (event === 'done') {
           completed = true
           setMessages(previous => previous.map(item => item.id === pendingId ? {
             ...item,
             pending: false,
+            streaming: false,
             sources: data.sources || [],
             meta: { response_time_ms: data.response_time_ms || 0, model_used: data.model_used || '', from_cache: false },
           } : item))
@@ -154,10 +159,10 @@ export default function Chat() {
         {!messages.length && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="从一个问题开始。回答会结合当前 Agent 已挂载的知识库。" className="chat-empty" />}
         {messages.map(item => <article className={`chat-message chat-message-${item.role}`} key={item.id}>
           <div className="chat-message-label">{item.role === 'user' ? '你' : (selectedAgent?.name || 'AI')}</div>
-          <div className={`chat-bubble ${item.pending ? 'is-pending' : ''}`}>
-            {item.pending ? <Spin size="small" tip="正在检索并生成回答…" /> : <div className="chat-content">{item.content}</div>}
+          <div className={`chat-bubble ${item.pending ? 'is-pending' : ''} ${item.streaming ? 'is-streaming' : ''}`}>
+            {item.pending ? <div className="stream-thinking" role="status"><span className="stream-thinking-dots"><i /><i /><i /></span><span>正在生成回答</span></div> : item.role === 'assistant' ? <div className="chat-content markdown-content"><ReactMarkdown remarkPlugins={[remarkGfm]}>{item.content}</ReactMarkdown>{item.streaming && <span className="stream-caret" aria-hidden="true" />}</div> : <div className="chat-content">{item.content}</div>}
           </div>
-          {item.sources && item.sources.length > 0 && <div className="chat-reference"><span>引用资料</span>{[...new Set(item.sources.map(source => source.document_name))].map(name => <Tag key={name}>{name}</Tag>)}</div>}
+          {item.role === 'assistant' && !item.pending && <div className="ai-answer-disclaimer">回答由 AI 生成，知识库可能包含老旧信息，仅供参考。</div>}
           {item.meta && <div className="chat-meta"><span>{item.meta.model_used || '已配置模型'}</span><span>{Math.round(item.meta.response_time_ms)} ms</span>{item.meta.from_cache && <span>缓存命中</span>}</div>}
         </article>)}
         <div ref={bottomRef} />
@@ -166,7 +171,7 @@ export default function Chat() {
         <textarea value={input} onChange={event => setInput(event.target.value)} onKeyDown={event => {
           if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); void send() }
         }} placeholder={agentId ? (mobile ? '输入问题…' : '输入问题；Enter 换行，Ctrl/Cmd + Enter 发送') : '请先选择已启用 Agent'} disabled={!agentId || asking} rows={3} />
-        <Button type="primary" icon={<SendOutlined />} onClick={() => void send()} loading={asking} disabled={!input.trim() || !agentId}>发送</Button>
+        <div className="chat-composer-actions"><Segmented className="response-detail-picker" value={responseDetail} onChange={value => setResponseDetail(value as 'concise' | 'detailed')} options={[{ value: 'concise', label: '简洁' }, { value: 'detailed', label: '详细' }]} disabled={asking} /><Button type="primary" icon={<SendOutlined />} onClick={() => void send()} loading={asking} disabled={!input.trim() || !agentId}>发送</Button></div>
         </div>
       </div>
     </section>

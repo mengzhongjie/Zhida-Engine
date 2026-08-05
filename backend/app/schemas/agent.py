@@ -5,7 +5,7 @@
 """
 
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 from pydantic import BaseModel, Field
 
 
@@ -18,6 +18,8 @@ class AgentCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=100, description="Agent 名称")
     description: Optional[str] = Field(None, description="Agent 描述")
     avatar: Optional[str] = Field(None, description="头像 URL 或 emoji")
+    persona_preset: Literal["professional", "tutor", "friendly", "direct", "custom"] = "professional"
+    persona_custom_instruction: Optional[str] = Field(None, max_length=2000)
 
 
 class AgentUpdate(BaseModel):
@@ -26,6 +28,8 @@ class AgentUpdate(BaseModel):
     description: Optional[str] = Field(None, description="Agent 描述")
     avatar: Optional[str] = Field(None, description="头像 URL 或 emoji")
     is_active: Optional[bool] = Field(None, description="是否启用")
+    persona_preset: Optional[Literal["professional", "tutor", "friendly", "direct", "custom"]] = None
+    persona_custom_instruction: Optional[str] = Field(None, max_length=2000)
 
 
 class AgentOut(BaseModel):
@@ -36,6 +40,8 @@ class AgentOut(BaseModel):
     avatar: Optional[str] = None
     is_active: bool
     status: str
+    persona_preset: str = "professional"
+    persona_custom_instruction: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 

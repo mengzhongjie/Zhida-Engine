@@ -10,6 +10,8 @@ import {
   EditOutlined, PlusOutlined,
 } from '@ant-design/icons'
 import { api } from '../../services/api'
+import PersonaPicker, { defaultPersonaPresets } from '../../components/PersonaPicker'
+import type { PersonaPreset } from '../../components/PersonaPicker'
 import zhidaLogo from '../../assets/zhida-logo.png'
 
 const { Title } = Typography
@@ -24,6 +26,8 @@ interface AgentInfo {
   today_messages: number
   today_answers: number
   success_rate: number
+  persona_preset: 'professional' | 'tutor' | 'friendly' | 'direct' | 'custom'
+  persona_custom_instruction?: string
 }
 
 interface KnowledgeBase {
@@ -35,7 +39,6 @@ interface KnowledgeBase {
   agent_id: number | null
   is_active: boolean
 }
-
 export default function AgentDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
@@ -49,6 +52,7 @@ export default function AgentDetail() {
   const [selectedKbIds, setSelectedKbIds] = useState<number[]>([])
   const [mountModalLoading, setMountModalLoading] = useState(false)
   const [editingName, setEditingName] = useState(false); const [nameForm] = Form.useForm()
+  const [personaPresets, setPersonaPresets] = useState<PersonaPreset[]>(defaultPersonaPresets)
 
   const loadAgent = useCallback(async () => {
     if (!id) return
@@ -78,6 +82,7 @@ export default function AgentDetail() {
   }, [id])
 
   useEffect(() => { loadAgent() }, [loadAgent])
+  useEffect(() => { api.get<PersonaPreset[]>('/admin/persona-presets').then(setPersonaPresets).catch(() => undefined) }, [])
   useEffect(() => {
     if (activeTab === 'knowledge') loadKnowledgeBases()
   }, [activeTab, loadKnowledgeBases])
@@ -93,7 +98,14 @@ export default function AgentDetail() {
     }
   }
 
-  const saveName = async () => { if (!agent) return; const values = await nameForm.validateFields(); const updated = await api.put<AgentInfo>(`/agents/${agent.id}`, values); setAgent(updated); setEditingName(false); message.success('Agent 信息已更新') }
+  const saveName = async () => {
+    if (!agent) return
+    const values = await nameForm.validateFields()
+    const selectedPreset = personaPresets.find(item => item.key === values.persona_preset)
+    if (selectedPreset) await api.put(`/admin/persona-presets/${selectedPreset.key}`, { name: selectedPreset.name, instruction: selectedPreset.instruction })
+    const updated = await api.put<AgentInfo>(`/agents/${agent.id}`, values)
+    setAgent(updated); setEditingName(false); message.success('Agent 信息与回答人格已更新')
+  }
 
   const openMountModal = async () => {
     setMountModalVisible(true)
@@ -186,10 +198,12 @@ export default function AgentDetail() {
         <Tabs activeKey={activeTab} onChange={setActiveTab} items={[
           {
             key: 'overview', label: '概览', children: (
-              <Card size="small" title="Agent 概览" extra={<Button icon={<EditOutlined />} onClick={() => { nameForm.setFieldsValue({ name: agent.name, description: agent.description }); setEditingName(true) }}>编辑</Button>}><Descriptions className="agent-overview-descriptions" bordered column={2}>
+              <Card size="small" title="Agent 概览" extra={<Button icon={<EditOutlined />} onClick={() => { nameForm.setFieldsValue({ name: agent.name, description: agent.description, persona_preset: agent.persona_preset, persona_custom_instruction: agent.persona_custom_instruction }); setEditingName(true) }}>编辑</Button>}><Descriptions className="agent-overview-descriptions" bordered column={2}>
                 <Descriptions.Item label="名称">{agent.name}</Descriptions.Item>
                 <Descriptions.Item label="状态">{statusTag}</Descriptions.Item>
                 <Descriptions.Item label="回复方式">AI 回复</Descriptions.Item>
+                <Descriptions.Item label="回答人格">{agent.persona_preset === 'custom' ? '自定义人格' : personaPresets.find(item => item.key === agent.persona_preset)?.name}</Descriptions.Item>
+                <Descriptions.Item label="人格提示词" span={2}>{agent.persona_preset === 'custom' ? agent.persona_custom_instruction || '未填写' : personaPresets.find(item => item.key === agent.persona_preset)?.instruction}</Descriptions.Item>
                 <Descriptions.Item label="可用状态">{agent.is_active ? <Tag color="green">已启用</Tag> : <Tag>已停用</Tag>}</Descriptions.Item>
                 <Descriptions.Item label="描述" span={2}>{agent.description || '暂无描述'}</Descriptions.Item>
               </Descriptions></Card>
@@ -211,7 +225,7 @@ export default function AgentDetail() {
       <Modal title="挂载知识库" open={mountModalVisible} onOk={mountKnowledgeBases} onCancel={() => setMountModalVisible(false)} confirmLoading={mountModalLoading} okText="确认挂载" cancelText="取消" width={700}>
         <Table rowKey="id" loading={mountModalLoading} dataSource={availableKbList} columns={knowledgeColumns.slice(0, 4)} rowSelection={{ selectedRowKeys: selectedKbIds, onChange: (keys) => setSelectedKbIds(keys.map(Number)) }} pagination={{ pageSize: 6 }} size="small" locale={{ emptyText: '暂无可挂载的知识库' }} />
       </Modal>
-      <Modal title="编辑 Agent" open={editingName} onCancel={() => setEditingName(false)} onOk={saveName}><Form form={nameForm} layout="vertical"><Form.Item name="name" label="名称" rules={[{ required: true, message: '请输入名称' }]}><Input /></Form.Item><Form.Item name="description" label="描述"><Input.TextArea rows={3} maxLength={200} /></Form.Item></Form></Modal>
+      <Modal title="编辑 Agent" open={editingName} onCancel={() => setEditingName(false)} onOk={() => void saveName()}><Form form={nameForm} layout="vertical"><Form.Item name="name" label="名称" rules={[{ required: true, message: '请输入名称' }]}><Input /></Form.Item><Form.Item name="description" label="描述"><Input.TextArea rows={3} maxLength={200} /></Form.Item><Form.Item noStyle shouldUpdate>{({ getFieldValue, setFieldValue }) => <Form.Item label="回答人格"><PersonaPicker value={getFieldValue('persona_preset') || 'professional'} customInstruction={getFieldValue('persona_custom_instruction') || ''} presets={personaPresets} editablePreset onChange={value => setFieldValue('persona_preset', value)} onCustomInstructionChange={value => setFieldValue('persona_custom_instruction', value)} onPresetInstructionChange={value => setPersonaPresets(items => items.map(item => item.key === getFieldValue('persona_preset') ? { ...item, instruction: value } : item))} /></Form.Item>}</Form.Item></Form></Modal>
     </div>
   )
 }

@@ -8,7 +8,8 @@ from datetime import datetime, date, timedelta, time as dt_time
 import platform
 import sys
 import json
-from typing import Optional
+from typing import Optional, Literal
+from pydantic import BaseModel, Field
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, text
@@ -22,6 +23,7 @@ from app.models.knowledge import KnowledgeBase, Document
 from app.models.qa import QAHistory
 from app.models.llm_config import LLMConfig
 from app.models.web_search_config import WebSearchConfig
+from app.models.persona_preset import PersonaPreset, DEFAULT_PERSONA_PRESETS
 from app.schemas.admin import (
     DashboardStatsOut,
     ModuleSwitchesOut,
@@ -47,6 +49,44 @@ from app.core.security import encrypt_api_key, decrypt_api_key, mask_api_key
 from app.services.knowledge.data_integrity import data_integrity_service
 
 router = APIRouter(prefix="/admin", tags=["管理后台"])
+
+
+class PersonaPresetOut(BaseModel):
+    key: Literal["professional", "tutor", "friendly", "direct"]
+    name: str
+    instruction: str
+
+
+class PersonaPresetUpdate(BaseModel):
+    name: str = Field(min_length=1, max_length=50)
+    instruction: str = Field(min_length=1, max_length=2000)
+
+
+async def load_persona_presets(db: AsyncSession) -> list[PersonaPresetOut]:
+    """将持久化人格提示词加载给问答流水线。"""
+    rows = (await db.execute(select(PersonaPreset).order_by(PersonaPreset.id))).scalars().all()
+    by_key = {row.key: row for row in rows}
+    from app.services.qa.prompt import prompt_template
+    prompt_template.set_persona_presets({key: row.instruction for key, row in by_key.items()})
+    return [PersonaPresetOut(key=key, name=by_key[key].name if key in by_key else value["name"], instruction=by_key[key].instruction if key in by_key else value["instruction"]) for key, value in DEFAULT_PERSONA_PRESETS.items()]
+
+
+@router.get("/persona-presets", response_model=list[PersonaPresetOut])
+async def get_persona_presets(db: AsyncSession = Depends(get_db)):
+    return await load_persona_presets(db)
+
+
+@router.put("/persona-presets/{preset_key}", response_model=PersonaPresetOut)
+async def update_persona_preset(preset_key: Literal["professional", "tutor", "friendly", "direct"], request: PersonaPresetUpdate, db: AsyncSession = Depends(get_db)):
+    row = (await db.execute(select(PersonaPreset).where(PersonaPreset.key == preset_key))).scalar_one_or_none()
+    if row is None:
+        row = PersonaPreset(key=preset_key, name=request.name, instruction=request.instruction)
+        db.add(row)
+    else:
+        row.name, row.instruction = request.name, request.instruction
+    await db.flush()
+    await load_persona_presets(db)
+    return PersonaPresetOut(key=preset_key, name=row.name, instruction=row.instruction)
 
 
 @router.get("/reliability")

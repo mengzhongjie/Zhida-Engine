@@ -13,6 +13,8 @@ import {
   ArrowLeftOutlined, RobotOutlined, BookOutlined, CheckOutlined,
 } from '@ant-design/icons'
 import { api } from '../../services/api'
+import PersonaPicker, { defaultPersonaPresets } from '../../components/PersonaPicker'
+import type { PersonaPreset } from '../../components/PersonaPicker'
 
 const { Title, Text } = Typography
 
@@ -31,7 +33,6 @@ const steps = [
   { title: '知识库', icon: <BookOutlined /> },
   { title: '确认创建', icon: <CheckOutlined /> },
 ]
-
 export default function AgentNew() {
   const navigate = useNavigate()
   const [current, setCurrent] = useState(0)
@@ -40,15 +41,19 @@ export default function AgentNew() {
 
   const [kbList, setKbList] = useState<KnowledgeBase[]>([])
   const [kbFilter, setKbFilter] = useState<'all' | 'independent'>('all')
+  const [personaPresets, setPersonaPresets] = useState<PersonaPreset[]>(defaultPersonaPresets)
 
   const [formData, setFormData] = useState({
     name: '',
     description: '',
+    persona_preset: 'professional',
+    persona_custom_instruction: '',
     selected_kb_ids: [] as number[],
   })
 
   useEffect(() => {
     loadKnowledgeBases()
+    api.get<PersonaPreset[]>('/admin/persona-presets').then(setPersonaPresets).catch(() => undefined)
   }, [])
 
   const loadKnowledgeBases = async () => {
@@ -81,6 +86,8 @@ export default function AgentNew() {
       const agent = await api.post<any>('/agents', {
         name: formData.name,
         description: formData.description,
+        persona_preset: formData.persona_preset,
+        persona_custom_instruction: formData.persona_custom_instruction,
       })
 
       if (formData.selected_kb_ids.length > 0) {
@@ -165,6 +172,9 @@ export default function AgentNew() {
                   maxLength={200}
                 />
               </Form.Item>
+              <Form.Item label="回答人格">
+                <PersonaPicker value={formData.persona_preset} customInstruction={formData.persona_custom_instruction} presets={personaPresets} onChange={(value) => updateField('persona_preset', value)} onCustomInstructionChange={(value) => updateField('persona_custom_instruction', value)} />
+              </Form.Item>
             </Form>
           </div>
         )
@@ -209,6 +219,8 @@ export default function AgentNew() {
               <Descriptions column={1} bordered size="small">
                 <Descriptions.Item label="名称">{formData.name || '未设置'}</Descriptions.Item>
                 <Descriptions.Item label="回复方式">AI 回复</Descriptions.Item>
+                <Descriptions.Item label="回答人格">{formData.persona_preset === 'custom' ? '自定义人格' : personaPresets.find(item => item.key === formData.persona_preset)?.name}</Descriptions.Item>
+                <Descriptions.Item label="人格提示词" span={2}>{formData.persona_preset === 'custom' ? formData.persona_custom_instruction || '未填写' : personaPresets.find(item => item.key === formData.persona_preset)?.instruction}</Descriptions.Item>
                 <Descriptions.Item label="知识库">
                   {formData.selected_kb_ids.length > 0
                     ? `${formData.selected_kb_ids.length} 个知识库`

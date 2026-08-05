@@ -29,11 +29,14 @@ class PromptTemplate:
 1. 优先根据下方【参考内容】回答，不要编造信息；网络内容需谨慎表述
 2. 如果参考内容中没有相关信息，请明确说明不确定性
 3. 回答要简洁、准确，优先使用中文
-4. 只输出自然语言纯文本，不使用 Markdown 标记；不要使用 #、*、-、``` 等排版语法
+4. 使用清晰、克制的 Markdown 排版：段落、短列表、加粗和必要的代码块均可使用；列表项之间不要插入空行，不要为了排版堆砌标题或空行
 5. 如果参考知识中有多个相关片段，请综合整理后给出完整回答
 6. 回答中不要提及"参考知识"、"知识库"等内部术语
 7. 网络补充资料用于填补本地内容缺失的身份、全名等事实；来源冲突时应说明不确定性，不要强行下结论
-8. 简单问题用一段回答；复杂问题按语义分成2到5段，段落之间空一行
+8. 简单问题用一段回答；复杂问题先给结论，再按语义分段或列点展开
+
+## 回答身份与详略
+{profile_section}
 
 ## 当前时间
 {current_time}
@@ -120,6 +123,26 @@ class PromptTemplate:
     # 构建方法
     # ================================================================
 
+    PERSONA_PRESETS = {
+        "professional": "你是一位专业顾问。表达严谨、准确、克制；先给明确结论，再说明依据与边界。",
+        "tutor": "你是一位耐心导师。循序渐进地解释概念，必要时给出小例子和下一步建议，但不要居高临下。",
+        "friendly": "你是一位亲切的知识伙伴。自然友好、易懂、有温度；避免空泛客套，重点帮助用户真正解决问题。",
+        "direct": "你是一位务实的行动助手。先给可执行结论或步骤，语言直接、简短，避免重复题目和泛泛铺垫。",
+    }
+
+    def set_persona_presets(self, presets: dict[str, str]) -> None:
+        """载入管理员维护的预设；缺项仍使用内置默认值。"""
+        self.PERSONA_PRESETS = {**self.PERSONA_PRESETS, **presets}
+
+    def set_persona_presets(self, presets: dict[str, str]) -> None:
+        """载入数据库中的管理员配置；缺项仍保留内置安全默认值。"""
+        self.PERSONA_PRESETS = {**self.PERSONA_PRESETS, **presets}
+
+    DETAIL_PRESETS = {
+        "concise": "回答以简洁为先：通常先用 1 至 3 段或少量要点解决问题；只保留必要背景。",
+        "detailed": "回答需要较完整：先给摘要结论，再分层解释背景、依据、步骤、风险或例外；充分利用已提供的相关资料，不要为了凑长度重复，也不要让每个列表项各占一个空段落。",
+    }
+
     def build_qa_prompt(
         self,
         question: str,
@@ -127,6 +150,9 @@ class PromptTemplate:
         source_info: str = "",
         include_sources: bool = False,
         conversation_context: str = "",
+        persona_preset: str = "professional",
+        persona_custom_instruction: str = "",
+        response_detail: str = "concise",
     ) -> str:
         """
         构建问答 Prompt
@@ -148,11 +174,21 @@ class PromptTemplate:
             f"## 最近对话\n{conversation_context}\n"
             if conversation_context else ""
         )
+        persona_instruction = (
+            persona_custom_instruction.strip()
+            if persona_preset == "custom" and persona_custom_instruction.strip()
+            else self.PERSONA_PRESETS.get(persona_preset, self.PERSONA_PRESETS['professional'])
+        )
+        profile_section = (
+            f"{persona_instruction}\n"
+            f"{self.DETAIL_PRESETS.get(response_detail, self.DETAIL_PRESETS['concise'])}"
+        )
         return self.DEFAULT_SYSTEM_PROMPT.format(
             current_time=current_time,
             context=context,
             conversation_section=conversation_section,
             question=question,
+            profile_section=profile_section,
         )
 
     def build_ecommerce_prompt(

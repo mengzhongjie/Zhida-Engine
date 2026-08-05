@@ -325,18 +325,23 @@ class AnswerGenerator:
         enable_memory: bool = True,
         reply_mode: str = "auto",
         conversation_history: Optional[list[dict[str, str]]] = None,
+        persona_preset: str = "professional",
+        persona_custom_instruction: str = "",
+        response_detail: str = "concise",
+        max_tokens: int = 2048,
     ) -> AnswerResult:
         """合并同一用户同一上下文下并发到达的问答，避免重复检索和模型调用。"""
         key = qa_request_coalescer.make_key(
             agent_id=agent_id, user_id=user_id, knowledge_base_ids=sorted(knowledge_base_ids),
             question=" ".join(question.split()), reply_mode=reply_mode,
-            conversation_history=conversation_history or [], system_prompt=system_prompt or "",
+            conversation_history=conversation_history or [], system_prompt=f"{system_prompt or ''}:{persona_preset}:{persona_custom_instruction}:{response_detail}:{max_tokens}",
         )
         return await qa_request_coalescer.run(key, lambda: self._generate(
             knowledge_base_ids=knowledge_base_ids, question=question, top_k=top_k,
             system_prompt=system_prompt, include_sources=include_sources, temperature=temperature,
             user_id=user_id, agent_id=agent_id, enable_memory=enable_memory,
             reply_mode=reply_mode, conversation_history=conversation_history,
+            persona_preset=persona_preset, persona_custom_instruction=persona_custom_instruction, response_detail=response_detail, max_tokens=max_tokens,
         ))
 
     async def _generate(
@@ -352,6 +357,10 @@ class AnswerGenerator:
         enable_memory: bool = True,
         reply_mode: str = "auto",
         conversation_history: Optional[list[dict[str, str]]] = None,
+        persona_preset: str = "professional",
+        persona_custom_instruction: str = "",
+        response_detail: str = "concise",
+        max_tokens: int = 2048,
     ) -> AnswerResult:
         """
         生成回答 —— 端到端流程
@@ -486,6 +495,9 @@ class AnswerGenerator:
                 source_info=source_info,
                 include_sources=include_sources and settings.ENABLE_SOURCE_CITATION,
                 conversation_context=conversation_context,
+                persona_preset=persona_preset,
+                persona_custom_instruction=persona_custom_instruction,
+                response_detail=response_detail,
             )
 
         generation_start = time.time()
@@ -499,7 +511,7 @@ class AnswerGenerator:
                 chat_result = await llm_gateway.chat(
                     prompt=prompt,
                     temperature=temperature,
-                    max_tokens=2048,
+                    max_tokens=max_tokens,
                 )
                 answer_text = chat_result.text
                 model_used = chat_result.model_used or llm_gateway.primary_model_name or "unknown"
@@ -577,6 +589,12 @@ class AnswerGenerator:
         agent_id: Optional[int] = None,
         user_id: Optional[str] = None,
         on_complete: Optional[Callable[[AnswerResult], None]] = None,
+        conversation_history: Optional[list[dict[str, str]]] = None,
+        enable_memory: bool = True,
+        persona_preset: str = "professional",
+        persona_custom_instruction: str = "",
+        response_detail: str = "concise",
+        max_tokens: int = 2048,
     ) -> AsyncIterator[str]:
         """
         流式生成回答 —— 逐 token 返回
@@ -595,8 +613,16 @@ class AnswerGenerator:
                 temperature=temperature,
                 agent_id=agent_id,
                 user_id=user_id,
+                conversation_history=conversation_history,
+                enable_memory=enable_memory,
+                persona_preset=persona_preset,
+                persona_custom_instruction=persona_custom_instruction,
+                response_detail=response_detail,
+                max_tokens=max_tokens,
             )
             yield result.answer
+            if on_complete:
+                on_complete(result)
             return
 
         total_start = time.time()
@@ -616,20 +642,43 @@ class AnswerGenerator:
         # 构建上下文；无结果或身份类问题信息不完整时补充网络资料。
         context = prompt_template.build_context_from_results(results) if results else "知识库中暂无相关内容"
         web_search_count = 0
+        supplemental_sources: list[dict] = []
         if self._needs_web_supplement(question, results):
             search_query = self._build_web_search_query(question, results)
             logger.info(f"流式回答本地信息存在缺口，触发联网补充（显式授权={self._explicitly_requests_web(question)}）: {search_query}")
             web_search_count = 1
             web_results = await web_search_service.search(search_query)
-            web_context, _ = self._web_context_and_sources(web_results)
+            web_context, supplemental_sources = self._web_context_and_sources(web_results)
             if web_context:
                 context = f"{context}\n\n{web_context}"
+
+        memory_context = ""
+        if enable_memory and memory_service.is_available:
+            try:
+                memory_text = await memory_service.get_relevant_memories(
+                    query=question, user_id=user_id,
+                    agent_id=str(agent_id) if agent_id else None, limit=5,
+                )
+                if memory_text:
+                    memory_context = f"\n\n【用户相关记忆】\n{memory_text}"
+            except Exception as exc:
+                logger.debug(f"[Memory] 流式记忆检索失败: {exc}")
+
+        conversation_context = "\n".join(
+            f"{'用户' if item.get('role') == 'user' else '助手'}：{item.get('content', '')[:1000]}"
+            for item in (conversation_history or [])[-12:]
+            if item.get("content")
+        )
 
         # 构建 Prompt
         prompt = prompt_template.build_qa_prompt(
             question=question,
-            context=context,
+            context=context + memory_context,
             include_sources=include_sources and settings.ENABLE_SOURCE_CITATION,
+            conversation_context=conversation_context,
+            persona_preset=persona_preset,
+            persona_custom_instruction=persona_custom_instruction,
+            response_detail=response_detail,
         )
 
         # 流式调用 LLM。完整答案在结束后异步上报 Langfuse；不影响每个片段即时返回。
@@ -644,6 +693,7 @@ class AnswerGenerator:
                 async for chunk in llm_gateway.chat_stream(
                     prompt=prompt,
                     temperature=temperature,
+                    max_tokens=max_tokens,
                 ):
                     answer_parts.append(chunk)
                     yield chunk
@@ -678,7 +728,7 @@ class AnswerGenerator:
                 try:
                     on_complete(AnswerResult(
                         answer=answer_text,
-                        sources=self._unique_sources(results) if results else [],
+                        sources=(self._unique_sources(results) if results else []) + supplemental_sources,
                         retrieval_time_ms=retrieval_time,
                         generation_time_ms=generation_time,
                         model_used=model_used,

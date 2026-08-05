@@ -42,6 +42,8 @@ class Agent(Base):
 
     # 配置
     reply_mode = Column(String(20), default="auto", comment="回复模式: auto(自动)/manual(手动)/hybrid(混合)")
+    persona_preset = Column(String(30), default="professional", nullable=False, comment="人格预设")
+    persona_custom_instruction = Column(Text, nullable=True, comment="自定义人格提示词")
 
     # 时间戳
     created_at = Column(DateTime, default=datetime.utcnow, comment="创建时间")

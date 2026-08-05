@@ -8,7 +8,8 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from typing import Literal
+from sqlalchemy import or_, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,21 +29,26 @@ class UserAskIn(BaseModel):
     agent_id: int
     question: str = Field(min_length=1, max_length=2000)
     conversation_id: str | None = None
+    response_detail: Literal["concise", "detailed"] = "concise"
 
 
 async def _allowed_agent_ids(user: WebUser, db: AsyncSession) -> set[int]:
     return set((await db.execute(
         select(AccessCodeAgent.agent_id)
         .join(AccessCode, AccessCode.id == AccessCodeAgent.access_code_id)
-        .where(AccessCode.id == user.access_code_id, AccessCode.status == "active")
+        .where(
+            AccessCode.id == user.access_code_id,
+            AccessCode.status == "claimed",
+            or_(AccessCode.expires_at.is_(None), AccessCode.expires_at > datetime.utcnow()),
+        )
     )).scalars().all())
 
 
 async def _consume_daily_quota(user: WebUser, db: AsyncSession) -> None:
     """原子消耗一次兑换码日额度，避免并发请求绕过限制。"""
     code = await db.get(AccessCode, user.access_code_id)
-    if code is None or code.status != "active":
-        raise HTTPException(status_code=403, detail="兑换码已失效")
+    if code is None or code.status != "claimed" or (code.expires_at and code.expires_at <= datetime.utcnow()):
+        raise HTTPException(status_code=403, detail="访问资格已失效")
     today = datetime.utcnow().date().isoformat()
     statement = sqlite_insert(AccessCodeDailyUsage).values(
         access_code_id=code.id, usage_date=today, question_count=1,
@@ -60,10 +66,32 @@ async def _consume_daily_quota(user: WebUser, db: AsyncSession) -> None:
 async def _remaining_daily_quota(user: WebUser, db: AsyncSession) -> int:
     """返回当前兑换码今日剩余额度，供用户端展示。"""
     code = await db.get(AccessCode, user.access_code_id)
-    if code is None or code.status != "active":
+    if code is None or code.status != "claimed" or (code.expires_at and code.expires_at <= datetime.utcnow()):
         return 0
     usage = await db.get(AccessCodeDailyUsage, (code.id, datetime.utcnow().date().isoformat()))
     return max(code.daily_question_limit - (usage.question_count if usage else 0), 0)
+
+
+def _answer_options(response_detail: str) -> dict:
+    if response_detail == "detailed":
+        return {"top_k": 8, "max_tokens": 4096, "temperature": 0.55}
+    return {"top_k": 4, "max_tokens": 1000, "temperature": 0.5}
+
+
+async def _conversation_history(db: AsyncSession, conversation_id: str | None, user_id: int) -> list[dict[str, str]]:
+    if not conversation_id:
+        return []
+    rows = (await db.execute(
+        select(QAHistory).where(
+            QAHistory.conversation_id == conversation_id,
+            QAHistory.owner_type == "user",
+            QAHistory.owner_id == user_id,
+        ).order_by(QAHistory.created_at.desc()).limit(6)
+    )).scalars().all()
+    history: list[dict[str, str]] = []
+    for record in reversed(rows):
+        history.extend([{"role": "user", "content": record.question}, {"role": "assistant", "content": record.answer or ""}])
+    return history
 
 
 @router.get("/agents")
@@ -113,6 +141,7 @@ async def stream_chat(payload: UserAskIn, user: WebUser = Depends(require_user),
         conversation = Conversation(id=str(uuid.uuid4()), owner_type="user", owner_id=user.id, agent_id=agent.id, title=payload.question[:40])
         db.add(conversation)
         await db.flush()
+    conversation_history = await _conversation_history(db, conversation.id, user.id)
     kb_ids = [str(item) for item in (await db.execute(
         select(KnowledgeBase.id).join(AgentKnowledgeBase, AgentKnowledgeBase.knowledge_base_id == KnowledgeBase.id)
         .where(AgentKnowledgeBase.agent_id == agent.id, KnowledgeBase.is_active == True)  # noqa: E712
@@ -124,7 +153,13 @@ async def stream_chat(payload: UserAskIn, user: WebUser = Depends(require_user),
             nonlocal completed
             completed = result
         try:
-            async for chunk in answer_generator.generate_stream(kb_ids, payload.question, agent_id=agent.id, user_id=f"user:{user.id}", on_complete=capture):
+            async for chunk in answer_generator.generate_stream(
+                kb_ids, payload.question, agent_id=agent.id, user_id=f"user:{user.id}",
+                on_complete=capture, conversation_history=conversation_history,
+                persona_preset=agent.persona_preset, persona_custom_instruction=agent.persona_custom_instruction or "",
+                response_detail=payload.response_detail,
+                **_answer_options(payload.response_detail),
+            ):
                 parts.append(chunk)
                 yield f"event: delta\ndata: {json.dumps({'content': chunk}, ensure_ascii=False)}\n\n"
             sources = completed.sources if completed else []

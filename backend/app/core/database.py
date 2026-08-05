@@ -117,12 +117,19 @@ async def init_db():
         import app.models.vision_config   # noqa: F401
         import app.models.agent_knowledge_base  # noqa: F401
         import app.models.auth              # noqa: F401
+        import app.models.persona_preset    # noqa: F401
 
         # 创建所有表
         await conn.run_sync(Base.metadata.create_all)
 
         # create_all 不会为既有 SQLite 表添加新列；此处保持桌面版向后兼容。
         await _run_compatible_migrations(conn)
+
+        from app.models.persona_preset import DEFAULT_PERSONA_PRESETS
+        for key, value in DEFAULT_PERSONA_PRESETS.items():
+            await conn.execute(text(
+                "INSERT OR IGNORE INTO persona_presets (key, name, instruction) VALUES (:key, :name, :instruction)"
+            ), {"key": key, "name": value["name"], "instruction": value["instruction"]})
 
         # 创建性能优化索引（如果不存在）
         await _create_indexes(conn)
@@ -165,6 +172,11 @@ async def _run_compatible_migrations(conn):
         "ALTER TABLE vision_configs ADD COLUMN is_primary BOOLEAN NOT NULL DEFAULT 0",
         "ALTER TABLE vision_configs ADD COLUMN is_fallback BOOLEAN NOT NULL DEFAULT 0",
         "ALTER TABLE captcha_challenges ADD COLUMN image_svg TEXT",
+        "ALTER TABLE access_codes ADD COLUMN code_ciphertext TEXT",
+        "ALTER TABLE access_codes ADD COLUMN claimed_at DATETIME",
+        "ALTER TABLE agents ADD COLUMN persona_preset VARCHAR(30) NOT NULL DEFAULT 'professional'",
+        "ALTER TABLE agents ADD COLUMN response_detail VARCHAR(20) NOT NULL DEFAULT 'concise'",
+        "ALTER TABLE agents ADD COLUMN persona_custom_instruction TEXT",
     ]
     for sql in migrations:
         try:
@@ -188,6 +200,37 @@ async def _run_compatible_migrations(conn):
 
     try:
         await conn.execute(text("INSERT OR IGNORE INTO agent_knowledge_bases (agent_id, knowledge_base_id) SELECT agent_id, id FROM knowledge_bases WHERE agent_id IS NOT NULL"))
+    except Exception:
+        pass
+
+    # 旧版本允许同一兑换码重复登录。升级时把已经产生用户的兑换码视为已激活，
+    # 并销毁可恢复明文，防止管理员或第二个持码人再次冒充该用户。
+    try:
+        duplicate_codes = (await conn.execute(text(
+            "SELECT access_code_id FROM web_users GROUP BY access_code_id HAVING COUNT(*) > 1"
+        ))).scalars().all()
+        for access_code_id in duplicate_codes:
+            user_ids = (await conn.execute(text(
+                "SELECT id FROM web_users WHERE access_code_id = :code_id ORDER BY id"
+            ), {"code_id": access_code_id})).scalars().all()
+            keeper, duplicates = user_ids[0], user_ids[1:]
+            for duplicate in duplicates:
+                await conn.execute(text(
+                    "UPDATE conversations SET owner_id = :keeper WHERE owner_type = 'user' AND owner_id = :duplicate"
+                ), {"keeper": keeper, "duplicate": duplicate})
+                await conn.execute(text(
+                    "UPDATE qa_history SET owner_id = :keeper, user_id = :keeper_key "
+                    "WHERE owner_type = 'user' AND owner_id = :duplicate"
+                ), {"keeper": keeper, "keeper_key": f"user:{keeper}", "duplicate": duplicate})
+                await conn.execute(text(
+                    "UPDATE auth_sessions SET user_id = :keeper WHERE user_id = :duplicate"
+                ), {"keeper": keeper, "duplicate": duplicate})
+                await conn.execute(text("DELETE FROM web_users WHERE id = :duplicate"), {"duplicate": duplicate})
+        await conn.execute(text(
+            "UPDATE access_codes SET status = 'claimed', claimed_at = COALESCE(claimed_at, created_at), "
+            "code_ciphertext = NULL WHERE id IN (SELECT access_code_id FROM web_users) "
+            "AND status IN ('active', 'claimed')"
+        ))
     except Exception:
         pass
 
@@ -228,6 +271,7 @@ async def _create_indexes(conn):
         "CREATE INDEX IF NOT EXISTS idx_qa_history_user_request ON qa_history(user_id, request_id)",
         "CREATE INDEX IF NOT EXISTS idx_qa_history_conversation ON qa_history(conversation_id, created_at)",
         "CREATE INDEX IF NOT EXISTS idx_access_code_agents_code_agent ON access_code_agents(access_code_id, agent_id)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_web_users_access_code ON web_users(access_code_id)",
         "CREATE INDEX IF NOT EXISTS idx_access_code_daily_usage_date ON access_code_daily_usage(usage_date)",
         "CREATE INDEX IF NOT EXISTS idx_conversations_owner_time ON conversations(owner_type, owner_id, updated_at)",
         "CREATE INDEX IF NOT EXISTS idx_qa_pairs_agent ON qa_pairs(agent_id)",

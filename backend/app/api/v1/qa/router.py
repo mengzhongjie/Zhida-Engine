@@ -46,6 +46,26 @@ def _sources_from_answer(sources: list[dict]) -> list[QASource]:
     ]
 
 
+def _answer_options(response_detail: str) -> dict:
+    """详略预设同时影响检索片段数与输出上限，详细模式自然耗时更长。"""
+    if response_detail == "detailed":
+        return {"top_k": 8, "max_tokens": 4096, "temperature": 0.55}
+    return {"top_k": 4, "max_tokens": 1000, "temperature": 0.5}
+
+
+async def _recent_conversation(db: AsyncSession, chat_id: str | None, user_id: str | None) -> list[dict[str, str]]:
+    if not chat_id:
+        return []
+    rows = (await db.execute(
+        select(QAHistory).where(QAHistory.chat_id == chat_id, QAHistory.user_id == user_id)
+        .order_by(QAHistory.created_at.desc()).limit(6)
+    )).scalars().all()
+    history: list[dict[str, str]] = []
+    for item in reversed(rows):
+        history.extend([{"role": "user", "content": item.question}, {"role": "assistant", "content": item.answer or ""}])
+    return history
+
+
 # ============================================================
 # 辅助函数
 # ============================================================
@@ -107,6 +127,11 @@ async def ask_question(
         user_id=request.user_id,
         agent_id=request.agent_id,
         reply_mode=agent.reply_mode,
+        persona_preset=agent.persona_preset,
+        persona_custom_instruction=agent.persona_custom_instruction or "",
+        response_detail=request.response_detail,
+        conversation_history=await _recent_conversation(db, request.chat_id, request.user_id),
+        **_answer_options(request.response_detail),
     )
     sources = _sources_from_answer(answer.sources)
 
@@ -162,6 +187,7 @@ async def stream_question(
         .where(AgentKnowledgeBase.agent_id == request.agent_id, KnowledgeBase.is_active == True)  # noqa: E712
     )
     knowledge_base_ids = [str(kb_id) for kb_id in kb_result.scalars()]
+    conversation_history = await _recent_conversation(db, request.chat_id, request.user_id)
 
     async def event_stream():
         started = time.time()
@@ -179,6 +205,11 @@ async def stream_question(
                 agent_id=request.agent_id,
                 user_id=request.user_id,
                 on_complete=capture_completed,
+                conversation_history=conversation_history,
+                persona_preset=agent.persona_preset,
+                persona_custom_instruction=agent.persona_custom_instruction or "",
+                response_detail=request.response_detail,
+                **_answer_options(request.response_detail),
             ):
                 answer_parts.append(chunk)
                 yield f"event: delta\ndata: {json.dumps({'content': chunk}, ensure_ascii=False)}\n\n"
