@@ -113,6 +113,30 @@ async def create_embedding_profile(request: EmbeddingProfileRequest, db: AsyncSe
     )
     db.add(item)
     await db.flush()
+
+    # 新安装时配置页会先生成一条空的“当前向量模型”。不能让它一直占用
+    # 主配置，否则新建且测试通过的模型卡片并不会进入实际文档处理链路。
+    primary = (await db.execute(
+        select(EmbeddingProfile).where(EmbeddingProfile.is_primary.is_(True)).limit(1)
+    )).scalar_one_or_none()
+    primary_is_usable = bool(
+        primary
+        and primary.is_active
+        and primary.cloud_base_url
+        and decrypt_api_key(primary.cloud_api_key)
+        and primary.cloud_model
+    )
+    if not primary_is_usable:
+        for other in (await db.execute(select(EmbeddingProfile))).scalars():
+            other.is_primary = False
+        item.is_primary = True
+        settings.EMBEDDING_MODE = "cloud"
+        settings.EMBEDDING_CLOUD_BASE_URL = item.cloud_base_url
+        settings.EMBEDDING_CLOUD_API_KEY = item.cloud_api_key
+        settings.EMBEDDING_CLOUD_MODEL = item.cloud_model
+        settings.EMBEDDING_CLOUD_DIMENSION = item.cloud_dimension
+        _reload_embedding_service()
+        await save_embedding_config_to_db(db)
     return _profile_out(item)
 
 
@@ -274,10 +298,35 @@ async def init_embedding_config(db: AsyncSession):
     1. 从数据库加载配置
     2. 根据配置重新初始化 embedding_service
     """
+    # Profile 是配置页的唯一事实来源。旧 EmbeddingConfig 仅为兼容历史数据
+    # 保留；若它是启动初始留下的空记录，绝不能覆盖一个已保存且可用的主 Profile。
+    profiles = list((await db.execute(
+        select(EmbeddingProfile)
+        .where(EmbeddingProfile.mode == "cloud", EmbeddingProfile.is_active.is_(True))
+        .order_by(EmbeddingProfile.is_primary.desc(), EmbeddingProfile.updated_at.desc())
+    )).scalars())
+    usable = [item for item in profiles if item.cloud_base_url and item.cloud_model and decrypt_api_key(item.cloud_api_key)]
+    if usable:
+        selected = usable[0]
+        # 老版本可能把空 Profile 标成 primary。启动时自动纠正为最近的有效配置。
+        if not selected.is_primary:
+            for item in profiles:
+                item.is_primary = item.id == selected.id
+        settings.EMBEDDING_MODE = "cloud"
+        settings.EMBEDDING_CLOUD_BASE_URL = selected.cloud_base_url
+        settings.EMBEDDING_CLOUD_API_KEY = selected.cloud_api_key
+        settings.EMBEDDING_CLOUD_MODEL = selected.cloud_model
+        settings.EMBEDDING_CLOUD_DIMENSION = selected.cloud_dimension
+        _reload_embedding_service()
+        await save_embedding_config_to_db(db)
+        await db.commit()
+        logger.info(f"向量化配置初始化完成（主 Profile: model={selected.cloud_model}）")
+        return
+
     loaded = await load_embedding_config_from_db(db)
     if loaded:
         _reload_embedding_service()
-        logger.info("向量化配置初始化完成（从数据库加载）")
+        logger.info("向量化配置初始化完成（从旧配置加载）")
     else:
         logger.info("向量化配置初始化完成（使用默认值）")
 
