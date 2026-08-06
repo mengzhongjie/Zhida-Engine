@@ -290,10 +290,14 @@ async def _process_once(document_id: int) -> None:
                 await _sync_kb_statistics(db, kb); await db.commit()
     except Exception as exc:
         timings["total_time_ms"] = (time.monotonic() - started) * 1000
+        logger.exception(f"文档 {document_id} 在 {stage} 阶段失败: {exc}")
+        # Document.error_message 会被资料处理记录 API 返回；仅保存可操作的
+        # 用户提示，原始异常（URL、文件路径、厂商响应）只留在服务端日志。
+        public_error = "文档处理失败，请检查文件内容后重试"
         if kb_id is not None:
-            await _cleanup_failed_processing(document_id, kb_id, str(exc) or "处理失败", stage, timings)
+            await _cleanup_failed_processing(document_id, kb_id, public_error, stage, timings)
         else:
-            await _mark_error(document_id, str(exc) or "处理失败", stage, timings)
+            await _mark_error(document_id, public_error, stage, timings)
         raise
 
 
@@ -322,5 +326,5 @@ async def process_document(document_id: int) -> None:
             if attempt + 1 >= settings.DOCUMENT_PROCESS_MAX_ATTEMPTS: return
             async with async_session_factory() as db:
                 doc = await db.get(Document, document_id)
-                if doc: doc.status, doc.error_message = "pending", f"第 {attempt + 1} 次失败，正在重试：{str(exc)[:300]}"; await db.commit()
+                if doc: doc.status, doc.error_message = "pending", f"第 {attempt + 1} 次处理失败，正在重试"; await db.commit()
             await asyncio.sleep(settings.DOCUMENT_PROCESS_RETRY_BASE_SECONDS * (2 ** attempt))

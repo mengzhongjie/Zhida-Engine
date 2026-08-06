@@ -67,6 +67,9 @@ def create_app():
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         """应用生命周期 —— 启动时初始化数据库, 关闭时释放资源"""
+        # 在监听端口之前拒绝不完整认证配置，避免空密钥应用“看似正常”启动。
+        from app.api.v1.auth.router import validate_auth_configuration
+        validate_auth_configuration()
         logger.info("正在初始化数据库...")
         from app.core.database import init_db
         await init_db()

@@ -1,12 +1,20 @@
+# 不把本机密钥、知识库数据、构建缓存或依赖发送给 Docker daemon。
 .git
-.venv
-backend/.venv
+.env
+**/.env
+**/node_modules
+**/.venv
+**/__pycache__
 backend/data
 backend/static
-frontend-admin/node_modules
+backend/static-admin
+backend/static-user
+data
+*.db
+*.sqlite
+*.sqlite3
+*.log
+.pytest_cache
 frontend-admin/dist
-__pycache__
-*.pyc
-.env
 tools/MediaCrawler
 miniprogram

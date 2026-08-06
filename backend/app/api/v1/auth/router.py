@@ -14,13 +14,13 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import Response as RawResponse
 from loguru import logger
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import get_db
 from app.models.agent import Agent
-from app.models.auth import AccessCode, AccessCodeAgent, AccessCodeDailyUsage, AdminUser, AuthSession, CaptchaChallenge, Conversation, WebUser
+from app.models.auth import AccessCode, AccessCodeAgent, AccessCodeDailyUsage, AdminRegistrationLock, AdminUser, AuthSession, CaptchaChallenge, Conversation, WebUser
 from app.models.qa import QAHistory
 from app.services.memory.memory_service import memory_service
 
@@ -75,6 +75,12 @@ def _require_session_secret() -> None:
         raise HTTPException(status_code=503, detail="认证尚未初始化：请配置至少 32 位的 ZHIDA_AUTH_SESSION_SECRET")
 
 
+def validate_auth_configuration() -> None:
+    """在服务启动前校验认证密钥，禁止带空密钥提供任何 HTTP 服务。"""
+    if len(settings.AUTH_SESSION_SECRET) < 32:
+        raise RuntimeError("缺少 ZHIDA_AUTH_SESSION_SECRET：请配置至少 32 位随机密钥后再启动服务")
+
+
 def _hash_access_code(code: str) -> str:
     normalized = "".join(code.upper().split())
     return hmac.new(_pepper().encode(), normalized.encode(), hashlib.sha256).hexdigest()
@@ -119,8 +125,13 @@ def _verify_password(password: str, stored: str) -> bool:
         _, salt_b64, digest_b64 = stored.split("$", 2)
         salt = base64.b64decode(salt_b64)
         expected = base64.b64decode(digest_b64)
-        actual = hashlib.scrypt(password.encode(), salt=salt, n=2**16, r=8, p=1, maxmem=128 * 1024 * 1024)
-        return hmac.compare_digest(actual, expected)
+        # 安全升级前使用 n=2^14。保留校验回退，不让已有管理员因参数变更
+        # 被意外锁在系统外；新写入的密码一律使用上面的 n=2^16。
+        for n in (2**16, 2**14):
+            actual = hashlib.scrypt(password.encode(), salt=salt, n=n, r=8, p=1, maxmem=128 * 1024 * 1024)
+            if hmac.compare_digest(actual, expected):
+                return True
+        return False
     except Exception:
         return False
 
@@ -167,8 +178,11 @@ async def _verify_captcha(payload: CaptchaVerifyIn, purpose: str, db: AsyncSessi
 
 
 async def _issue_session(request: Request, response: Response, db: AsyncSession, role: str, principal_id: int) -> None:
-    # 登录时顺便回收历史过期记录；无需额外定时任务或 Redis。
+    # 登录时回收过期会话，并撤销同一主体的旧会话。这样管理员或用户再次
+    # 登录后，遗失设备上的 Cookie 不能继续使用，也不会无限累积会话记录。
     await db.execute(delete(AuthSession).where(AuthSession.expires_at <= datetime.utcnow()))
+    principal_column = AuthSession.admin_id if role == "admin" else AuthSession.user_id
+    await db.execute(delete(AuthSession).where(AuthSession.role == role, principal_column == principal_id))
     token = secrets.token_urlsafe(32)
     expires = _session_expiry(role)
     db.add(AuthSession(
@@ -269,7 +283,10 @@ async def ensure_bootstrap_admin(db: AsyncSession) -> None:
     """
     username = (settings.ADMIN_BOOTSTRAP_USERNAME or "").strip()
     password = settings.ADMIN_BOOTSTRAP_PASSWORD or ""
-    if not username:
+    if not username and not password:
+        return
+    if not username or not password:
+        logger.warning("忽略不完整的开发管理员引导配置：账号和密码必须同时设置")
         return
     existing = (await db.execute(select(AdminUser.id).limit(1))).scalar_one_or_none()
     if existing is not None:
@@ -378,6 +395,11 @@ async def admin_register(payload: AdminRegisterIn, request: Request, response: R
         existing = (await db.execute(select(AdminUser.id).limit(1))).scalar_one_or_none()
         if existing is not None:
             raise HTTPException(status_code=409, detail="管理员已存在，无法重复注册")
+        # 固定主键插入是 SQLite 下的原子竞争点；两个请求即使同时通过上面的
+        # 查询，也只有一个能写入锁并完成首次注册。
+        lock = await db.execute(text("INSERT OR IGNORE INTO admin_registration_locks (id, created_at) VALUES (1, :created_at)"), {"created_at": datetime.utcnow()})
+        if lock.rowcount != 1:
+            raise HTTPException(status_code=409, detail="管理员注册已完成，请返回登录")
         username = payload.username.strip()
         admin = AdminUser(username=username, password_hash=_password_hash(payload.password))
         db.add(admin)

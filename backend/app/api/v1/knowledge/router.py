@@ -509,7 +509,7 @@ async def _run_web_summary_job(document_id: int) -> None:
             document = await db.get(Document, document_id)
             if document is not None and document.status == "summarizing":
                 document.status, document.processing_stage, document.failed_stage = "error", "summarizing", "summarizing"
-                document.error_message = str(exc)[:1000]
+                document.error_message = "网页内容处理失败，请稍后重试或检查链接是否可访问"
                 await db.commit()
 
 
@@ -599,7 +599,8 @@ async def _run_feishu_import_job(job_id: str) -> None:
                     status = {"created": "已提交入库", "updated": "已更新并重建", "unchanged": "内容未变"}[action]
                     entry = {"name": item.title, "status": status}
                 except Exception as exc:
-                    entry = {"name": item.title, "status": "失败", "message": str(exc)[:160]}
+                    logger.warning(f"飞书文档导入失败: {item.title}: {type(exc).__name__}: {exc}")
+                    entry = {"name": item.title, "status": "失败", "message": "文档处理失败，请稍后重试"}
                 job.processed += 1
                 try:
                     logs = json.loads(job.logs_json or "[]")
@@ -635,7 +636,7 @@ async def _run_feishu_import_job(job_id: str) -> None:
         async with async_session_factory() as db:
             job = await db.get(ImportJob, job_id)
             if job:
-                job.status, job.error_message = "failed", str(exc)[:500]
+                job.status, job.error_message = "failed", "云文档导入失败，请检查数据源配置或稍后重试"
                 await db.commit()
 
 
@@ -1209,10 +1210,11 @@ async def _delete_document_safely(db: AsyncSession, doc: Document) -> str:
     try:
         await index_manager.remove_document_chunks(str(kb_id), document_id)
     except Exception as e:
+        logger.warning(f"文档 {document_id} 向量清理失败: {type(e).__name__}: {e}")
         doc = await db.get(Document, document_id)
         if doc:
             doc.status = "cleanup_pending"
-            doc.error_message = f"向量清理待重试：{str(e)[:500]}"
+            doc.error_message = "向量清理待重试"
             await db.commit()
         return "cleanup_pending"
 

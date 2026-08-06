@@ -16,6 +16,18 @@ class AdminUser(Base):
     last_login_at = Column(DateTime, nullable=True)
 
 
+class AdminRegistrationLock(Base):
+    """管理员首次注册的一次性互斥锁。
+
+    SQLite 没有跨请求的 ``SELECT ... FOR UPDATE``；用固定主键的插入竞争，
+    让并发首次注册最多只有一个请求能继续创建管理员。
+    """
+
+    __tablename__ = "admin_registration_locks"
+    id = Column(Integer, primary_key=True, default=1)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class AccessCode(Base):
     __tablename__ = "access_codes"
     id = Column(Integer, primary_key=True)

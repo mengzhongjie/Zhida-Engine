@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
+from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 
@@ -242,7 +243,8 @@ async def stream_question(
             }
             yield f"event: done\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
         except Exception as exc:
-            yield f"event: error\ndata: {json.dumps({'detail': str(exc)}, ensure_ascii=False)}\n\n"
+            logger.exception("管理端流式问答失败")
+            yield f"event: error\ndata: {json.dumps({'detail': '回答生成失败，请稍后重试'}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
         event_stream(),

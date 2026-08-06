@@ -197,14 +197,14 @@ class MemoryService:
             Mem0 embedder 配置字典，或 None
         """
         try:
-            if settings.EMBEDDING_CLOUD_BASE_URL:
+            if settings.EMBEDDING_CLOUD_BASE_URL and settings.EMBEDDING_CLOUD_API_KEY:
                 # 使用云端 OpenAI 兼容接口。
                 return {
                     "provider": "openai",
                     "config": {
                         "model": settings.EMBEDDING_CLOUD_MODEL,
                         "base_url": settings.EMBEDDING_CLOUD_BASE_URL,
-                        "api_key": settings.EMBEDDING_CLOUD_API_KEY or "sk-xxx",
+                        "api_key": settings.EMBEDDING_CLOUD_API_KEY,
                     },
                 }
             logger.warning("[Memory] 未配置云端 Embedding，记忆层暂不可用")

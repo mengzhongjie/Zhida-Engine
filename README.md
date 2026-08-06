@@ -121,6 +121,8 @@ ZHIDA_AUTH_REQUIRE_HTTPS=true
 docker compose up -d
 ```
 
+面向香港/海外服务器的双域名 HTTPS 部署、Nginx 配置、数据备份与更新流程见 [部署说明](docs/DEPLOYMENT_HK.md)。
+
 ---
 
 ## 项目结构
@@ -209,16 +211,16 @@ ENABLE_SOURCE_CITATION    # 来源引用
 
 ### 网页登录与兑换码
 
-首次部署前，在私有的 `backend/.env` 配置管理员账号、密码和认证密钥。服务第一次启动时会创建该管理员；如数据库中已存在管理员，不会覆盖其密码。
+生产环境不提供默认管理员账号或密码。首次访问管理端时注册唯一管理员；后续由管理员创建一次性激活码给用户使用。认证密钥和域名配置应写入不提交 Git 的根目录 `.env`，可从 `.env.production.example` 复制。
 
 ```env
-ZHIDA_ADMIN_BOOTSTRAP_USERNAME=自行设置管理员账号
-ZHIDA_ADMIN_BOOTSTRAP_PASSWORD=自行设置强密码
 ZHIDA_AUTH_SESSION_SECRET=请设置至少32位随机字符串
 ZHIDA_USER_APP_HOSTS=app.example.com
+ZHIDA_TRUSTED_HOSTS=admin.example.com,app.example.com
+ZHIDA_CORS_ORIGINS=https://admin.example.com,https://app.example.com
 ```
 
-> 安全提示：`backend/.env` 已被 Git 忽略，不应将实际管理员凭据提交到仓库或写入公开文档。部署到公网前请使用唯一的强密码与认证密钥。
+> 安全提示：根目录 `.env` 已被 Git 忽略，不应将实际管理员凭据提交到仓库或写入公开文档。部署到公网前请使用唯一的强密码与认证密钥。
 
 管理员通过 `POST /api/v1/auth/admin/access-codes` 创建一次性激活码并指定可访问的 Agent。激活码在用户首次登录后立即变为“已激活”，完整码密文会被销毁，无法被管理员再次复制、也无法被第二个人用于登录。每个激活码只绑定一个匿名用户身份，因此历史会话、长期记忆和每日额度不会在不同持码人之间共享。
 

@@ -12,6 +12,7 @@ from typing import Literal
 from sqlalchemy import or_, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from loguru import logger
 
 from app.api.v1.auth.router import require_user
 from app.core.database import get_db
@@ -169,5 +170,6 @@ async def stream_chat(payload: UserAskIn, user: WebUser = Depends(require_user),
             yield f"event: done\ndata: {json.dumps({'conversation_id': conversation.id, 'sources': sources, 'remaining_today': await _remaining_daily_quota(user, db)}, ensure_ascii=False)}\n\n"
         except Exception as exc:
             await db.rollback()
-            yield f"event: error\ndata: {json.dumps({'detail': str(exc)}, ensure_ascii=False)}\n\n"
+            logger.exception("用户端流式问答失败")
+            yield f"event: error\ndata: {json.dumps({'detail': '回答生成失败，请稍后重试'}, ensure_ascii=False)}\n\n"
     return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
