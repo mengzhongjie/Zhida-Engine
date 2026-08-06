@@ -212,6 +212,22 @@ class IndexManager:
         self._collections.pop(canonical_id, None)
         logger.info(f"已清空知识库索引: {knowledge_base_id}")
 
+    async def delete_knowledge_base_collection(self, knowledge_base_id: str | int) -> bool:
+        """删除整个知识库的 Collection，且绝不为不存在的知识库创建空集合。"""
+        canonical_id = self.normalize_knowledge_base_id(knowledge_base_id)
+        cached = self._collections.pop(canonical_id, None)
+        collection_name = cached.name if cached is not None else f"kb_{canonical_id}"
+        try:
+            self._client.delete_collection(name=collection_name)
+            logger.info(f"已删除知识库 Collection: {collection_name}")
+            return True
+        except Exception as exc:
+            # 从未入库的空知识库没有 Collection，这不属于清理失败。
+            if "does not exist" in str(exc).lower() or "not found" in str(exc).lower():
+                logger.info(f"知识库 Collection 不存在，无需删除: {collection_name}")
+                return False
+            raise
+
     # ================================================================
     # 检索操作
     # ================================================================

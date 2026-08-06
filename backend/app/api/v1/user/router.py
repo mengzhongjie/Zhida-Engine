@@ -1,5 +1,6 @@
 """普通用户端：获授权 Agent、历史会话和流式问答。"""
 
+import asyncio
 import json
 import time
 import uuid
@@ -9,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import Literal
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from loguru import logger
@@ -73,6 +74,23 @@ async def _remaining_daily_quota(user: WebUser, db: AsyncSession) -> int:
     return max(code.daily_question_limit - (usage.question_count if usage else 0), 0)
 
 
+async def _refund_daily_quota(user: WebUser, db: AsyncSession) -> None:
+    """归还未完成流式问答的一次已预留额度，保证计数不会为负。"""
+    today = datetime.utcnow().date().isoformat()
+    result = await db.execute(
+        update(AccessCodeDailyUsage)
+        .where(
+            AccessCodeDailyUsage.access_code_id == user.access_code_id,
+            AccessCodeDailyUsage.usage_date == today,
+            AccessCodeDailyUsage.question_count > 0,
+        )
+        .values(question_count=AccessCodeDailyUsage.question_count - 1)
+    )
+    if result.rowcount != 1:
+        logger.warning(f"用户 {user.id} 的问答额度退款未命中")
+    await db.commit()
+
+
 def _answer_options(response_detail: str) -> dict:
     if response_detail == "detailed":
         return {"top_k": 8, "max_tokens": 4096, "temperature": 0.55}
@@ -134,7 +152,6 @@ async def stream_chat(payload: UserAskIn, user: WebUser = Depends(require_user),
     agent = await db.get(Agent, payload.agent_id)
     if agent is None or not agent.is_active:
         raise HTTPException(status_code=404, detail="Agent 不存在或未启用")
-    await _consume_daily_quota(user, db)
     conversation = await db.get(Conversation, payload.conversation_id) if payload.conversation_id else None
     if conversation and (conversation.owner_type != "user" or conversation.owner_id != user.id or conversation.agent_id != agent.id):
         raise HTTPException(status_code=403, detail="无权访问该会话")
@@ -147,9 +164,13 @@ async def stream_chat(payload: UserAskIn, user: WebUser = Depends(require_user),
         select(KnowledgeBase.id).join(AgentKnowledgeBase, AgentKnowledgeBase.knowledge_base_id == KnowledgeBase.id)
         .where(AgentKnowledgeBase.agent_id == agent.id, KnowledgeBase.is_active == True)  # noqa: E712
     )).scalars().all()]
+    # 所有权限、会话与知识库前置校验都通过后才预留额度；流式中断会在
+    # events() 内退款，因此不会因校验失败让用户损失次数。
+    await _consume_daily_quota(user, db)
 
     async def events():
         started, parts, completed = time.time(), [], None
+        answer_completed = False
         def capture(result):
             nonlocal completed
             completed = result
@@ -163,13 +184,27 @@ async def stream_chat(payload: UserAskIn, user: WebUser = Depends(require_user),
             ):
                 parts.append(chunk)
                 yield f"event: delta\ndata: {json.dumps({'content': chunk}, ensure_ascii=False)}\n\n"
+            answer_completed = True
             sources = completed.sources if completed else []
             db.add(QAHistory(agent_id=agent.id, question=payload.question, answer="".join(parts), sources=json.dumps(sources, ensure_ascii=False), total_time_ms=(time.time()-started)*1000, channel="web", chat_id=conversation.id, user_id=f"user:{user.id}", conversation_id=conversation.id, owner_type="user", owner_id=user.id, is_degraded=bool(completed and completed.degraded), web_search_count=completed.web_search_count if completed else 0))
             conversation.updated_at = datetime.utcnow()
             await db.commit()
             yield f"event: done\ndata: {json.dumps({'conversation_id': conversation.id, 'sources': sources, 'remaining_today': await _remaining_daily_quota(user, db)}, ensure_ascii=False)}\n\n"
+        except asyncio.CancelledError:
+            await db.rollback()
+            if not answer_completed:
+                try:
+                    await _refund_daily_quota(user, db)
+                except Exception:
+                    logger.exception("用户端流式问答取消后的额度退款失败")
+            raise
         except Exception as exc:
             await db.rollback()
+            if not answer_completed:
+                try:
+                    await _refund_daily_quota(user, db)
+                except Exception:
+                    logger.exception("用户端流式问答失败后的额度退款失败")
             logger.exception("用户端流式问答失败")
             yield f"event: error\ndata: {json.dumps({'detail': '回答生成失败，请稍后重试'}, ensure_ascii=False)}\n\n"
     return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})

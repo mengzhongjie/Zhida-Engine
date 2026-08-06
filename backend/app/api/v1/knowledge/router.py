@@ -787,14 +787,53 @@ async def delete_knowledge_base(
     kb_id: int,
     db: AsyncSession = Depends(get_db),
 ):
-    """删除知识库（同时删除关联的文档）"""
+    """按 Chroma → 原文件 → SQLite 的顺序删除整个知识库；失败可重试。"""
     result = await db.execute(select(KnowledgeBase).where(KnowledgeBase.id == kb_id))
     kb = result.scalar_one_or_none()
     if kb is None:
         raise HTTPException(status_code=404, detail="知识库不存在")
 
-    await db.delete(kb)
-    await db.flush()
+    if kb.index_status == "deleting":
+        raise HTTPException(status_code=409, detail="知识库正在删除，请稍后刷新")
+    active_documents = (await db.execute(select(func.count(Document.id)).where(
+        Document.knowledge_base_id == kb_id,
+        Document.status.in_(("pending", "processing", "summarizing")),
+    ))).scalar_one()
+    if active_documents:
+        raise HTTPException(status_code=409, detail="知识库仍有处理中资料，请先取消或等待处理完成")
+
+    # 先持久化删除状态。任一跨存储步骤失败时，数据库记录仍存在并可再次删除，
+    # 从而不会把“SQLite 已删、Chroma 尚存”伪装成成功。
+    kb.index_status, kb.is_active = "deleting", False
+    await db.commit()
+    documents = (await db.execute(select(Document).where(Document.knowledge_base_id == kb_id))).scalars().all()
+    paths = {document.file_path for document in documents if document.file_path}
+    try:
+        await index_manager.delete_knowledge_base_collection(kb_id)
+        upload_root = os.path.realpath(os.path.join(settings.DATA_DIR, "uploads"))
+        for file_path in paths:
+            resolved = os.path.realpath(file_path)
+            if os.path.commonpath((upload_root, resolved)) != upload_root:
+                logger.warning(f"跳过知识库 {kb_id} 的异常文件路径: {file_path}")
+                continue
+            try:
+                os.unlink(resolved)
+            except FileNotFoundError:
+                pass
+        try:
+            os.rmdir(os.path.join(upload_root, f"kb_{kb_id}"))
+        except (FileNotFoundError, OSError):
+            pass
+        await db.delete(kb)
+        await db.commit()
+    except Exception as exc:
+        await db.rollback()
+        logger.exception(f"知识库 {kb_id} 删除未完成: {type(exc).__name__}: {exc}")
+        failed = await db.get(KnowledgeBase, kb_id)
+        if failed is not None:
+            failed.index_status = "delete_failed"
+            await db.commit()
+        raise HTTPException(status_code=500, detail="知识库清理未完成，请稍后重试") from None
 
     return {"message": "删除成功", "id": kb_id}
 
