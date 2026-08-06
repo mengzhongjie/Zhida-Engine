@@ -138,6 +138,17 @@ async def update_embedding_profile(profile_id: int, request: EmbeddingProfileReq
     item.cloud_model, item.cloud_dimension, item.is_active = request.cloud_model, request.cloud_dimension, request.is_active
     if request.cloud_api_key:
         item.cloud_api_key = encrypt_api_key(request.cloud_api_key)
+    # 编辑当前主配置也必须立刻同步运行时服务与 EmbeddingConfig。此前只更新
+    # 了配置卡片，进程仍继续使用启动时的默认 text-embedding-3-small，导致
+    # 页面显示“可用”但文档在向量化阶段连续失败。
+    if item.is_primary:
+        settings.EMBEDDING_MODE = "cloud"
+        settings.EMBEDDING_CLOUD_BASE_URL = item.cloud_base_url
+        settings.EMBEDDING_CLOUD_API_KEY = item.cloud_api_key
+        settings.EMBEDDING_CLOUD_MODEL = item.cloud_model
+        settings.EMBEDDING_CLOUD_DIMENSION = item.cloud_dimension
+        _reload_embedding_service()
+        await save_embedding_config_to_db(db)
     return _profile_out(item)
 
 
