@@ -11,8 +11,10 @@ sqlalchemy==2.0.35
 aiosqlite==0.20.0
 
 # ---- RAG 引擎 ----
-langchain==0.3.0
-langchain-community==0.3.0
+# mem0ai==0.1.7 仅兼容 langchain-community < 0.3；两者必须保持在
+# 同一代 0.2 依赖树，否则干净的 Docker 构建会被 pip 解析器拒绝。
+langchain==0.2.17
+langchain-community==0.2.19
 llama-index==0.11.0
 chromadb==0.5.5
 
