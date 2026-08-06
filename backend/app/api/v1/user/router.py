@@ -173,7 +173,8 @@ async def stream_chat(payload: UserAskIn, user: WebUser = Depends(require_user),
         quota_consumed = False
         admission = await qa_stream_concurrency.acquire()
         if not admission.acquired:
-            yield f"event: error\ndata: {json.dumps({'detail': '当前问答较多，请稍后重试'}, ensure_ascii=False)}\n\n"
+            detail = "当前排队已满，请稍后重试" if admission.queue_full else "当前问答较多，请稍后重试"
+            yield f"event: error\ndata: {json.dumps({'detail': detail}, ensure_ascii=False)}\n\n"
             return
         if admission.queued:
             yield f"event: status\ndata: {json.dumps({'detail': '正在排队处理'}, ensure_ascii=False)}\n\n"
@@ -221,5 +222,5 @@ async def stream_chat(payload: UserAskIn, user: WebUser = Depends(require_user),
             logger.exception("用户端流式问答失败")
             yield f"event: error\ndata: {json.dumps({'detail': '回答生成失败，请稍后重试'}, ensure_ascii=False)}\n\n"
         finally:
-            qa_stream_concurrency.release()
+            await qa_stream_concurrency.release()
     return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})

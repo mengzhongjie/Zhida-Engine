@@ -10,20 +10,30 @@ from app.core.config import settings
 class QueueAdmission:
     acquired: bool
     queued: bool
+    queue_full: bool = False
 
 
 class QAStreamConcurrency:
     """限制同时执行的模型流，等待者保留在轻量 asyncio 队列中。"""
 
-    def __init__(self) -> None:
-        self._limit = max(1, settings.QA_MAX_CONCURRENT_STREAMS)
+    def __init__(self, limit: int | None = None, max_queue: int | None = None) -> None:
+        self._limit = max(1, limit if limit is not None else settings.QA_MAX_CONCURRENT_STREAMS)
+        self._max_queue = max(0, max_queue if max_queue is not None else settings.QA_MAX_STREAM_QUEUE)
         self._semaphore = asyncio.Semaphore(self._limit)
+        self._admitted = 0
+        self._admission_lock = asyncio.Lock()
 
     def is_saturated(self) -> bool:
         return self._semaphore.locked()
 
     async def acquire(self) -> QueueAdmission:
-        queued = self.is_saturated()
+        # 限制“执行中 + 排队中”的总数。否则持有有效兑换码的攻击者可以
+        # 用大量 SSE 等待连接耗尽单机内存、数据库会话和反向代理连接。
+        async with self._admission_lock:
+            if self._admitted >= self._limit + self._max_queue:
+                return QueueAdmission(acquired=False, queued=True, queue_full=True)
+            queued = self._admitted >= self._limit
+            self._admitted += 1
         try:
             await asyncio.wait_for(
                 self._semaphore.acquire(),
@@ -31,9 +41,19 @@ class QAStreamConcurrency:
             )
             return QueueAdmission(acquired=True, queued=queued)
         except TimeoutError:
+            await self._leave_queue()
             return QueueAdmission(acquired=False, queued=queued)
 
-    def release(self) -> None:
+        except BaseException:
+            await self._leave_queue()
+            raise
+
+    async def _leave_queue(self) -> None:
+        async with self._admission_lock:
+            self._admitted = max(0, self._admitted - 1)
+
+    async def release(self) -> None:
+        await self._leave_queue()
         self._semaphore.release()
 
 

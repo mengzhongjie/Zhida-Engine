@@ -180,6 +180,7 @@ class Settings(BaseSettings):
     # 单机 SQLite/Chroma 部署优先保护正在对话的用户。超出部分在 SSE 建立后排队，
     # 队列超时才返回繁忙提示，不让突发请求同时挤爆模型网关或本机资源。
     QA_MAX_CONCURRENT_STREAMS: int = 10
+    QA_MAX_STREAM_QUEUE: int = 20
     QA_STREAM_QUEUE_TIMEOUT_SECONDS: int = 45
 
     # ---- MinerU 文档解析（可选，默认关闭）----

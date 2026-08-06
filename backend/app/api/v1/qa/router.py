@@ -30,6 +30,7 @@ from app.schemas.qa import (
 )
 from app.services.cache.query_cache import query_cache
 from app.services.qa.generator import answer_generator
+from app.services.qa.concurrency import qa_stream_concurrency
 
 router = APIRouter(prefix="/qa", tags=["问答"])
 
@@ -193,6 +194,13 @@ async def stream_question(
     conversation_history = await _recent_conversation(db, request.chat_id, request.user_id)
 
     async def event_stream():
+        admission = await qa_stream_concurrency.acquire()
+        if not admission.acquired:
+            detail = "当前排队已满，请稍后重试" if admission.queue_full else "当前问答较多，请稍后重试"
+            yield f"event: error\ndata: {json.dumps({'detail': detail}, ensure_ascii=False)}\n\n"
+            return
+        if admission.queued:
+            yield f"event: status\ndata: {json.dumps({'detail': '正在排队处理'}, ensure_ascii=False)}\n\n"
         started = time.time()
         answer_parts: list[str] = []
         completed = None
@@ -247,6 +255,8 @@ async def stream_question(
         except Exception as exc:
             logger.exception("管理端流式问答失败")
             yield f"event: error\ndata: {json.dumps({'detail': '回答生成失败，请稍后重试'}, ensure_ascii=False)}\n\n"
+        finally:
+            await qa_stream_concurrency.release()
 
     return StreamingResponse(
         event_stream(),
