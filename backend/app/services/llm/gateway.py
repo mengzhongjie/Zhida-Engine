@@ -324,9 +324,42 @@ class LLMGateway:
             stream=True,
         )
 
+        # 流式 SDK 会在最后一个 chunk 给出 finish_reason。此前该信息被静默
+        # 丢弃，排查“详细模式是否被模型长度上限截断”时没有证据。
+        finish_reason: str | None = None
+        content_emitted = False
+        reasoning_characters = 0
         async for chunk in stream:
-            if chunk.choices and chunk.choices[0].delta.content:
-                yield chunk.choices[0].delta.content
+            if not chunk.choices:
+                continue
+            choice = chunk.choices[0]
+            if choice.finish_reason:
+                finish_reason = choice.finish_reason
+            # reasoning_content 是部分推理模型在 OpenAI 兼容流中返回的隐藏
+            # 思考过程。它不能直接展示给用户，但必须被计数：若模型把 token
+            # 全用在推理而没有正文，不能把空答案当作一次成功回答。
+            reasoning = (
+                getattr(choice.delta, "reasoning_content", None)
+                or getattr(choice.delta, "reasoning", None)
+                or ""
+            )
+            reasoning_characters += len(reasoning)
+            if choice.delta.content:
+                content_emitted = True
+                yield choice.delta.content
+        logger.info(
+            "流式模型输出结束：model={}, finish_reason={}, requested_max_tokens={}, reasoning_chars={}, content_emitted={}",
+            model_client.config.model_name,
+            finish_reason or "unknown",
+            max_tokens,
+            reasoning_characters,
+            content_emitted,
+        )
+        if not content_emitted:
+            raise RuntimeError(
+                f"模型未返回可展示正文（finish_reason={finish_reason or 'unknown'}，"
+                f"推理内容={reasoning_characters} 字符）"
+            )
 
     # ================================================================
     # 测试连接

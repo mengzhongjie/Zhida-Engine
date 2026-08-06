@@ -93,7 +93,8 @@ async def _refund_daily_quota(user: WebUser, db: AsyncSession) -> None:
 
 def _answer_options(response_detail: str) -> dict:
     if response_detail == "detailed":
-        return {"top_k": 8, "max_tokens": 4096, "temperature": 0.55}
+        # 与管理端保持一致：推理型主模型需要给详细模式预留正文 token。
+        return {"top_k": 8, "max_tokens": 8192, "temperature": 0.55}
     return {"top_k": 4, "max_tokens": 1000, "temperature": 0.5}
 
 
