@@ -43,6 +43,12 @@ class AdminLoginIn(CaptchaVerifyIn):
     password: str = Field(min_length=6, max_length=200)
 
 
+class AdminRegisterIn(CaptchaVerifyIn):
+    username: str = Field(min_length=3, max_length=100)
+    # 首次注册为管理员自设密码，要求至少 8 位。
+    password: str = Field(min_length=8, max_length=200)
+
+
 class AccessCodeCreateIn(BaseModel):
     agent_ids: list[int] = Field(min_length=1)
     daily_question_limit: int = Field(50, ge=1, le=10000)
@@ -104,15 +110,16 @@ def _decrypt_access_code(ciphertext: str | None) -> str | None:
 
 def _password_hash(password: str) -> str:
     salt = os.urandom(16)
-    digest = hashlib.scrypt(password.encode(), salt=salt, n=2**16, r=8, p=1)
+    digest = hashlib.scrypt(password.encode(), salt=salt, n=2**16, r=8, p=1, maxmem=128 * 1024 * 1024)
     return f"scrypt${base64.b64encode(salt).decode()}${base64.b64encode(digest).decode()}"
 
 
 def _verify_password(password: str, stored: str) -> bool:
     try:
         _, salt_b64, digest_b64 = stored.split("$", 2)
+        salt = base64.b64decode(salt_b64)
         expected = base64.b64decode(digest_b64)
-        actual = hashlib.scrypt(password.encode(), salt=base64.b64decode(salt_b64), n=2**16, r=8, p=1)
+        actual = hashlib.scrypt(password.encode(), salt=salt, n=2**16, r=8, p=1, maxmem=128 * 1024 * 1024)
         return hmac.compare_digest(actual, expected)
     except Exception:
         return False
@@ -255,11 +262,10 @@ async def require_user(request: Request, response: Response, db: AsyncSession = 
 
 
 async def ensure_bootstrap_admin(db: AsyncSession) -> None:
-    """首次启动时引导创建管理员。
+    """首次启动时的管理员引导。
 
     - DEBUG（本地开发）：沿用 .env 中的账号密码，方便调试。
-    - 生产（DEBUG=False）：密码为空或为常见弱密码时，自动生成随机密码，
-      仅在本进程控制台打印一次，供首次登录；强烈要求登录后立即修改。
+    - 生产（DEBUG=False）：不再通过 .env 创建管理员，请在管理台完成首次注册。
     """
     username = (settings.ADMIN_BOOTSTRAP_USERNAME or "").strip()
     password = settings.ADMIN_BOOTSTRAP_PASSWORD or ""
@@ -269,19 +275,11 @@ async def ensure_bootstrap_admin(db: AsyncSession) -> None:
     if existing is not None:
         return
 
-    effective = password
     if not settings.DEBUG:
-        weak = not password or len(password) < 8 or password.lower() in {"123456", "admin", "password", "admin123"}
-        if weak:
-            effective = secrets.token_urlsafe(12)
-            logger.warning(
-                f"生产模式检测到弱引导密码，已自动生成随机密码。"
-                f"请在首次登录后立即修改。账号: {username}"
-            )
-            # 仅控制台输出，不写入日志文件，避免明文残留。
-            print(f"\n[ZhidaEngine] 初始管理员账号: {username}  随机密码: {effective}\n", flush=True)
+        logger.info("生产模式未自动创建管理员；请在管理台完成首次注册")
+        return
 
-    db.add(AdminUser(username=username, password_hash=_password_hash(effective)))
+    db.add(AdminUser(username=username, password_hash=_password_hash(password)))
     await db.commit()
 
 
@@ -363,6 +361,31 @@ async def admin_login(payload: AdminLoginIn, request: Request, response: Respons
         # 不清除用户端会话；正式部署中两个站点由不同主机名隔离，开发环境可并行测试。
         await _issue_session(request, response, db, "admin", admin.id)
         return {"role": "admin", "username": admin.username}
+    except HTTPException:
+        _record_failed_attempt(key)
+        raise
+
+
+@router.post("/admin/register")
+async def admin_register(payload: AdminRegisterIn, request: Request, response: Response, db: AsyncSession = Depends(get_db)):
+    """首次部署时开放注册第一个管理员；已有管理员后返回 409 禁止重复注册。"""
+    _require_session_secret()
+    key = f"admin-register:{request.client.host if request.client else 'unknown'}"
+    _check_attempts(key, 5)
+    try:
+        await _verify_captcha(payload, "admin", db)
+        await db.commit()
+        existing = (await db.execute(select(AdminUser.id).limit(1))).scalar_one_or_none()
+        if existing is not None:
+            raise HTTPException(status_code=409, detail="管理员已存在，无法重复注册")
+        username = payload.username.strip()
+        admin = AdminUser(username=username, password_hash=_password_hash(payload.password))
+        db.add(admin)
+        await db.commit()
+        await db.refresh(admin)
+        # 注册即签发管理员会话，前端直接进入管理台。
+        await _issue_session(request, response, db, "admin", admin.id)
+        return {"role": "admin", "username": username}
     except HTTPException:
         _record_failed_attempt(key)
         raise
