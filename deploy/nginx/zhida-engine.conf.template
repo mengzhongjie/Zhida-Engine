@@ -1,6 +1,20 @@
 # 将 admin.example.com 与 app.example.com 替换为你的实际域名。
 # Docker 只监听 127.0.0.1:18900；公网仅由 Nginx 暴露 HTTPS。
 
+# 不匹配正式域名的 HTTP 请求直接断开，避免服务器 IP 或陌生 Host 回落到管理端。
+server {
+    listen 80 default_server;
+    server_name _;
+    return 444;
+}
+
+# Nginx 1.19.4+：未知 SNI 在 TLS 握手阶段直接拒绝。
+server {
+    listen 443 ssl default_server;
+    server_name _;
+    ssl_reject_handshake on;
+}
+
 server {
     listen 80;
     server_name admin.example.com;
@@ -26,7 +40,8 @@ server {
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        # 覆盖客户端可伪造的转发头；后端只信任来自本机/指定代理的 X-Real-IP。
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_buffering off;
         proxy_read_timeout 300s;
@@ -46,7 +61,7 @@ server {
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_buffering off;
         proxy_read_timeout 300s;

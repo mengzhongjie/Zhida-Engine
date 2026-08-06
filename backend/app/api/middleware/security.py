@@ -14,6 +14,7 @@ from starlette.responses import JSONResponse, Response
 from loguru import logger
 
 from app.core.config import settings
+from app.core.security import is_trusted_proxy_request
 
 
 class SecurityMiddleware(BaseHTTPMiddleware):
@@ -42,7 +43,9 @@ class SecurityMiddleware(BaseHTTPMiddleware):
 
     @staticmethod
     def _is_https(request: Request) -> bool:
-        forwarded = request.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip().lower()
+        forwarded = ""
+        if is_trusted_proxy_request(request):
+            forwarded = request.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip().lower()
         return request.url.scheme == "https" or forwarded == "https"
 
     async def dispatch(self, request: Request, call_next):

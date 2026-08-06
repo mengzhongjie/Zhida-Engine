@@ -92,6 +92,9 @@ class Settings(BaseSettings):
     # 这些主机名返回仅含用户对话功能的独立前端；管理端使用其余受信主机名。
     # 生产环境示例：app.example.com。保持 Cookie 为 host-only，避免跨端携带。
     USER_APP_HOSTS: str = ""
+    # 仅当 TCP 对端属于该列表时，才接受 Nginx 写入的 X-Real-IP / X-Forwarded-Proto。
+    # Docker 中宿主机 Nginx 转发到容器时，通常需在生产 .env 中额外加入 172.17.0.1。
+    TRUSTED_PROXY_IPS: str = "127.0.0.1,::1"
 
     @property
     def cors_origins(self) -> list[str]:
@@ -104,6 +107,10 @@ class Settings(BaseSettings):
     @property
     def user_app_hosts(self) -> set[str]:
         return {host.strip().lower() for host in self.USER_APP_HOSTS.split(",") if host.strip()}
+
+    @property
+    def trusted_proxy_ips(self) -> set[str]:
+        return {ip.strip() for ip in self.TRUSTED_PROXY_IPS.split(",") if ip.strip()}
 
     # ---- 云端 Embedding 模型 ----
     EMBEDDING_MODE: str = "cloud"

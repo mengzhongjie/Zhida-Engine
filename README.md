@@ -101,6 +101,9 @@ location / {
   proxy_pass http://127.0.0.1:18900;
   proxy_set_header Host $host;
   proxy_set_header X-Forwarded-Proto $scheme;
+  # 覆盖（不要追加）客户端传入的转发头，避免伪造真实 IP。
+  proxy_set_header X-Forwarded-For $remote_addr;
+  proxy_set_header X-Real-IP $remote_addr;
 }
 ```
 
@@ -111,6 +114,8 @@ ZHIDA_TRUSTED_HOSTS=admin.example.com,app.example.com
 ZHIDA_USER_APP_HOSTS=app.example.com
 ZHIDA_CORS_ORIGINS=https://admin.example.com,https://app.example.com
 ZHIDA_AUTH_REQUIRE_HTTPS=true
+# Docker 内由宿主机 Nginx 转发时，通常为 172.17.0.1；以实际容器日志看到的代理 IP 为准。
+ZHIDA_TRUSTED_PROXY_IPS=127.0.0.1,::1,172.17.0.1
 ```
 
 必须在 HTTPS 后运行；公网 HTTP 请求会被拒绝，认证 Cookie 使用 `HttpOnly + Secure + SameSite=Strict`，并在 HTTPS 响应中下发 HSTS。反向代理必须保留 `Host` 并传递 `X-Forwarded-Proto`，否则后端无法正确判断安全连接。

@@ -20,12 +20,32 @@ import hashlib
 import base64
 import socket
 import tempfile
+import ipaddress
 from pathlib import Path
 from typing import Optional
 
 from loguru import logger
 
 from app.core.config import settings
+
+
+def is_trusted_proxy_request(request) -> bool:
+    """只信任来自明确配置反向代理的转发头，避免客户端伪造真实 IP。"""
+    return bool(request.client and request.client.host in settings.trusted_proxy_ips)
+
+
+def get_client_ip(request) -> str:
+    """返回可信的客户端 IP；直连请求始终使用 TCP 对端地址。"""
+    peer_ip = request.client.host if request.client else "unknown"
+    if not is_trusted_proxy_request(request):
+        return peer_ip
+
+    # Nginx 配置会覆盖写入该头，而不是附加客户端传入的 X-Forwarded-For。
+    forwarded_ip = request.headers.get("x-real-ip", "").strip()
+    try:
+        return str(ipaddress.ip_address(forwarded_ip))
+    except ValueError:
+        return peer_ip
 
 
 # ============================================================

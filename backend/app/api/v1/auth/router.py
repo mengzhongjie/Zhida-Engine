@@ -18,6 +18,7 @@ from sqlalchemy import delete, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.security import get_client_ip
 from app.core.database import get_db
 from app.models.agent import Agent
 from app.models.auth import AccessCode, AccessCodeAgent, AccessCodeDailyUsage, AdminRegistrationLock, AdminUser, AuthSession, CaptchaChallenge, Conversation, WebUser
@@ -326,7 +327,7 @@ async def get_captcha_image(captcha_id: str, db: AsyncSession = Depends(get_db))
 @router.post("/user/login")
 async def user_login(payload: UserLoginIn, request: Request, response: Response, db: AsyncSession = Depends(get_db)):
     _require_session_secret()
-    key = f"user:{request.client.host if request.client else 'unknown'}"
+    key = f"user:{get_client_ip(request)}"
     _check_attempts(key, 10)
     try:
         await _verify_captcha(payload, "user", db)
@@ -366,7 +367,7 @@ async def user_login(payload: UserLoginIn, request: Request, response: Response,
 @router.post("/admin/login")
 async def admin_login(payload: AdminLoginIn, request: Request, response: Response, db: AsyncSession = Depends(get_db)):
     _require_session_secret()
-    key = f"admin:{request.client.host if request.client else 'unknown'}:{payload.username.lower()}"
+    key = f"admin:{get_client_ip(request)}:{payload.username.lower()}"
     _check_attempts(key, 5)
     try:
         await _verify_captcha(payload, "admin", db)
@@ -387,7 +388,7 @@ async def admin_login(payload: AdminLoginIn, request: Request, response: Respons
 async def admin_register(payload: AdminRegisterIn, request: Request, response: Response, db: AsyncSession = Depends(get_db)):
     """首次部署时开放注册第一个管理员；已有管理员后返回 409 禁止重复注册。"""
     _require_session_secret()
-    key = f"admin-register:{request.client.host if request.client else 'unknown'}"
+    key = f"admin-register:{get_client_ip(request)}"
     _check_attempts(key, 5)
     try:
         await _verify_captcha(payload, "admin", db)

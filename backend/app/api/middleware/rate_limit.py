@@ -17,6 +17,7 @@ from starlette.responses import JSONResponse
 from loguru import logger
 
 from app.core.config import settings
+from app.core.security import get_client_ip
 from app.services.cache.rate_limiter import rate_limiter, RateLimitResult
 
 
@@ -52,7 +53,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         # 获取客户端 IP
-        client_ip = request.client.host if request.client else "unknown"
+        client_ip = get_client_ip(request)
 
         # 问答提交：管理台和外部 API 都通过显式 chat_id 隔离令牌桶。
         # 这里不启用群聊问题冷却；同一用户的正常追问与重试不能被误判为刷屏。
