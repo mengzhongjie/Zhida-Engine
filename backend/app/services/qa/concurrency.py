@@ -58,3 +58,25 @@ class QAStreamConcurrency:
 
 
 qa_stream_concurrency = QAStreamConcurrency()
+
+
+class PerUserStreamGuard:
+    """同一普通用户最多保留一条执行中或排队中的问答。"""
+
+    def __init__(self) -> None:
+        self._owners: set[int] = set()
+        self._lock = asyncio.Lock()
+
+    async def acquire(self, user_id: int) -> bool:
+        async with self._lock:
+            if user_id in self._owners:
+                return False
+            self._owners.add(user_id)
+            return True
+
+    async def release(self, user_id: int) -> None:
+        async with self._lock:
+            self._owners.discard(user_id)
+
+
+per_user_stream_guard = PerUserStreamGuard()

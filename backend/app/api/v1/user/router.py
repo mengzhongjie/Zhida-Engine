@@ -23,7 +23,7 @@ from app.models.auth import AccessCode, AccessCodeAgent, AccessCodeDailyUsage, C
 from app.models.knowledge import KnowledgeBase
 from app.models.qa import QAHistory
 from app.services.qa.generator import answer_generator
-from app.services.qa.concurrency import qa_stream_concurrency
+from app.services.qa.concurrency import qa_stream_concurrency, per_user_stream_guard
 from app.services.cache.rate_limiter import rate_limiter, RateLimitResult
 
 router = APIRouter(prefix="/user", tags=["用户端"])
@@ -168,13 +168,21 @@ async def stream_chat(payload: UserAskIn, user: WebUser = Depends(require_user),
     )).scalars().all()]
     async def events():
         nonlocal conversation
+        if not await per_user_stream_guard.acquire(user.id):
+            yield f"event: error\ndata: {json.dumps({'detail': '当前会话仍在生成，请等待完成后再提问'}, ensure_ascii=False)}\n\n"
+            return
         started, parts, completed = time.time(), [], None
         answer_completed = False
         quota_consumed = False
-        admission = await qa_stream_concurrency.acquire()
+        try:
+            admission = await qa_stream_concurrency.acquire()
+        except BaseException:
+            await per_user_stream_guard.release(user.id)
+            raise
         if not admission.acquired:
             detail = "当前排队已满，请稍后重试" if admission.queue_full else "当前问答较多，请稍后重试"
             yield f"event: error\ndata: {json.dumps({'detail': detail}, ensure_ascii=False)}\n\n"
+            await per_user_stream_guard.release(user.id)
             return
         if admission.queued:
             yield f"event: status\ndata: {json.dumps({'detail': '正在排队处理'}, ensure_ascii=False)}\n\n"
@@ -223,4 +231,5 @@ async def stream_chat(payload: UserAskIn, user: WebUser = Depends(require_user),
             yield f"event: error\ndata: {json.dumps({'detail': '回答生成失败，请稍后重试'}, ensure_ascii=False)}\n\n"
         finally:
             await qa_stream_concurrency.release()
+            await per_user_stream_guard.release(user.id)
     return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})

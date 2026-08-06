@@ -1,6 +1,6 @@
 import asyncio
 
-from app.services.qa.concurrency import QAStreamConcurrency
+from app.services.qa.concurrency import QAStreamConcurrency, PerUserStreamGuard
 
 
 def test_stream_queue_is_bounded_and_releases_slots():
@@ -21,5 +21,17 @@ def test_stream_queue_is_bounded_and_releases_slots():
         second = await second_task
         assert second.acquired and second.queued
         await limiter.release()
+
+    asyncio.run(scenario())
+
+
+def test_one_user_cannot_occupy_multiple_stream_slots():
+    async def scenario():
+        guard = PerUserStreamGuard()
+        assert await guard.acquire(7)
+        assert not await guard.acquire(7)
+        assert await guard.acquire(8)
+        await guard.release(7)
+        assert await guard.acquire(7)
 
     asyncio.run(scenario())
