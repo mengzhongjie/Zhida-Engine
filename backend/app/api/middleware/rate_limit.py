@@ -52,6 +52,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if path.startswith("/assets/") or path.startswith("/static/"):
             return await call_next(request)
 
+        # 用户端聊天在路由完成身份校验后按 user_id 限流。不能按公网 IP
+        # 限制，否则校园、公司或宿舍共享 NAT 的正常用户会互相误伤。
+        if request.method == "POST" and path == "/api/v1/user/chat/stream":
+            return await call_next(request)
+
         # 获取客户端 IP
         client_ip = get_client_ip(request)
 

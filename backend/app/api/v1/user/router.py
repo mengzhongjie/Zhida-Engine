@@ -23,6 +23,8 @@ from app.models.auth import AccessCode, AccessCodeAgent, AccessCodeDailyUsage, C
 from app.models.knowledge import KnowledgeBase
 from app.models.qa import QAHistory
 from app.services.qa.generator import answer_generator
+from app.services.qa.concurrency import qa_stream_concurrency
+from app.services.cache.rate_limiter import rate_limiter, RateLimitResult
 
 router = APIRouter(prefix="/user", tags=["用户端"])
 
@@ -153,29 +155,39 @@ async def stream_chat(payload: UserAskIn, user: WebUser = Depends(require_user),
     agent = await db.get(Agent, payload.agent_id)
     if agent is None or not agent.is_active:
         raise HTTPException(status_code=404, detail="Agent 不存在或未启用")
+    # 用户已认证后按身份限速，而不是让共享公网 IP 的多个用户共用一个桶。
+    if rate_limiter.check(f"user:{user.id}", "", is_private=True) == RateLimitResult.RATE_LIMITED:
+        raise HTTPException(status_code=429, detail="提问过于频繁，请稍后再试")
     conversation = await db.get(Conversation, payload.conversation_id) if payload.conversation_id else None
     if conversation and (conversation.owner_type != "user" or conversation.owner_id != user.id or conversation.agent_id != agent.id):
         raise HTTPException(status_code=403, detail="无权访问该会话")
-    if conversation is None:
-        conversation = Conversation(id=str(uuid.uuid4()), owner_type="user", owner_id=user.id, agent_id=agent.id, title=payload.question[:40])
-        db.add(conversation)
-        await db.flush()
-    conversation_history = await _conversation_history(db, conversation.id, user.id)
+    conversation_history = await _conversation_history(db, conversation.id, user.id) if conversation else []
     kb_ids = [str(item) for item in (await db.execute(
         select(KnowledgeBase.id).join(AgentKnowledgeBase, AgentKnowledgeBase.knowledge_base_id == KnowledgeBase.id)
         .where(AgentKnowledgeBase.agent_id == agent.id, KnowledgeBase.is_active == True)  # noqa: E712
     )).scalars().all()]
-    # 所有权限、会话与知识库前置校验都通过后才预留额度；流式中断会在
-    # events() 内退款，因此不会因校验失败让用户损失次数。
-    await _consume_daily_quota(user, db)
-
     async def events():
+        nonlocal conversation
         started, parts, completed = time.time(), [], None
         answer_completed = False
+        quota_consumed = False
+        admission = await qa_stream_concurrency.acquire()
+        if not admission.acquired:
+            yield f"event: error\ndata: {json.dumps({'detail': '当前问答较多，请稍后重试'}, ensure_ascii=False)}\n\n"
+            return
+        if admission.queued:
+            yield f"event: status\ndata: {json.dumps({'detail': '正在排队处理'}, ensure_ascii=False)}\n\n"
         def capture(result):
             nonlocal completed
             completed = result
         try:
+            # 入队期间不持有 SQLite 写事务，也不预扣用户额度。
+            if conversation is None:
+                conversation = Conversation(id=str(uuid.uuid4()), owner_type="user", owner_id=user.id, agent_id=agent.id, title=payload.question[:40])
+                db.add(conversation)
+                await db.flush()
+            await _consume_daily_quota(user, db)
+            quota_consumed = True
             async for chunk in answer_generator.generate_stream(
                 kb_ids, payload.question, agent_id=agent.id, user_id=f"user:{user.id}",
                 on_complete=capture, conversation_history=conversation_history,
@@ -193,7 +205,7 @@ async def stream_chat(payload: UserAskIn, user: WebUser = Depends(require_user),
             yield f"event: done\ndata: {json.dumps({'conversation_id': conversation.id, 'sources': sources, 'remaining_today': await _remaining_daily_quota(user, db)}, ensure_ascii=False)}\n\n"
         except asyncio.CancelledError:
             await db.rollback()
-            if not answer_completed:
+            if quota_consumed and not answer_completed:
                 try:
                     await _refund_daily_quota(user, db)
                 except Exception:
@@ -201,11 +213,13 @@ async def stream_chat(payload: UserAskIn, user: WebUser = Depends(require_user),
             raise
         except Exception as exc:
             await db.rollback()
-            if not answer_completed:
+            if quota_consumed and not answer_completed:
                 try:
                     await _refund_daily_quota(user, db)
                 except Exception:
                     logger.exception("用户端流式问答失败后的额度退款失败")
             logger.exception("用户端流式问答失败")
             yield f"event: error\ndata: {json.dumps({'detail': '回答生成失败，请稍后重试'}, ensure_ascii=False)}\n\n"
+        finally:
+            qa_stream_concurrency.release()
     return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})

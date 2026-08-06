@@ -176,6 +176,12 @@ class Settings(BaseSettings):
     RATE_LIMIT_SILENT_ENABLED: bool = True  # 是否启用静默时段
     RATE_LIMIT_PRIVATE_RELAXED: bool = True  # 私聊是否放宽限制
 
+    # ---- 在线问答并发保护 ----
+    # 单机 SQLite/Chroma 部署优先保护正在对话的用户。超出部分在 SSE 建立后排队，
+    # 队列超时才返回繁忙提示，不让突发请求同时挤爆模型网关或本机资源。
+    QA_MAX_CONCURRENT_STREAMS: int = 10
+    QA_STREAM_QUEUE_TIMEOUT_SECONDS: int = 45
+
     # ---- MinerU 文档解析（可选，默认关闭）----
     # MinerU 是上海 AI Lab 开源的一站式文档解析引擎，支持 PDF/DOCX/PPTX/EPUB/图片等格式
     # 两种部署模式：embedded（直接调用 Python API，需安装 magic-pdf）| service（通过 HTTP 调用独立 MinerU 服务）
