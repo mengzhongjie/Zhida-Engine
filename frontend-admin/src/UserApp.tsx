@@ -9,7 +9,7 @@ function UserGate() {
   const location = useLocation()
 
   useEffect(() => {
-    fetch('/api/v1/auth/me', { credentials: 'include' })
+    fetch('/api/v1/auth/me?role=user', { credentials: 'include' })
       .then(async response => ({ ok: response.ok, data: await response.json() }))
       .then(result => setState(result.ok && result.data.role === 'user' ? 'ok' : 'denied'))
       .catch(() => setState('denied'))
@@ -24,7 +24,7 @@ function UserGate() {
 export default function UserApp() {
   return <Routes>
     <Route path="/login" element={<LoginPage fixedRole="user" />} />
-    <Route element={<UserGate />}><Route path="/" element={<UserPage />} /></Route>
+    <Route element={<UserGate />}><Route index element={<UserPage />} /></Route>
     <Route path="*" element={<Navigate to="/" replace />} />
   </Routes>
 }

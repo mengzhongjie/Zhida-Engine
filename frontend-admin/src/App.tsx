@@ -27,7 +27,7 @@ import { Spin } from 'antd'
 function RoleGate({ role }: { role: 'admin' | 'user' }) {
   const [state, setState] = useState<'loading' | 'ok' | 'denied'>('loading')
   const location = useLocation()
-  useEffect(() => { fetch('/api/v1/auth/me', { credentials: 'include' }).then(async response => ({ ok: response.ok, data: await response.json() })).then(result => setState(result.ok && result.data.role === role ? 'ok' : 'denied')).catch(() => setState('denied')) }, [role])
+  useEffect(() => { fetch(`/api/v1/auth/me?role=${role}`, { credentials: 'include' }).then(async response => ({ ok: response.ok, data: await response.json() })).then(result => setState(result.ok && result.data.role === role ? 'ok' : 'denied')).catch(() => setState('denied')) }, [role])
   if (state === 'loading') return <div className="route-loading"><Spin /></div>
   if (state === 'denied') return <Navigate to="/login" replace state={{ from: location.pathname }} />
   return <Outlet />

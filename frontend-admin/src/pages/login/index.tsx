@@ -72,6 +72,12 @@ export default function LoginPage({ fixedRole }: { fixedRole?: 'user' | 'admin' 
       })
       const data = await response.json().catch(() => ({}))
       if (!response.ok) throw new Error(readableError(data.detail, mode === 'register' ? '注册失败' : '登录失败'))
+      // 用户独立站的聊天页是根路由 /。完整跳转可确保 HttpOnly Cookie 已写入，
+      // 再由 UserGate 验证会话，避免本地双端口调试时 SPA 状态残留。
+      if (fixedRole === 'user' && mode === 'login') {
+        window.location.replace(`${window.location.pathname}#/`)
+        return
+      }
       navigate(mode === 'register' || role === 'admin' ? '/' : '/user', { replace: true })
     } catch (error: any) {
       message.error(error.message || '登录失败')

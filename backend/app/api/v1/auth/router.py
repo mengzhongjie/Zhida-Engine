@@ -9,6 +9,7 @@ import secrets
 import string
 import time
 from datetime import datetime, timedelta
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import Response as RawResponse
@@ -427,12 +428,37 @@ async def logout(request: Request, response: Response, db: AsyncSession = Depend
 
 
 @router.get("/me")
-async def get_me(request: Request, response: Response, db: AsyncSession = Depends(get_db)):
+async def get_me(
+    request: Request,
+    response: Response,
+    role: str | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """返回指定身份会话，避免本地双端口共享 localhost Cookie 时误判身份。"""
     _require_session_secret()
-    for role in ("admin", "user"):
+    if role is not None and role not in {"admin", "user"}:
+        raise HTTPException(status_code=422, detail="无效登录身份")
+    if role:
+        roles = (role,)
+    else:
+        # 兼容本地 5173/5174 双端口：Cookie 不按端口隔离，旧用户端请求
+        # /auth/me 时必须由 Origin/Referer 判断优先身份。生产环境则按独立
+        # 用户域名判断；该逻辑仅影响“当前身份”查询，不授予任何额外权限。
+        source_host = ""
+        for header in (request.headers.get("origin"), request.headers.get("referer")):
+            if not header:
+                continue
+            source_host = (urlparse(header).netloc or "").lower()
+            if source_host:
+                break
+        source_hostname = source_host.split(":", 1)[0]
+        is_local_user_site = source_host in {"localhost:5174", "127.0.0.1:5174"}
+        is_user_site = source_hostname in settings.user_app_hosts
+        roles = ("user", "admin") if is_local_user_site or is_user_site else ("admin", "user")
+    for current_role in roles:
         try:
-            principal = await _principal(request, response, db, role)
-            return {"role": role, "id": principal.id, "username": getattr(principal, "username", None)}
+            principal = await _principal(request, response, db, current_role)
+            return {"role": current_role, "id": principal.id, "username": getattr(principal, "username", None)}
         except HTTPException:
             continue
     raise HTTPException(status_code=401, detail="请先登录")
