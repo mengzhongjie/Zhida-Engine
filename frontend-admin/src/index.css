@@ -206,7 +206,7 @@ body {
   .user-message { max-width:94%; margin-bottom:14px; }
   .user-message section { padding:9px 11px; line-height:1.62; }
   .user-composer { flex:0 0 auto; gap:8px; padding:9px; padding-bottom:max(9px, env(safe-area-inset-bottom)); }
-  .user-composer-input small { display:none; }
+  .user-composer-input small { display:block; margin:0 0 4px 2px; color:#94a3b8; font-size:11px; }
   .user-composer textarea { min-height:40px; max-height:92px; padding:8px 9px; }
   .user-composer .ant-btn { flex:0 0 auto; height:40px; padding-inline:11px; }
 }
