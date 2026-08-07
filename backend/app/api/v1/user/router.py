@@ -17,6 +17,7 @@ from loguru import logger
 
 from app.api.v1.auth.router import require_user
 from app.core.database import get_db
+from app.core.time import as_beijing, beijing_today
 from app.models.agent import Agent
 from app.models.agent_knowledge_base import AgentKnowledgeBase
 from app.models.auth import AccessCode, AccessCodeAgent, AccessCodeDailyUsage, Conversation, WebUser
@@ -53,7 +54,7 @@ async def _consume_daily_quota(user: WebUser, db: AsyncSession) -> None:
     code = await db.get(AccessCode, user.access_code_id)
     if code is None or code.status != "claimed" or (code.expires_at and code.expires_at <= datetime.utcnow()):
         raise HTTPException(status_code=403, detail="访问资格已失效")
-    today = datetime.utcnow().date().isoformat()
+    today = beijing_today().isoformat()
     statement = sqlite_insert(AccessCodeDailyUsage).values(
         access_code_id=code.id, usage_date=today, question_count=1,
     ).on_conflict_do_update(
@@ -72,13 +73,13 @@ async def _remaining_daily_quota(user: WebUser, db: AsyncSession) -> int:
     code = await db.get(AccessCode, user.access_code_id)
     if code is None or code.status != "claimed" or (code.expires_at and code.expires_at <= datetime.utcnow()):
         return 0
-    usage = await db.get(AccessCodeDailyUsage, (code.id, datetime.utcnow().date().isoformat()))
+    usage = await db.get(AccessCodeDailyUsage, (code.id, beijing_today().isoformat()))
     return max(code.daily_question_limit - (usage.question_count if usage else 0), 0)
 
 
 async def _refund_daily_quota(user: WebUser, db: AsyncSession) -> None:
     """归还未完成流式问答的一次已预留额度，保证计数不会为负。"""
-    today = datetime.utcnow().date().isoformat()
+    today = beijing_today().isoformat()
     result = await db.execute(
         update(AccessCodeDailyUsage)
         .where(
@@ -136,7 +137,7 @@ async def list_conversations(user: WebUser = Depends(require_user), db: AsyncSes
     conversations = (await db.execute(select(Conversation).where(
         Conversation.owner_type == "user", Conversation.owner_id == user.id,
     ).order_by(Conversation.updated_at.desc()))).scalars().all()
-    return {"items": [{"id": item.id, "agent_id": item.agent_id, "title": item.title or "未命名对话", "updated_at": item.updated_at} for item in conversations]}
+    return {"items": [{"id": item.id, "agent_id": item.agent_id, "title": item.title or "未命名对话", "updated_at": as_beijing(item.updated_at)} for item in conversations]}
 
 
 @router.get("/conversations/{conversation_id}")
@@ -145,7 +146,7 @@ async def conversation_messages(conversation_id: str, user: WebUser = Depends(re
     if conversation is None or conversation.owner_type != "user" or conversation.owner_id != user.id:
         raise HTTPException(status_code=404, detail="会话不存在")
     records = (await db.execute(select(QAHistory).where(QAHistory.conversation_id == conversation_id).order_by(QAHistory.created_at))).scalars().all()
-    return {"conversation": {"id": conversation.id, "agent_id": conversation.agent_id, "title": conversation.title}, "items": [{"id": record.id, "question": record.question, "answer": record.answer, "sources": json.loads(record.sources or "[]"), "created_at": record.created_at} for record in records]}
+    return {"conversation": {"id": conversation.id, "agent_id": conversation.agent_id, "title": conversation.title}, "items": [{"id": record.id, "question": record.question, "answer": record.answer, "sources": json.loads(record.sources or "[]"), "created_at": as_beijing(record.created_at)} for record in records]}
 
 
 @router.post("/chat/stream")

@@ -5,7 +5,6 @@
 Agent 启动/停止时自动管理沙箱生命周期。
 """
 
-from datetime import datetime
 from pathlib import Path
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -16,6 +15,7 @@ from loguru import logger
 
 from app.core.database import get_db
 from app.core.config import settings
+from app.core.time import as_beijing, beijing_today, utc_day_start
 from app.core.sandbox import sandbox_manager
 from app.models.agent import Agent
 from app.models.agent_knowledge_base import AgentKnowledgeBase
@@ -46,8 +46,8 @@ def _agent_to_out(agent: Agent) -> AgentOut:
         status=agent.status,
         persona_preset=agent.persona_preset or "professional",
         persona_custom_instruction=agent.persona_custom_instruction,
-        created_at=agent.created_at,
-        updated_at=agent.updated_at,
+        created_at=as_beijing(agent.created_at),
+        updated_at=as_beijing(agent.updated_at),
     )
 
 
@@ -74,7 +74,7 @@ async def list_agents(
         out = _agent_to_out(agent)
 
         # 今日统计
-        today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        today_start = utc_day_start(beijing_today())
         qa_result = await db.execute(
             select(QAHistory).where(
                 QAHistory.agent_id == agent.id,
@@ -149,7 +149,7 @@ async def get_agent(
     out = _agent_to_out(agent)
 
     # 今日统计
-    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    today_start = utc_day_start(beijing_today())
     qa_result = await db.execute(
         select(QAHistory).where(
             QAHistory.agent_id == agent.id,
@@ -351,7 +351,7 @@ async def get_agent_stats(
         raise HTTPException(status_code=404, detail="Agent 不存在")
 
     # 今日统计
-    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    today_start = utc_day_start(beijing_today())
     qa_result = await db.execute(
         select(QAHistory).where(
             QAHistory.agent_id == agent.id,

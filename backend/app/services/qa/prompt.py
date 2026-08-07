@@ -8,8 +8,9 @@
 - 回答不了时自动 @ 指定用户
 """
 
-from datetime import datetime
 from typing import Optional
+
+from app.core.time import beijing_now
 
 
 class PromptTemplate:
@@ -172,7 +173,7 @@ class PromptTemplate:
         Returns:
             完整的 Prompt 文本
         """
-        current_time = datetime.now().strftime("%Y年%m月%d日 %H:%M")
+        current_time = beijing_now().strftime("%Y年%m月%d日 %H:%M")
 
         # 来源以结构化 sources 字段交给前端展示，正文不要求模型重复生成引用。
         # 保留参数是为了兼容既有调用方。

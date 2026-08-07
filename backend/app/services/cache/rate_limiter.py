@@ -302,8 +302,8 @@ class RateLimiter:
         if self._config.silent_start_hour == 0 and self._config.silent_end_hour == 0:
             return False
 
-        from datetime import datetime
-        current_hour = datetime.now().hour
+        from app.core.time import beijing_now
+        current_hour = beijing_now().hour
 
         start = self._config.silent_start_hour
         end = self._config.silent_end_hour

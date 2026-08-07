@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.security import get_client_ip
 from app.core.database import get_db
+from app.core.time import as_beijing, beijing_today
 from app.models.agent import Agent
 from app.models.auth import AccessCode, AccessCodeAgent, AccessCodeDailyUsage, AdminRegistrationLock, AdminUser, AuthSession, CaptchaChallenge, Conversation, WebUser
 from app.models.qa import QAHistory
@@ -495,12 +496,12 @@ async def _access_code_out(code: AccessCode, db: AsyncSession) -> dict:
         select(Agent.id, Agent.name).join(AccessCodeAgent, AccessCodeAgent.agent_id == Agent.id)
         .where(AccessCodeAgent.access_code_id == code.id).order_by(Agent.name)
     )).all()
-    usage = await db.get(AccessCodeDailyUsage, (code.id, datetime.utcnow().date().isoformat()))
+    usage = await db.get(AccessCodeDailyUsage, (code.id, beijing_today().isoformat()))
     return {
         "id": code.id, "code_hint": code.code_hint, "status": code.status,
         "daily_question_limit": code.daily_question_limit, "usage_today": usage.question_count if usage else 0,
-        "expires_at": code.expires_at, "claimed_at": code.claimed_at,
-        "note": code.note, "created_at": code.created_at,
+        "expires_at": as_beijing(code.expires_at), "claimed_at": as_beijing(code.claimed_at),
+        "note": code.note, "created_at": as_beijing(code.created_at),
         "agents": [{"id": agent_id, "name": name} for agent_id, name in agent_rows],
     }
 
@@ -583,7 +584,7 @@ async def update_access_code_limit(code_id: int, payload: AccessCodeLimitIn, db:
     code = await db.get(AccessCode, code_id)
     if code is None:
         raise HTTPException(status_code=404, detail="兑换码不存在")
-    usage = await db.get(AccessCodeDailyUsage, (code.id, datetime.utcnow().date().isoformat()))
+    usage = await db.get(AccessCodeDailyUsage, (code.id, beijing_today().isoformat()))
     if usage and payload.daily_question_limit < usage.question_count:
         raise HTTPException(status_code=422, detail=f"不能低于今日已使用的 {usage.question_count} 次")
     code.daily_question_limit = payload.daily_question_limit

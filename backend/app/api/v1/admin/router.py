@@ -4,7 +4,7 @@
 提供仪表盘统计、模块开关、缓存管理等接口。
 """
 
-from datetime import datetime, date, timedelta, time as dt_time
+from datetime import datetime, date
 import platform
 import sys
 import json
@@ -17,6 +17,7 @@ from loguru import logger
 
 from app.core.config import settings
 from app.core.database import get_db
+from app.core.time import beijing_now, beijing_today, utc_day_range
 from app.core.resource_manager import resource_manager
 from app.models.agent import Agent
 from app.models.knowledge import KnowledgeBase, Document
@@ -158,7 +159,7 @@ async def get_component_health(db: AsyncSession = Depends(get_db)):
                            "configured": True, "message": vision.model_name if vision.last_test_success is True else "待测试或最近测试失败"})
     except Exception as exc:
         checks.append({"key": "vision", "name": "视觉模型", "available": False, "message": str(exc)[:100]})
-    return {"items": checks, "checked_at": datetime.utcnow().isoformat()}
+    return {"items": checks, "checked_at": beijing_now().isoformat()}
 
 
 async def load_web_search_config(db: AsyncSession) -> None:
@@ -262,8 +263,9 @@ async def get_dashboard_stats(
     running_agents = sum(1 for a in agents if a.status == "running")
 
     # 今日问答统计（含 Token 用量）
-    range_start = datetime.combine(start_date or date.today(), dt_time.min)
-    range_end = datetime.combine((end_date or date.today()) + timedelta(days=1), dt_time.min)
+    selected_start = start_date or beijing_today()
+    selected_end = end_date or beijing_today()
+    range_start, range_end = utc_day_range(selected_start, selected_end)
     qa_result = await db.execute(
         select(QAHistory).where(QAHistory.created_at >= range_start, QAHistory.created_at < range_end)
     )

@@ -16,6 +16,7 @@ from sqlalchemy import select, func
 
 from app.core.config import settings
 from app.core.database import get_db
+from app.core.time import as_beijing
 from app.models.qa import QAHistory, QAPair
 from app.models.agent import Agent
 from app.models.knowledge import KnowledgeBase
@@ -90,7 +91,7 @@ def _qa_to_out(qa: QAHistory) -> QAHistoryOut:
         chat_type=qa.chat_type,
         user_id=qa.user_id,
         feedback=qa.feedback,
-        created_at=qa.created_at,
+        created_at=as_beijing(qa.created_at),
     )
 
 
