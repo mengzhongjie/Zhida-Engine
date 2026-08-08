@@ -68,6 +68,10 @@ class AccessCodeBatchIn(BaseModel):
     ids: list[int] = Field(min_length=1, max_length=100)
 
 
+class AccessCodeLookupIn(BaseModel):
+    access_code: str = Field(min_length=16, max_length=64)
+
+
 def _pepper() -> str:
     return settings.AUTH_SESSION_SECRET
 
@@ -85,8 +89,12 @@ def validate_auth_configuration() -> None:
 
 
 def _hash_access_code(code: str) -> str:
-    normalized = "".join(code.upper().split())
-    return hmac.new(_pepper().encode(), normalized.encode(), hashlib.sha256).hexdigest()
+    return hmac.new(_pepper().encode(), _normalize_access_code(code).encode(), hashlib.sha256).hexdigest()
+
+
+def _normalize_access_code(code: str) -> str:
+    """统一大小写与复制时混入的空白；保留短横线以兼容已发放兑换码哈希。"""
+    return "".join(code.upper().split())
 
 
 def _hash_token(token: str) -> str:
@@ -510,6 +518,16 @@ async def _access_code_out(code: AccessCode, db: AsyncSession) -> dict:
 async def list_access_codes(db: AsyncSession = Depends(get_db), _: AdminUser = Depends(require_admin)):
     codes = (await db.execute(select(AccessCode).order_by(AccessCode.created_at.desc()))).scalars().all()
     return {"items": [await _access_code_out(code, db) for code in codes]}
+
+
+@router.post("/admin/access-codes/lookup")
+async def lookup_access_code(payload: AccessCodeLookupIn, db: AsyncSession = Depends(get_db), _: AdminUser = Depends(require_admin)):
+    """管理员按用户提供的旧兑换码定位记录；只返回脱敏元数据，不回显明文。"""
+    normalized = _normalize_access_code(payload.access_code)
+    code = (await db.execute(select(AccessCode).where(AccessCode.code_hash == _hash_access_code(normalized)))).scalar_one_or_none()
+    if code is None:
+        raise HTTPException(status_code=404, detail="未找到对应兑换码")
+    return await _access_code_out(code, db)
 
 
 async def _rotate_access_code_value(code: AccessCode, db: AsyncSession) -> str:

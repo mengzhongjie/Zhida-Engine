@@ -30,7 +30,7 @@ from app.schemas.qa import (
     QAFeedbackRequest,
 )
 from app.services.cache.query_cache import query_cache
-from app.services.qa.generator import answer_generator
+from app.services.qa.generator import AnswerLengthLimitError, answer_generator
 from app.services.qa.concurrency import qa_stream_concurrency
 
 router = APIRouter(prefix="/qa", tags=["问答"])
@@ -55,7 +55,7 @@ def _answer_options(response_detail: str) -> dict:
         # 部分带推理能力的模型会先消耗一段 token 进行内部思考；详细回答
         # 保留更高预算，避免思考阶段结束后还来不及输出正文。
         return {"top_k": 8, "max_tokens": 8192, "temperature": 0.55}
-    return {"top_k": 4, "max_tokens": 1000, "temperature": 0.5}
+    return {"top_k": 4, "max_tokens": 4096, "temperature": 0.5}
 
 
 async def _recent_conversation(db: AsyncSession, chat_id: str | None, user_id: str | None) -> list[dict[str, str]]:
@@ -253,6 +253,9 @@ async def stream_question(
                 "model_used": result.model_used if result else "",
             }
             yield f"event: done\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+        except AnswerLengthLimitError as exc:
+            logger.warning("管理端流式问答超过输出长度上限")
+            yield f"event: error\ndata: {json.dumps({'detail': str(exc)}, ensure_ascii=False)}\n\n"
         except Exception as exc:
             logger.exception("管理端流式问答失败")
             yield f"event: error\ndata: {json.dumps({'detail': '回答生成失败，请稍后重试'}, ensure_ascii=False)}\n\n"

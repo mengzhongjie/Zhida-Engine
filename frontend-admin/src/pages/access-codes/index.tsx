@@ -18,6 +18,7 @@ export default function AccessCodes() {
   const [editing, setEditing] = useState<AccessCode>()
   const [selectedIds, setSelectedIds] = useState<number[]>([])
   const [createdCodes, setCreatedCodes] = useState<CreatedCode[]>([])
+  const [lookupCode, setLookupCode] = useState('')
   const [form] = Form.useForm()
   const [limitForm] = Form.useForm()
 
@@ -57,6 +58,7 @@ export default function AccessCodes() {
   const resetActivation = async (item: AccessCode) => { try { const result = await api.post<CreatedCode>(`/auth/admin/access-codes/${item.id}/reset-activation`); setCreatedCodes([result]); message.success('已换发新激活码，原登录 Cookie 已失效'); void load() } catch (error) { message.error(errorText(error, '重置登录失败')) } }
   const remove = async (item: AccessCode) => { try { await api.delete(`/auth/admin/access-codes/${item.id}`); message.success('兑换码已删除'); void load() } catch (error) { message.error(errorText(error, '删除失败')) } }
   const removeSelected = async () => { try { const result = await api.post<{ deleted: number }>('/auth/admin/access-codes/batch/delete', { ids: selectedIds }); message.success(`已删除 ${result.deleted} 个兑换码`); setSelectedIds([]); void load() } catch (error) { message.error(errorText(error, '批量删除失败')) } }
+  const lookup = async () => { const access_code = lookupCode.trim(); if (!access_code) return; try { const found = await api.post<AccessCode>('/auth/admin/access-codes/lookup', { access_code }); setItems(previous => [found, ...previous.filter(item => item.id !== found.id)]); setLookupCode(''); message.success(`已定位兑换码 ••••-${found.code_hint}`) } catch (error) { message.error(errorText(error, '未找到对应兑换码')) } }
 
   const columns = [
     { title: '激活码', width: 220, render: (_: unknown, item: AccessCode) => <Space size="small" wrap={false} style={{ whiteSpace: 'nowrap' }}><Text code style={{ whiteSpace: 'nowrap' }}>••••-{item.code_hint}</Text>{item.status === 'active' && <Button type="link" size="small" icon={<CopyOutlined />} onClick={() => void copyCode(item)}>复制</Button>}</Space> },
@@ -68,7 +70,7 @@ export default function AccessCodes() {
     { title: '操作', key: 'action', width: 350, fixed: 'right' as const, render: (_: unknown, item: AccessCode) => <Space size="small" wrap={false} style={{ whiteSpace: 'nowrap' }}><Button type="link" icon={<EditOutlined />} onClick={() => { setEditing(item); limitForm.setFieldsValue({ daily_question_limit: item.daily_question_limit }) }}>额度</Button>{item.status === 'claimed' && <Popconfirm title="将注销该用户的所有设备，并换发一个新的单次激活码。用户历史保留，确认继续？" onConfirm={() => void resetActivation(item)}><Button type="link" icon={<KeyOutlined />}>重置登录</Button></Popconfirm>}{(item.status === 'active' || item.status === 'claimed') && <Popconfirm title="停用后该用户将立即无法继续访问，确认继续？" onConfirm={() => void revoke(item)}><Button type="link" danger icon={<StopOutlined />}>停用</Button></Popconfirm>}<Popconfirm title="确认删除？这会永久删除该用户的会话历史与访问资格。" onConfirm={() => void remove(item)}><Button type="link" danger icon={<DeleteOutlined />}>删除</Button></Popconfirm></Space> },
   ]
 
-  return <div className="content-page access-code-page"><div className="page-header"><div><Title level={3}>用户激活码</Title><Text type="secondary" className="page-header-copy">为用户授予指定 Agent 的访问权限与每日问答额度。</Text></div><Space wrap><Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button><Button type="primary" icon={<PlusOutlined />} onClick={() => setCreating(true)}>新建激活码</Button></Space></div>
+  return <div className="content-page access-code-page"><div className="page-header"><div><Title level={3}>用户激活码</Title><Text type="secondary" className="page-header-copy">为用户授予指定 Agent 的访问权限与每日问答额度。</Text></div><Space wrap><Input.Search aria-label="查询旧兑换码" value={lookupCode} onChange={event => setLookupCode(event.target.value)} onSearch={() => void lookup()} placeholder="输入旧兑换码查询" style={{ width: 240 }} enterButton="查询" /><Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button><Button type="primary" icon={<PlusOutlined />} onClick={() => setCreating(true)}>新建激活码</Button></Space></div>
     <Card className="access-code-overview"><Text strong>激活码只能领取一次</Text><Text type="secondary">用户首次登录后，完整激活码会立即销毁，无法再次查看或使用。用户丢失登录状态时，请使用“重置登录”换发新码。</Text></Card>
     {selectedIds.length > 0 && <div className="access-code-batch"><span>已选择 {selectedIds.length} 个兑换码</span><Button size="small" icon={<CopyOutlined />} onClick={() => void copySelected()}>批量复制</Button><Popconfirm title={`确认删除选中的 ${selectedIds.length} 个兑换码？`} onConfirm={() => void removeSelected()}><Button danger size="small" icon={<DeleteOutlined />}>批量删除</Button></Popconfirm><Button size="small" onClick={() => setSelectedIds([])}>取消</Button></div>}
     <Card><Table rowKey="id" loading={loading} rowSelection={{ selectedRowKeys: selectedIds, onChange: keys => setSelectedIds(keys.map(Number)) }} columns={columns} dataSource={items} scroll={{ x: 1240 }} pagination={{ pageSize: 10 }} locale={{ emptyText: '暂无兑换码' }} /></Card>

@@ -68,12 +68,14 @@ class ModuleSwitchesOut(BaseModel):
     """模块开关输出"""
     enable_source_citation: bool = Field(..., description="回答后附带消息来源")
     enable_rate_limit: bool = Field(..., description="限流总开关")
+    development_mode: bool = Field(False, description="开发维护模式，暂停用户端问答")
 
 
 class ModuleSwitchesUpdate(BaseModel):
     """模块开关更新请求"""
     enable_source_citation: Optional[bool] = Field(None, description="回答后附带消息来源")
     enable_rate_limit: Optional[bool] = Field(None, description="限流总开关")
+    development_mode: Optional[bool] = Field(None, description="开发维护模式，暂停用户端问答")
 
 
 # ============================================================

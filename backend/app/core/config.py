@@ -138,6 +138,7 @@ class Settings(BaseSettings):
     ENABLE_STREAMING: bool = True  # 预留给内部调用的模型流式能力
     ENABLE_SOURCE_CITATION: bool = True  # 回答后附带消息来源
     ENABLE_MINERU: bool = False  # MinerU 文档解析（可选，需安装 magic-pdf）
+    DEVELOPMENT_MODE: bool = False  # 管理员维护期间暂停用户端问答
 
     # ---- 安全配置 ----
     ENABLE_RATE_LIMIT: bool = True  # 限流总开关

@@ -347,6 +347,7 @@ async def get_module_switches():
     return ModuleSwitchesOut(
         enable_source_citation=settings.ENABLE_SOURCE_CITATION,
         enable_rate_limit=settings.ENABLE_RATE_LIMIT,
+        development_mode=settings.DEVELOPMENT_MODE,
     )
 
 

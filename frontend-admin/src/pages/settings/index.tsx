@@ -54,6 +54,7 @@ interface LLMConfig {
 interface ModuleSettings {
   enable_source_citation: boolean
   enable_rate_limit: boolean
+  development_mode: boolean
 }
 
 interface WebSearchConfig { enabled: boolean; provider: string; tavily_api_key: string; exa_api_key: string; tavily_configured: boolean; exa_configured: boolean; max_results: number }
@@ -443,6 +444,7 @@ export default function SettingsPage() {
                         {
                           enable_source_citation: '返回结构化来源',
                           enable_rate_limit: '请求限流',
+                          development_mode: '开发维护模式（暂停用户端问答）',
                         }[key]
                       }</Text>
                     </div>

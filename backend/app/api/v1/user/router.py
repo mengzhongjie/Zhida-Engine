@@ -17,13 +17,14 @@ from loguru import logger
 
 from app.api.v1.auth.router import require_user
 from app.core.database import get_db
+from app.core.config import settings
 from app.core.time import as_beijing, beijing_today
 from app.models.agent import Agent
 from app.models.agent_knowledge_base import AgentKnowledgeBase
 from app.models.auth import AccessCode, AccessCodeAgent, AccessCodeDailyUsage, Conversation, WebUser
 from app.models.knowledge import KnowledgeBase
 from app.models.qa import QAHistory
-from app.services.qa.generator import answer_generator
+from app.services.qa.generator import AnswerLengthLimitError, answer_generator
 from app.services.qa.concurrency import qa_stream_concurrency, per_user_stream_guard
 from app.services.cache.rate_limiter import rate_limiter, RateLimitResult
 
@@ -98,7 +99,7 @@ def _answer_options(response_detail: str) -> dict:
     if response_detail == "detailed":
         # 与管理端保持一致：推理型主模型需要给详细模式预留正文 token。
         return {"top_k": 8, "max_tokens": 8192, "temperature": 0.55}
-    return {"top_k": 4, "max_tokens": 1000, "temperature": 0.5}
+    return {"top_k": 4, "max_tokens": 4096, "temperature": 0.5}
 
 
 async def _conversation_history(db: AsyncSession, conversation_id: str | None, user_id: int) -> list[dict[str, str]]:
@@ -129,7 +130,7 @@ async def list_agents(user: WebUser = Depends(require_user), db: AsyncSession = 
 @router.get("/me")
 async def get_user_profile(user: WebUser = Depends(require_user), db: AsyncSession = Depends(get_db)):
     """用户端的轻量账户信息，不返回兑换码或其他敏感信息。"""
-    return {"remaining_today": await _remaining_daily_quota(user, db)}
+    return {"remaining_today": await _remaining_daily_quota(user, db), "development_mode": settings.DEVELOPMENT_MODE}
 
 
 @router.get("/conversations")
@@ -151,6 +152,8 @@ async def conversation_messages(conversation_id: str, user: WebUser = Depends(re
 
 @router.post("/chat/stream")
 async def stream_chat(payload: UserAskIn, user: WebUser = Depends(require_user), db: AsyncSession = Depends(get_db)):
+    if settings.DEVELOPMENT_MODE:
+        raise HTTPException(status_code=503, detail="系统正在开发维护中，暂时无法发起问答，请稍后再试")
     if payload.agent_id not in await _allowed_agent_ids(user, db):
         raise HTTPException(status_code=403, detail="没有该 Agent 的访问权限")
     agent = await db.get(Agent, payload.agent_id)
@@ -221,6 +224,15 @@ async def stream_chat(payload: UserAskIn, user: WebUser = Depends(require_user),
                 except Exception:
                     logger.exception("用户端流式问答取消后的额度退款失败")
             raise
+        except AnswerLengthLimitError as exc:
+            await db.rollback()
+            if quota_consumed and not answer_completed:
+                try:
+                    await _refund_daily_quota(user, db)
+                except Exception:
+                    logger.exception("用户端长度上限问答退款失败")
+            logger.warning("用户端流式问答超过输出长度上限")
+            yield f"event: error\ndata: {json.dumps({'detail': str(exc)}, ensure_ascii=False)}\n\n"
         except Exception as exc:
             await db.rollback()
             if quota_consumed and not answer_completed:

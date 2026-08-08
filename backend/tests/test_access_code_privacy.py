@@ -12,10 +12,18 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.api.v1.auth.router import UserLoginIn, _hash_access_code, user_login  # noqa: E402
+from app.api.v1.auth.router import (  # noqa: E402
+    AccessCodeLookupIn, UserLoginIn, _hash_access_code, lookup_access_code,
+    require_admin, router as auth_router, user_login,
+)
+from app.api.v1.user.router import UserAskIn, stream_chat  # noqa: E402
 from app.core.config import settings  # noqa: E402
 from app.core.database import Base  # noqa: E402
-from app.models.auth import AccessCode, AdminUser, AuthSession, CaptchaChallenge, WebUser  # noqa: E402,F401
+from app.models.agent import Agent  # noqa: E402,F401
+from app.models.auth import (  # noqa: E402,F401
+    AccessCode, AccessCodeAgent, AccessCodeDailyUsage, AdminUser, AuthSession,
+    CaptchaChallenge, WebUser,
+)
 # 注册全部 ORM 关系，避免仅加载认证路由时 SQLAlchemy 无法解析 Agent 的关联模型。
 import app.models.agent_knowledge_base  # noqa: E402,F401
 import app.models.embedding_config  # noqa: E402,F401
@@ -93,3 +101,54 @@ async def test_access_code_can_only_activate_one_private_user(tmp_path):
     finally:
         settings.AUTH_SESSION_SECRET = original_secret
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_admin_can_lookup_old_code_without_revealing_sensitive_fields(tmp_path):
+    """查询用哈希定位已领取旧码，响应不能泄露可复用凭据或内部密文。"""
+    original_secret = settings.AUTH_SESSION_SECRET
+    settings.AUTH_SESSION_SECRET = "test-secret-which-is-at-least-thirty-two-characters"
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'lookup.db'}")
+    Session = async_sessionmaker(engine, expire_on_commit=False)
+    code_text = "ABCD-EFGH-JKLM-NPQR-STUV-WXYZ"
+    try:
+        async with engine.begin() as connection:
+            for table in (
+                AdminUser.__table__, Agent.__table__, AccessCode.__table__, WebUser.__table__,
+                AuthSession.__table__, AccessCodeAgent.__table__, AccessCodeDailyUsage.__table__,
+            ):
+                await connection.run_sync(table.create)
+        async with Session() as db:
+            db.add(AccessCode(
+                code_hash=_hash_access_code(code_text), code_hint=code_text[-8:],
+                code_ciphertext=None, status="claimed",
+            ))
+            await db.commit()
+            result = await lookup_access_code(AccessCodeLookupIn(access_code=code_text), db, object())
+            assert result["code_hint"] == code_text[-8:]
+            assert "access_code" not in result
+            assert "code_hash" not in result
+            assert "code_ciphertext" not in result
+            with pytest.raises(HTTPException) as exc:
+                await lookup_access_code(AccessCodeLookupIn(access_code="ZZZZ-YYYY-XXXX-WWWW-VVVV-UUUU"), db, object())
+            assert exc.value.status_code == 404
+    finally:
+        settings.AUTH_SESSION_SECRET = original_secret
+        await engine.dispose()
+
+    lookup_route = next(route for route in auth_router.routes if route.path == "/auth/admin/access-codes/lookup")
+    assert any(dependency.call is require_admin for dependency in lookup_route.dependant.dependencies)
+
+
+@pytest.mark.asyncio
+async def test_development_mode_rejects_user_chat_before_any_db_or_model_work():
+    """维护模式不能只靠前端禁用；直接调接口也必须被 503 拦截。"""
+    original = settings.DEVELOPMENT_MODE
+    settings.DEVELOPMENT_MODE = True
+    try:
+        with pytest.raises(HTTPException) as exc:
+            await stream_chat(UserAskIn(agent_id=1, question="测试"), None, None)
+        assert exc.value.status_code == 503
+        assert "开发维护" in exc.value.detail
+    finally:
+        settings.DEVELOPMENT_MODE = original

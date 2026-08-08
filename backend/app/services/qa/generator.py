@@ -47,6 +47,13 @@ class AnswerResult:
     web_search_count: int = 0  # 实际发起网络检索次数（不等同于返回结果数）
 
 
+class AnswerLengthLimitError(RuntimeError):
+    """模型在输出正文前耗尽两档输出预算时抛出。
+
+    这是可预期的用户可见限制，不应伪装成“模型离线”或再次消耗用户额度。
+    """
+
+
 class AnswerGenerator:
     """
     回答生成器 —— 端到端的问答流程
@@ -72,6 +79,58 @@ class AnswerGenerator:
         # LLMGateway 当前维护可变的 Agent 配置。低成本单机部署下串行化模型调用，
         # 能避免两个不同 Agent 的并发请求串用模型或 API Key。
         self._llm_lock = asyncio.Lock()
+
+    @staticmethod
+    def _is_pre_content_length_error(error: Exception) -> bool:
+        """只识别网关已确认的、尚未返回正文的 token 长度耗尽。"""
+        message = str(error).lower()
+        return "finish_reason=length" in message or "finish reason=length" in message
+
+    async def _chat_stream_with_length_retry(
+        self,
+        *,
+        prompt: str,
+        temperature: float,
+        max_tokens: int,
+    ) -> AsyncIterator[str]:
+        """在没有任何正文时，针对长度耗尽仅提高一次输出预算重试。
+
+        已输出正文、网络/认证/限流错误均绝不重试，防止重复内容和放大上游流量。
+        12000 是绝对上限，第二次仍耗尽时交给 API 层以明确错误结束请求。
+        """
+        attempted_extended_budget = False
+        current_budget = max_tokens
+        emitted_content = False
+
+        while True:
+            try:
+                async for chunk in llm_gateway.chat_stream(
+                    prompt=prompt,
+                    temperature=temperature,
+                    max_tokens=current_budget,
+                ):
+                    emitted_content = True
+                    yield chunk
+                return
+            except Exception as error:
+                can_retry = (
+                    not emitted_content
+                    and not attempted_extended_budget
+                    and current_budget < 12000
+                    and self._is_pre_content_length_error(error)
+                )
+                if can_retry:
+                    attempted_extended_budget = True
+                    current_budget = 12000
+                    logger.warning(
+                        "模型在输出正文前达到长度上限，使用 12000 token 预算重试一次"
+                    )
+                    continue
+                if not emitted_content and self._is_pre_content_length_error(error):
+                    raise AnswerLengthLimitError(
+                        "回答所需长度超过当前上限，请缩短问题或改用简洁模式后重试"
+                    ) from error
+                raise
 
     @staticmethod
     def _unique_sources(results: list[IndexResult], limit: int = 3) -> list[dict]:
@@ -690,13 +749,16 @@ class AnswerGenerator:
             async with self._llm_lock:
                 await llm_gateway.initialize(agent_id)
                 model_used = llm_gateway.primary_model_name or "unknown"
-                async for chunk in llm_gateway.chat_stream(
+                async for chunk in self._chat_stream_with_length_retry(
                     prompt=prompt,
                     temperature=temperature,
                     max_tokens=max_tokens,
                 ):
                     answer_parts.append(chunk)
                     yield chunk
+        except AnswerLengthLimitError:
+            # API 层据此返回可操作的长度提示并退还用户端预扣额度。
+            raise
         except Exception as e:
             logger.error(f"流式生成失败: {e}")
             degraded = True

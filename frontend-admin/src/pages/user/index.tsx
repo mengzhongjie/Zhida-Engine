@@ -26,6 +26,7 @@ export default function UserPage() {
   const [responseDetail, setResponseDetail] = useState<'concise' | 'detailed'>('concise')
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [remainingToday, setRemainingToday] = useState<number | null>(null)
+  const [developmentMode, setDevelopmentMode] = useState(false)
   const [compactViewport, setCompactViewport] = useState(() => window.matchMedia('(max-width: 820px)').matches)
   const bottomRef = useRef<HTMLDivElement>(null)
   const selectedAgent = useMemo(() => agents.find(item => item.id === agentId), [agents, agentId])
@@ -47,6 +48,7 @@ export default function UserPage() {
       setAgentId(previous => previous && availableAgents.some((item: Agent) => item.id === previous) ? previous : undefined)
       setConversations(conversationData.items || [])
       setRemainingToday(typeof profileData.remaining_today === 'number' ? profileData.remaining_today : null)
+      setDevelopmentMode(profileData.development_mode === true)
     } catch {
       message.error('加载用户信息失败，请重新登录后重试')
     }
@@ -88,7 +90,7 @@ export default function UserPage() {
 
   const send = async () => {
     const question = input.trim()
-    if (!question || !agentId || sending) return
+    if (!question || !agentId || sending || developmentMode) return
 
     const pendingId = createId()
     setMessages(previous => [
@@ -185,6 +187,7 @@ export default function UserPage() {
     <section className="user-chat">
       <div className="user-chat-title">{selectedAgent?.name || '选择助手'}{selectedAgent?.description && <Text type="secondary">{selectedAgent.description}</Text>}</div>
       <div className="user-messages">
+        {developmentMode && <div className="user-development-notice" role="status"><strong>系统正在开发维护</strong><span>问答功能暂时不可用，请稍后再试。</span></div>}
         {!messages.length && (agentId ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="有什么想了解的？" /> : agents.length ? <div className="user-agent-chooser"><header><b>选择助手</b><span>开始一段新的对话</span></header><div>{agents.map(item => <Button key={item.id} onClick={() => selectAgent(item.id)}><i>{item.avatar || item.name.slice(0, 1)}</i><section><strong>{item.name}</strong>{item.description && <small>{item.description}</small>}</section><em>开始对话</em></Button>)}</div></div> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无可用助手" />)}
         {messages.map(item => <article key={item.id} className={`user-message ${item.role}`}>
           <div>{item.role === 'user' ? '我' : 'AI'}</div>
@@ -194,8 +197,8 @@ export default function UserPage() {
         <div ref={bottomRef} />
       </div>
       <div className="user-composer">
-        <div className="user-composer-input">{remainingToday !== null && <small>今日剩余 {remainingToday} 次</small>}<textarea value={input} onChange={event => setInput(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); void send() } }} placeholder={compactViewport ? '输入问题…' : '输入问题；Enter 换行，Ctrl/Cmd + Enter 发送'} disabled={!agentId || sending} rows={2} /></div>
-        <div className="user-composer-actions"><Segmented className="response-detail-picker" value={responseDetail} onChange={value => setResponseDetail(value as 'concise' | 'detailed')} options={[{ value: 'concise', label: '简洁' }, { value: 'detailed', label: '详细' }]} disabled={sending} /><div className="user-composer-actions-right"><Button type="primary" icon={<SendOutlined />} disabled={!input.trim() || sending || !agentId} loading={sending} onClick={() => void send()}>发送</Button></div></div>
+        <div className="user-composer-input">{remainingToday !== null && <small>今日剩余 {remainingToday} 次</small>}<textarea value={input} onChange={event => setInput(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); void send() } }} placeholder={developmentMode ? '系统维护中…' : compactViewport ? '输入问题…' : '输入问题；Enter 换行，Ctrl/Cmd + Enter 发送'} disabled={!agentId || sending || developmentMode} rows={2} /></div>
+        <div className="user-composer-actions"><Segmented className="response-detail-picker" value={responseDetail} onChange={value => setResponseDetail(value as 'concise' | 'detailed')} options={[{ value: 'concise', label: '简洁' }, { value: 'detailed', label: '详细' }]} disabled={sending || developmentMode} /><div className="user-composer-actions-right"><Button type="primary" icon={<SendOutlined />} disabled={!input.trim() || sending || !agentId || developmentMode} loading={sending} onClick={() => void send()}>发送</Button></div></div>
       </div>
     </section></div>
   </main>
