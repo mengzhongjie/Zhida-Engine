@@ -42,6 +42,7 @@ interface LLMConfig {
   is_primary: boolean
   is_fallback: boolean
   is_active: boolean
+  extra_config?: string | null
   last_test_at: string | null
   last_test_success: boolean | null
   // 限流配置
@@ -49,6 +50,11 @@ interface LLMConfig {
   max_requests_per_minute: number
   max_tokens_per_minute: number
   max_tokens_per_day: number
+}
+
+const hasThinkingDisabled = (extraConfig?: string | null) => {
+  if (!extraConfig) return false
+  try { return JSON.parse(extraConfig).thinking?.type === 'disabled' } catch { return false }
 }
 
 interface ModuleSettings {
@@ -232,6 +238,7 @@ export default function SettingsPage() {
       api_key: '', // 不回显 API Key
       role: config.is_primary ? 'primary' : config.is_fallback ? 'fallback' : 'standalone',
       is_active: config.is_active,
+      disable_thinking: hasThinkingDisabled(config.extra_config),
       agent_id: config.agent_id,
       max_tokens_per_request: config.max_tokens_per_request,
       max_requests_per_minute: config.max_requests_per_minute,
@@ -314,8 +321,10 @@ export default function SettingsPage() {
 
   const handleSubmit = async () => {
     const values = await form.validateFields()
+    const { disable_thinking, ...configValues } = values
     const payload = {
-      ...values,
+      ...configValues,
+      extra_config: disable_thinking ? JSON.stringify({ thinking: { type: 'disabled' } }) : null,
       is_primary: values.role === 'primary',
       is_fallback: values.role === 'fallback',
     }
@@ -574,6 +583,19 @@ export default function SettingsPage() {
             rules={[{ required: true, message: '请输入模型名称' }]}
           >
             <Input placeholder="例如: deepseek-v4-pro" />
+          </Form.Item>
+
+          <Form.Item noStyle shouldUpdate={(previous, current) => previous.provider_id !== current.provider_id}>
+            {({ getFieldValue }) => getFieldValue('provider_id') === 'deepseek' && (
+              <Form.Item
+                name="disable_thinking"
+                valuePropName="checked"
+                label="关闭思考模式"
+                extra="简洁问答不输出隐藏推理，避免推理占满回答 Token；接口不支持时会自动按普通模式重试。"
+              >
+                <Switch checkedChildren="已关闭" unCheckedChildren="开启" />
+              </Form.Item>
+            )}
           </Form.Item>
 
           <Form.Item
