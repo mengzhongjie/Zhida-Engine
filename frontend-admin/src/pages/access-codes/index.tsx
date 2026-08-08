@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Alert, Button, Card, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Table, Tag, Typography, message } from 'antd'
+import { Alert, Button, Card, Dropdown, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Table, Tag, Typography, message } from 'antd'
 import { CopyOutlined, DeleteOutlined, EditOutlined, KeyOutlined, PlusOutlined, ReloadOutlined, StopOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { api } from '@/services/api'
@@ -59,6 +59,20 @@ export default function AccessCodes() {
   const remove = async (item: AccessCode) => { try { await api.delete(`/auth/admin/access-codes/${item.id}`); message.success('兑换码已删除'); void load() } catch (error) { message.error(errorText(error, '删除失败')) } }
   const removeSelected = async () => { try { const result = await api.post<{ deleted: number }>('/auth/admin/access-codes/batch/delete', { ids: selectedIds }); message.success(`已删除 ${result.deleted} 个兑换码`); setSelectedIds([]); void load() } catch (error) { message.error(errorText(error, '批量删除失败')) } }
   const lookup = async () => { const access_code = lookupCode.trim(); if (!access_code) return; try { const found = await api.post<AccessCode>('/auth/admin/access-codes/lookup', { access_code }); setItems(previous => [found, ...previous.filter(item => item.id !== found.id)]); setLookupCode(''); message.success(`已定位兑换码 ••••-${found.code_hint}`) } catch (error) { message.error(errorText(error, '未找到对应兑换码')) } }
+  const manageCode = (item: AccessCode, action: string) => {
+    if (action === 'limit') { setEditing(item); limitForm.setFieldsValue({ daily_question_limit: item.daily_question_limit }); return }
+    const isReset = action === 'reset'
+    const isDelete = action === 'delete'
+    Modal.confirm({
+      title: isReset ? '重置用户登录？' : isDelete ? '删除兑换码？' : '停用兑换码？',
+      content: isReset
+        ? '将注销该用户的所有设备，并换发一个新的单次激活码。用户历史保留。'
+        : isDelete ? '这会永久删除该用户的会话历史与访问资格，无法恢复。' : '停用后该用户将立即无法继续访问。',
+      okText: isReset ? '确认换发' : isDelete ? '确认删除' : '确认停用',
+      okButtonProps: { danger: true }, cancelText: '取消',
+      onOk: () => isReset ? resetActivation(item) : isDelete ? remove(item) : revoke(item),
+    })
+  }
 
   const columns = [
     { title: '激活码', width: 220, render: (_: unknown, item: AccessCode) => <Space size="small" wrap={false} style={{ whiteSpace: 'nowrap' }}><Text code style={{ whiteSpace: 'nowrap' }}>••••-{item.code_hint}</Text>{item.status === 'active' && <Button type="link" size="small" icon={<CopyOutlined />} onClick={() => void copyCode(item)}>复制</Button>}</Space> },
@@ -67,7 +81,12 @@ export default function AccessCodes() {
     { title: '状态', dataIndex: 'status', render: (status: AccessCode['status']) => <Tag color={status === 'active' ? 'green' : status === 'claimed' ? 'blue' : status === 'expired' ? 'default' : 'red'}>{status === 'active' ? '待激活' : status === 'claimed' ? '已激活' : status === 'expired' ? '已过期' : '已停用'}</Tag> },
     { title: '有效期', dataIndex: 'expires_at', render: (value?: string | null) => value ? dayjs(value).format('YYYY-MM-DD HH:mm') : '长期有效' },
     { title: '备注', dataIndex: 'note', render: (value?: string | null) => value || '—' },
-    { title: '操作', key: 'action', width: 350, fixed: 'right' as const, render: (_: unknown, item: AccessCode) => <Space size="small" wrap={false} style={{ whiteSpace: 'nowrap' }}><Button type="link" icon={<EditOutlined />} onClick={() => { setEditing(item); limitForm.setFieldsValue({ daily_question_limit: item.daily_question_limit }) }}>额度</Button>{item.status === 'claimed' && <Popconfirm title="将注销该用户的所有设备，并换发一个新的单次激活码。用户历史保留，确认继续？" onConfirm={() => void resetActivation(item)}><Button type="link" icon={<KeyOutlined />}>重置登录</Button></Popconfirm>}{(item.status === 'active' || item.status === 'claimed') && <Popconfirm title="停用后该用户将立即无法继续访问，确认继续？" onConfirm={() => void revoke(item)}><Button type="link" danger icon={<StopOutlined />}>停用</Button></Popconfirm>}<Popconfirm title="确认删除？这会永久删除该用户的会话历史与访问资格。" onConfirm={() => void remove(item)}><Button type="link" danger icon={<DeleteOutlined />}>删除</Button></Popconfirm></Space> },
+    { title: '操作', key: 'action', width: 100, fixed: 'right' as const, render: (_: unknown, item: AccessCode) => <Dropdown trigger={['click']} menu={{ items: [
+      { key: 'limit', icon: <EditOutlined />, label: '调整每日额度' },
+      ...(item.status === 'claimed' ? [{ key: 'reset', icon: <KeyOutlined />, label: '重置登录' }] : []),
+      ...((item.status === 'active' || item.status === 'claimed') ? [{ type: 'divider' as const }, { key: 'revoke', danger: true, icon: <StopOutlined />, label: '停用兑换码' }] : []),
+      { key: 'delete', danger: true, icon: <DeleteOutlined />, label: '删除兑换码' },
+    ], onClick: ({ key }) => manageCode(item, key) }}><Button size="small" type="text">管理</Button></Dropdown> },
   ]
 
   return <div className="content-page access-code-page"><div className="page-header"><div><Title level={3}>用户激活码</Title><Text type="secondary" className="page-header-copy">为用户授予指定 Agent 的访问权限与每日问答额度。</Text></div><Space wrap><Input.Search aria-label="查询旧兑换码" value={lookupCode} onChange={event => setLookupCode(event.target.value)} onSearch={() => void lookup()} placeholder="输入旧兑换码查询" style={{ width: 240 }} enterButton="查询" /><Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button><Button type="primary" icon={<PlusOutlined />} onClick={() => setCreating(true)}>新建激活码</Button></Space></div>
