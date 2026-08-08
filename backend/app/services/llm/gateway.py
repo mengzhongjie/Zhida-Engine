@@ -9,8 +9,9 @@
 - 完全从数据库配置读取，不使用硬编码模型列表
 """
 
+import asyncio
 import time
-from typing import Optional, AsyncIterator, Any
+from typing import Optional, AsyncIterator, Any, Literal
 from dataclasses import dataclass
 
 from loguru import logger
@@ -66,6 +67,7 @@ class LLMGateway:
         # 当前 Agent 的模型客户端
         self._primary_client: Optional[ModelClient] = None     # 主模型
         self._fallback_clients: list[ModelClient] = []          # 降级模型列表
+        self._context_client: Optional[ModelClient] = None      # 问题重写 / 会话压缩
         self._agent_id: Optional[int] = None
 
     # ================================================================
@@ -82,6 +84,7 @@ class LLMGateway:
         self._agent_id = agent_id
         self._primary_client = None
         self._fallback_clients = []
+        self._context_client = None
 
         # 从数据库加载配置
         configs = await self._load_configs(agent_id)
@@ -89,16 +92,19 @@ class LLMGateway:
         # 构建模型客户端
         for config in configs:
             client = self._build_client(config)
+            if config.is_context_model:
+                self._context_client = client
             if config.is_primary:
                 self._primary_client = client
             elif config.is_fallback:
                 self._fallback_clients.append(client)
 
         # 兼容早期配置：用户完成连接测试但未勾选“主模型”时，实际问答仍应使用唯一的启用配置。
-        if self._primary_client is None and configs:
-            self._primary_client = self._build_client(configs[0])
+        answer_configs = [config for config in configs if not config.is_context_model]
+        if self._primary_client is None and answer_configs:
+            self._primary_client = self._build_client(answer_configs[0])
             logger.warning(
-                f"Agent {agent_id}: 没有标记主模型，临时使用 {configs[0].model_name}；"
+                f"Agent {agent_id}: 没有标记主模型，临时使用 {answer_configs[0].model_name}；"
                 "请在设置中将其设为主模型"
             )
 
@@ -110,6 +116,28 @@ class LLMGateway:
             f"LLM 网关初始化完成: Agent={agent_id}, "
             f"主模型={self._primary_client.config.model_name if self._primary_client else '无'}, "
             f"降级模型={len(self._fallback_clients)} 个"
+        )
+
+    async def chat_context(
+        self,
+        prompt: str,
+        temperature: float = 0.1,
+        max_tokens: int = 2048,
+        task: Literal["rewrite", "compaction"] = "rewrite",
+    ) -> ChatResult:
+        """调用上下文模型；两个任务各自有短超时，避免占满单机模型锁。"""
+        client = self._context_client or self._primary_client
+        if client is None:
+            raise RuntimeError("没有可用的重写/压缩模型或主模型")
+        messages = [{"role": "user", "content": prompt}]
+        timeout = (
+            client.config.context_compaction_timeout_seconds
+            if task == "compaction"
+            else client.config.context_rewrite_timeout_seconds
+        )
+        return await asyncio.wait_for(
+            self._call_model(client, messages, temperature, max_tokens),
+            timeout=max(int(timeout or 0), 1),
         )
 
     async def _load_configs(self, agent_id: Optional[int]) -> list[LLMConfig]:
@@ -127,6 +155,15 @@ class LLMGateway:
                 )
                 agent_configs = list(agent_result.scalars().all())
                 if agent_configs:
+                    if not any(config.is_context_model for config in agent_configs):
+                        global_context = (await session.execute(
+                            query.where(
+                                LLMConfig.agent_id.is_(None),
+                                LLMConfig.is_context_model == True,  # noqa: E712
+                            )
+                        )).scalars().first()
+                        if global_context is not None:
+                            agent_configs.append(global_context)
                     return agent_configs
                 logger.info(f"Agent {agent_id} 未配置专属模型，回退使用全局 LLM 配置")
 

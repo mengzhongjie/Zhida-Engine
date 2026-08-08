@@ -49,6 +49,9 @@ class LLMConfigCreate(BaseModel):
     api_key: Optional[str] = Field(None, description="API Key")
     is_primary: bool = Field(True, description="是否为主模型")
     is_fallback: bool = Field(False, description="是否为降级模型")
+    is_context_model: bool = Field(False, description="是否为问题重写与会话压缩模型")
+    context_rewrite_timeout_seconds: int = Field(10, ge=3, le=30, description="问题重写超时（秒）")
+    context_compaction_timeout_seconds: int = Field(25, ge=5, le=60, description="会话压缩超时（秒）")
     extra_config: Optional[str] = Field(None, description="额外配置（JSON 格式）")
     # API 限流配置
     max_tokens_per_request: int = Field(4096, description="单次请求最大 Token 数")
@@ -65,6 +68,9 @@ class LLMConfigUpdate(BaseModel):
     api_key: Optional[str] = Field(None, description="API Key")
     is_primary: Optional[bool] = Field(None, description="是否为主模型")
     is_fallback: Optional[bool] = Field(None, description="是否为降级模型")
+    is_context_model: Optional[bool] = Field(None, description="是否为问题重写与会话压缩模型")
+    context_rewrite_timeout_seconds: Optional[int] = Field(None, ge=3, le=30, description="问题重写超时（秒）")
+    context_compaction_timeout_seconds: Optional[int] = Field(None, ge=5, le=60, description="会话压缩超时（秒）")
     is_active: Optional[bool] = Field(None, description="是否启用")
     extra_config: Optional[str] = Field(None, description="额外配置（JSON 格式）")
     # API 限流配置
@@ -85,6 +91,9 @@ class LLMConfigOut(BaseModel):
     api_key: str = ""  # 脱敏后的 API Key（只显示前后几位）
     is_primary: bool
     is_fallback: bool
+    is_context_model: bool = False
+    context_rewrite_timeout_seconds: int = 10
+    context_compaction_timeout_seconds: int = 25
     is_active: bool
     extra_config: Optional[str] = None
     # API 限流配置

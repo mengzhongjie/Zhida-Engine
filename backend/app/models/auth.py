@@ -97,5 +97,8 @@ class Conversation(Base):
     owner_id = Column(Integer, nullable=False, index=True)
     agent_id = Column(Integer, ForeignKey("agents.id", ondelete="CASCADE"), nullable=False, index=True)
     title = Column(String(200), nullable=True)
+    context_summary = Column(Text, nullable=True)
+    summarized_through_history_id = Column(Integer, default=0, nullable=False)
+    summary_updated_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, nullable=False, onupdate=datetime.utcnow)

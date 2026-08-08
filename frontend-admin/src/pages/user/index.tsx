@@ -10,7 +10,7 @@ const { Text, Title } = Typography
 type Agent = { id: number; name: string; description?: string; avatar?: string }
 type Conversation = { id: string; agent_id: number; title: string; updated_at: string }
 type Source = { metadata?: { filename?: string }; document_name?: string }
-type ChatMessage = { id: string; role: 'user' | 'assistant'; content: string; sources?: Source[]; pending?: boolean; streaming?: boolean }
+type ChatMessage = { id: string; role: 'user' | 'assistant'; content: string; sources?: Source[]; pending?: boolean; streaming?: boolean; statusText?: string }
 
 const createId = () => globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`
 
@@ -120,9 +120,13 @@ export default function UserPage() {
 
       const applyEvent = (kind: string, raw: string) => {
         const data = JSON.parse(raw)
-        if (kind === 'delta') {
+        if (kind === 'status') {
           setMessages(previous => previous.map(item => item.id === pendingId
-            ? { ...item, pending: false, streaming: true, content: item.content + (data.content || '') }
+            ? { ...item, statusText: data.detail || '正在处理上下文…' }
+            : item))
+        } else if (kind === 'delta') {
+          setMessages(previous => previous.map(item => item.id === pendingId
+            ? { ...item, pending: false, streaming: true, statusText: undefined, content: item.content + (data.content || '') }
             : item))
         } else if (kind === 'done') {
           completed = true
@@ -191,7 +195,7 @@ export default function UserPage() {
         {!messages.length && (agentId ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="有什么想了解的？" /> : agents.length ? <div className="user-agent-chooser"><header><b>选择助手</b><span>开始一段新的对话</span></header><div>{agents.map(item => <Button key={item.id} onClick={() => selectAgent(item.id)}><i>{item.avatar || item.name.slice(0, 1)}</i><section><strong>{item.name}</strong>{item.description && <small>{item.description}</small>}</section><em>开始对话</em></Button>)}</div></div> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无可用助手" />)}
         {messages.map(item => <article key={item.id} className={`user-message ${item.role}`}>
           <div>{item.role === 'user' ? '我' : 'AI'}</div>
-          <section className={item.streaming ? 'is-streaming' : ''}>{item.pending ? <div className="stream-thinking" role="status"><span className="stream-thinking-dots"><i /><i /><i /></span><span>正在生成回答</span></div> : item.role === 'assistant' ? <div className="markdown-content"><ReactMarkdown remarkPlugins={[remarkGfm]}>{item.content}</ReactMarkdown>{item.streaming && <span className="stream-caret" aria-hidden="true" />}</div> : <span>{item.content}</span>}</section>
+          <section className={item.streaming ? 'is-streaming' : ''}>{item.pending ? <div className="stream-thinking" role="status"><span className="stream-thinking-dots"><i /><i /><i /></span><span>{item.statusText || '正在生成回答'}</span></div> : item.role === 'assistant' ? <div className="markdown-content"><ReactMarkdown remarkPlugins={[remarkGfm]}>{item.content}</ReactMarkdown>{item.streaming && <span className="stream-caret" aria-hidden="true" />}</div> : <span>{item.content}</span>}</section>
           {item.role === 'assistant' && !item.pending && <div className="ai-answer-disclaimer">回答由 AI 生成，知识库可能包含老旧信息，仅供参考。</div>}
         </article>)}
         <div ref={bottomRef} />

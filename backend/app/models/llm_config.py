@@ -43,6 +43,9 @@ class LLMConfig(Base):
     # 模型角色
     is_primary = Column(Boolean, default=False, comment="是否为主模型")
     is_fallback = Column(Boolean, default=False, comment="是否为降级模型")
+    is_context_model = Column(Boolean, default=False, comment="是否用于问题重写与会话压缩")
+    context_rewrite_timeout_seconds = Column(Integer, default=10, nullable=False, comment="问题重写超时（秒）")
+    context_compaction_timeout_seconds = Column(Integer, default=25, nullable=False, comment="会话压缩超时（秒）")
 
     # 厂商信息
     provider_id = Column(String(50), nullable=False, default="custom", comment="厂商 ID")

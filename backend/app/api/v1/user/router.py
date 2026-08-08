@@ -102,20 +102,74 @@ def _answer_options(response_detail: str) -> dict:
     return {"top_k": 4, "max_tokens": 4096, "temperature": 0.5}
 
 
-async def _conversation_history(db: AsyncSession, conversation_id: str | None, user_id: int) -> list[dict[str, str]]:
-    if not conversation_id:
-        return []
-    rows = (await db.execute(
+async def _unsummarized_records(db: AsyncSession, conversation: Conversation, user_id: int) -> list[QAHistory]:
+    """只读取尚未进入摘要的本用户记录，摘要游标防止同一内容被重复压缩。"""
+    return list((await db.execute(
         select(QAHistory).where(
-            QAHistory.conversation_id == conversation_id,
+            QAHistory.conversation_id == conversation.id,
             QAHistory.owner_type == "user",
             QAHistory.owner_id == user_id,
-        ).order_by(QAHistory.created_at.desc()).limit(6)
-    )).scalars().all()
+            QAHistory.id > (conversation.summarized_through_history_id or 0),
+        ).order_by(QAHistory.id.asc())
+    )).scalars().all())
+
+
+def _records_to_history(records: list[QAHistory], summary: str = "") -> list[dict[str, str]]:
     history: list[dict[str, str]] = []
-    for record in reversed(rows):
-        history.extend([{"role": "user", "content": record.question}, {"role": "assistant", "content": record.answer or ""}])
+    if summary:
+        history.append({"role": "summary", "content": summary})
+    for record in records:
+        history.extend([
+            {"role": "user", "content": record.question},
+            {"role": "assistant", "content": record.answer or ""},
+        ])
     return history
+
+
+def _context_usage_ratio(
+    *, conversation: Conversation, records: list[QAHistory], question: str,
+    context_window_k: int, output_reserve: int = 12000,
+) -> float:
+    """预估完整请求占用；额外预留 RAG、记忆和系统提示，避免到模型端才溢出。"""
+    historical = (conversation.context_summary or "") + "\n" + "\n".join(
+        f"{record.question}\n{record.answer or ''}" for record in records
+    )
+    input_tokens = answer_generator.estimate_tokens(historical + "\n" + question)
+    anticipated_retrieval_and_rules = 8000
+    return (input_tokens + anticipated_retrieval_and_rules + output_reserve) / max(context_window_k * 1000, 1)
+
+
+def _context_policy(usage_ratio: float, record_count: int) -> tuple[bool, int]:
+    """返回（是否压缩、保留最近原文轮数）；阈值是系统固定策略。"""
+    should_compact = usage_ratio >= 0.95 and record_count > 4
+    raw_limit = 4 if usage_ratio >= 0.80 else 6 if usage_ratio >= 0.60 else 12
+    return should_compact, raw_limit
+
+
+def _trim_records_to_budget(
+    *, conversation: Conversation, records: list[QAHistory], question: str,
+    context_window_k: int, max_records: int, target_ratio: float = 0.55,
+    output_reserve: int = 12000,
+) -> list[QAHistory]:
+    """从最新轮次向前保留完整问答，把裁剪后的请求压回安全水位。"""
+    candidates = records[-max_records:]
+    if not candidates:
+        return []
+    fixed_tokens = answer_generator.estimate_tokens(
+        (conversation.context_summary or "") + "\n" + question
+    ) + 8000 + output_reserve
+    remaining = max(int(context_window_k * 1000 * target_ratio) - fixed_tokens, 0)
+    selected: list[QAHistory] = []
+    for record in reversed(candidates):
+        record_tokens = answer_generator.estimate_tokens(
+            f"{record.question}\n{record.answer or ''}"
+        )
+        # 至少保留最新一轮；超长单轮仍受回答输出上限和 Prompt 预留保护。
+        if not selected or record_tokens <= remaining:
+            selected.append(record)
+            remaining = max(remaining - record_tokens, 0)
+    selected.reverse()
+    return selected
 
 
 @router.get("/agents")
@@ -165,7 +219,6 @@ async def stream_chat(payload: UserAskIn, user: WebUser = Depends(require_user),
     conversation = await db.get(Conversation, payload.conversation_id) if payload.conversation_id else None
     if conversation and (conversation.owner_type != "user" or conversation.owner_id != user.id or conversation.agent_id != agent.id):
         raise HTTPException(status_code=403, detail="无权访问该会话")
-    conversation_history = await _conversation_history(db, conversation.id, user.id) if conversation else []
     kb_ids = [str(item) for item in (await db.execute(
         select(KnowledgeBase.id).join(AgentKnowledgeBase, AgentKnowledgeBase.knowledge_base_id == KnowledgeBase.id)
         .where(AgentKnowledgeBase.agent_id == agent.id, KnowledgeBase.is_active == True)  # noqa: E712
@@ -199,6 +252,56 @@ async def stream_chat(payload: UserAskIn, user: WebUser = Depends(require_user),
                 conversation = Conversation(id=str(uuid.uuid4()), owner_type="user", owner_id=user.id, agent_id=agent.id, title=payload.question[:40])
                 db.add(conversation)
                 await db.flush()
+            records = await _unsummarized_records(db, conversation, user.id)
+            usage_ratio = _context_usage_ratio(
+                conversation=conversation, records=records, question=payload.question,
+                context_window_k=agent.context_window_k or 64,
+            )
+            should_compact, raw_limit = _context_policy(usage_ratio, len(records))
+            if should_compact:
+                compressible = records[:-4]
+                yield f"event: status\ndata: {json.dumps({'detail': '正在整理此前对话…', 'stage': 'compacting'}, ensure_ascii=False)}\n\n"
+                try:
+                    new_summary = await answer_generator.compact_conversation(
+                        conversation.context_summary or "",
+                        _records_to_history(compressible), agent.id,
+                    )
+                except Exception as exc:
+                    # 模型调用失败没有改动数据库事务，不 rollback，避免 ORM 对象过期。
+                    logger.warning(f"会话压缩失败，使用强裁剪继续回答: {type(exc).__name__}")
+                    records = records[-4:]
+                else:
+                    conversation.context_summary = new_summary
+                    conversation.summarized_through_history_id = compressible[-1].id
+                    conversation.summary_updated_at = datetime.utcnow()
+                    try:
+                        await db.commit()
+                    except Exception as exc:
+                        await db.rollback()
+                        logger.error(f"会话摘要保存失败: {type(exc).__name__}")
+                        raise RuntimeError("会话状态保存失败") from None
+                    records = records[-4:]
+                    usage_ratio = _context_usage_ratio(
+                        conversation=conversation, records=records, question=payload.question,
+                        context_window_k=agent.context_window_k or 64,
+                    )
+            # 固定比例策略：60% 开始保留最近 6 轮，80% 起只保留最近 4 轮。
+            _, raw_limit = _context_policy(usage_ratio, len(records))
+            if usage_ratio >= 0.60:
+                records = _trim_records_to_budget(
+                    conversation=conversation,
+                    records=records,
+                    question=payload.question,
+                    context_window_k=agent.context_window_k or 64,
+                    max_records=raw_limit,
+                )
+            else:
+                records = records[-raw_limit:]
+            usage_ratio = _context_usage_ratio(
+                conversation=conversation, records=records, question=payload.question,
+                context_window_k=agent.context_window_k or 64,
+            )
+            conversation_history = _records_to_history(records, conversation.context_summary or "")
             await _consume_daily_quota(user, db)
             quota_consumed = True
             async for chunk in answer_generator.generate_stream(
@@ -206,6 +309,7 @@ async def stream_chat(payload: UserAskIn, user: WebUser = Depends(require_user),
                 on_complete=capture, conversation_history=conversation_history,
                 persona_preset=agent.persona_preset, persona_custom_instruction=agent.persona_custom_instruction or "",
                 response_detail=payload.response_detail,
+                context_pressure=usage_ratio,
                 **_answer_options(payload.response_detail),
             ):
                 parts.append(chunk)

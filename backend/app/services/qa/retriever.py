@@ -14,6 +14,7 @@
 - 检索时：找到子块 → 通过 parent_id 获取父块 → 返回父块作为完整上下文
 """
 
+import asyncio
 import re
 import json
 import math
@@ -218,6 +219,45 @@ class HybridRetriever:
         )
         self._boost_identity_filename_matches(merged, normalized_query)
         return merged[:top_k]
+
+    async def retrieve_multi_query(
+        self,
+        knowledge_base_ids: list[str],
+        queries: list[tuple[str, float]],
+        top_k: int = 5,
+    ) -> list[IndexResult]:
+        """并行检索原问题与改写问题，以加权 RRF 融合并在父块粒度去重。"""
+        valid: list[tuple[str, float]] = []
+        seen_queries: set[str] = set()
+        for query, weight in queries:
+            cleaned = normalize_text(query).strip()
+            key = cleaned.casefold()
+            if cleaned and key not in seen_queries:
+                valid.append((cleaned, weight))
+                seen_queries.add(key)
+        if not valid:
+            return []
+        per_query = await asyncio.gather(*[
+            self.retrieve(knowledge_base_ids, query, top_k=top_k * 2)
+            for query, _ in valid
+        ], return_exceptions=True)
+        scores: dict[tuple[str, str], float] = {}
+        selected: dict[tuple[str, str], IndexResult] = {}
+        for (_, weight), results in zip(valid, per_query):
+            if isinstance(results, BaseException):
+                logger.warning(f"一路问题检索失败，继续融合其他查询: {type(results).__name__}")
+                continue
+            for rank, result in enumerate(results, start=1):
+                metadata = result.metadata or {}
+                key = (
+                    str(metadata.get("document_id") or metadata.get("filename") or "unknown"),
+                    str(metadata.get("parent_id") or result.chunk_id),
+                )
+                scores[key] = scores.get(key, 0.0) + weight / (60 + rank)
+                if key not in selected or result.score > selected[key].score:
+                    selected[key] = result
+        ranked = sorted(selected, key=lambda key: scores[key], reverse=True)
+        return [selected[key] for key in ranked[:top_k]]
 
     def _boost_identity_filename_matches(
         self,

@@ -6,7 +6,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  Card, Steps, Form, Input, Space, Typography, message,
+  Card, Steps, Form, Input, InputNumber, Space, Typography, message,
   Table, Button, Segmented, Descriptions,
 } from 'antd'
 import {
@@ -48,6 +48,7 @@ export default function AgentNew() {
     description: '',
     persona_preset: 'professional',
     persona_custom_instruction: '',
+    context_window_k: 64,
     selected_kb_ids: [] as number[],
   })
 
@@ -88,6 +89,7 @@ export default function AgentNew() {
         description: formData.description,
         persona_preset: formData.persona_preset,
         persona_custom_instruction: formData.persona_custom_instruction,
+        context_window_k: formData.context_window_k,
       })
 
       if (formData.selected_kb_ids.length > 0) {
@@ -175,6 +177,9 @@ export default function AgentNew() {
               <Form.Item label="回答人格">
                 <PersonaPicker value={formData.persona_preset} customInstruction={formData.persona_custom_instruction} presets={personaPresets} onChange={(value) => updateField('persona_preset', value)} onCustomInstructionChange={(value) => updateField('persona_custom_instruction', value)} />
               </Form.Item>
+              <Form.Item label="上下文窗口" extra="默认 64K；系统按占用比例自动裁剪和压缩。">
+                <InputNumber min={32} max={256} addonAfter="K" value={formData.context_window_k} onChange={(value) => updateField('context_window_k', value || 64)} style={{ width: '100%' }} />
+              </Form.Item>
             </Form>
           </div>
         )
@@ -220,6 +225,7 @@ export default function AgentNew() {
                 <Descriptions.Item label="名称">{formData.name || '未设置'}</Descriptions.Item>
                 <Descriptions.Item label="回复方式">AI 回复</Descriptions.Item>
                 <Descriptions.Item label="回答人格">{formData.persona_preset === 'custom' ? '自定义人格' : personaPresets.find(item => item.key === formData.persona_preset)?.name}</Descriptions.Item>
+                <Descriptions.Item label="上下文窗口">{formData.context_window_k}K</Descriptions.Item>
                 <Descriptions.Item label="人格提示词" span={2}>{formData.persona_preset === 'custom' ? formData.persona_custom_instruction || '未填写' : personaPresets.find(item => item.key === formData.persona_preset)?.instruction}</Descriptions.Item>
                 <Descriptions.Item label="知识库">
                   {formData.selected_kb_ids.length > 0

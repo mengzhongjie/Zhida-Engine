@@ -177,6 +177,13 @@ async def _run_compatible_migrations(conn):
         "ALTER TABLE agents ADD COLUMN persona_preset VARCHAR(30) NOT NULL DEFAULT 'professional'",
         "ALTER TABLE agents ADD COLUMN response_detail VARCHAR(20) NOT NULL DEFAULT 'concise'",
         "ALTER TABLE agents ADD COLUMN persona_custom_instruction TEXT",
+        "ALTER TABLE agents ADD COLUMN context_window_k INTEGER NOT NULL DEFAULT 64",
+        "ALTER TABLE llm_configs ADD COLUMN is_context_model BOOLEAN NOT NULL DEFAULT 0",
+        "ALTER TABLE llm_configs ADD COLUMN context_rewrite_timeout_seconds INTEGER NOT NULL DEFAULT 10",
+        "ALTER TABLE llm_configs ADD COLUMN context_compaction_timeout_seconds INTEGER NOT NULL DEFAULT 25",
+        "ALTER TABLE conversations ADD COLUMN context_summary TEXT",
+        "ALTER TABLE conversations ADD COLUMN summarized_through_history_id INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE conversations ADD COLUMN summary_updated_at DATETIME",
     ]
     for sql in migrations:
         try:
@@ -255,6 +262,7 @@ async def _create_indexes(conn):
         # LLM 配置索引
         "CREATE INDEX IF NOT EXISTS idx_llm_configs_agent_primary ON llm_configs(agent_id, is_primary)",
         "CREATE INDEX IF NOT EXISTS idx_llm_configs_is_active ON llm_configs(is_active)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_llm_configs_context_scope ON llm_configs(COALESCE(agent_id, -1)) WHERE is_context_model = 1",
 
         # 知识库索引
         "CREATE INDEX IF NOT EXISTS idx_knowledge_bases_agent ON knowledge_bases(agent_id)",

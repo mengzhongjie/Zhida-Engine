@@ -20,6 +20,7 @@ class AgentCreate(BaseModel):
     avatar: Optional[str] = Field(None, description="头像 URL 或 emoji")
     persona_preset: Literal["professional", "tutor", "friendly", "direct", "custom"] = "professional"
     persona_custom_instruction: Optional[str] = Field(None, max_length=2000)
+    context_window_k: int = Field(64, ge=32, le=256)
 
 
 class AgentUpdate(BaseModel):
@@ -30,6 +31,7 @@ class AgentUpdate(BaseModel):
     is_active: Optional[bool] = Field(None, description="是否启用")
     persona_preset: Optional[Literal["professional", "tutor", "friendly", "direct", "custom"]] = None
     persona_custom_instruction: Optional[str] = Field(None, max_length=2000)
+    context_window_k: Optional[int] = Field(None, ge=32, le=256)
 
 
 class AgentOut(BaseModel):
@@ -42,6 +44,7 @@ class AgentOut(BaseModel):
     status: str
     persona_preset: str = "professional"
     persona_custom_instruction: Optional[str] = None
+    context_window_k: int = 64
     created_at: datetime
     updated_at: datetime
 

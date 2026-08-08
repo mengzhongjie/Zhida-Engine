@@ -41,6 +41,9 @@ interface LLMConfig {
   api_key: string
   is_primary: boolean
   is_fallback: boolean
+  is_context_model: boolean
+  context_rewrite_timeout_seconds: number
+  context_compaction_timeout_seconds: number
   is_active: boolean
   last_test_at: string | null
   last_test_success: boolean | null
@@ -219,7 +222,7 @@ export default function SettingsPage() {
     setEditingId(null)
     form.resetFields()
     // 单模型场景是默认使用方式，避免“测试成功但没有主模型可调用”。
-    form.setFieldsValue({ role: 'primary', is_active: true })
+    form.setFieldsValue({ role: 'primary', is_active: true, context_rewrite_timeout_seconds: 10, context_compaction_timeout_seconds: 25 })
     setModalVisible(true)
   }
 
@@ -231,13 +234,15 @@ export default function SettingsPage() {
       base_url: config.base_url,
       model_name: config.model_name,
       api_key: '', // 不回显 API Key
-      role: config.is_primary ? 'primary' : config.is_fallback ? 'fallback' : 'standalone',
+      role: config.is_primary ? 'primary' : config.is_fallback ? 'fallback' : config.is_context_model ? 'context' : 'standalone',
       is_active: config.is_active,
       agent_id: config.agent_id,
       max_tokens_per_request: config.max_tokens_per_request,
       max_requests_per_minute: config.max_requests_per_minute,
       max_tokens_per_minute: config.max_tokens_per_minute,
       max_tokens_per_day: config.max_tokens_per_day,
+      context_rewrite_timeout_seconds: config.context_rewrite_timeout_seconds,
+      context_compaction_timeout_seconds: config.context_compaction_timeout_seconds,
     })
     setModalVisible(true)
   }
@@ -319,6 +324,7 @@ export default function SettingsPage() {
       ...values,
       is_primary: values.role === 'primary',
       is_fallback: values.role === 'fallback',
+      is_context_model: values.role === 'context',
     }
     delete payload.role
     try {
@@ -390,7 +396,7 @@ export default function SettingsPage() {
       key: 'llm',
       label: 'LLM 配置',
       children: <div className="web-search-settings"><Alert message="主模型与降级链路" description="主模型调用失败后，会按已启用的降级配置继续尝试。独立评测模型可以保持启用，但无需加入主/降级链路。" type="info" showIcon />
-        <div className="web-search-provider-list">{configs.map(config => <Card key={config.id} size="small" loading={loading} className={`web-search-provider-card ${config.is_active ? 'is-active' : ''}`}><div className="web-search-provider-main"><div><Space><Text strong>{config.provider_name}</Text>{config.is_primary && <Tag color="blue">主模型</Tag>}{config.is_fallback && <Tag color="orange">降级</Tag>}</Space><Text type="secondary">{config.model_name}</Text></div><div className="web-search-provider-status"><Tag className={config.is_active ? 'search-chain-active' : undefined} color={config.is_active ? 'success' : 'default'}>{config.is_active ? '已启用' : '已停用'}</Tag><Text type={config.last_test_success === false ? 'danger' : 'secondary'}>{config.last_test_success === true ? '可用' : config.last_test_success === false ? '不可用' : '待检测'}</Text></div></div><Space wrap className="web-search-provider-actions"><Button onClick={() => handleTestConfig(config)} loading={configTestingId === config.id}>测试连接</Button><Button icon={<EditOutlined />} onClick={() => handleEdit(config)}>配置</Button><Button type={config.is_active ? 'default' : 'primary'} onClick={() => toggleLLMConfig(config)}>{config.is_active ? '停用' : '启用'}</Button><Button danger icon={<DeleteOutlined />} disabled={config.is_primary} onClick={() => handleDelete(config.id)}>删除</Button></Space></Card>)}</div>
+        <div className="web-search-provider-list">{configs.map(config => <Card key={config.id} size="small" loading={loading} className={`web-search-provider-card ${config.is_active ? 'is-active' : ''}`}><div className="web-search-provider-main"><div><Space><Text strong>{config.provider_name}</Text>{config.is_primary && <Tag color="blue">主模型</Tag>}{config.is_fallback && <Tag color="orange">降级</Tag>}{config.is_context_model && <Tag color="purple">重写 / 压缩</Tag>}</Space><Text type="secondary">{config.model_name}</Text></div><div className="web-search-provider-status"><Tag className={config.is_active ? 'search-chain-active' : undefined} color={config.is_active ? 'success' : 'default'}>{config.is_active ? '已启用' : '已停用'}</Tag><Text type={config.last_test_success === false ? 'danger' : 'secondary'}>{config.last_test_success === true ? '可用' : config.last_test_success === false ? '不可用' : '待检测'}</Text></div></div><Space wrap className="web-search-provider-actions"><Button onClick={() => handleTestConfig(config)} loading={configTestingId === config.id}>测试连接</Button><Button icon={<EditOutlined />} onClick={() => handleEdit(config)}>配置</Button><Button type={config.is_active ? 'default' : 'primary'} onClick={() => toggleLLMConfig(config)}>{config.is_active ? '停用' : '启用'}</Button><Button danger icon={<DeleteOutlined />} disabled={config.is_primary} onClick={() => handleDelete(config.id)}>删除</Button></Space></Card>)}</div>
       </div>,
     },
     {
@@ -600,9 +606,25 @@ export default function SettingsPage() {
             <Select options={[
               { value: 'primary', label: '主模型（优先调用）' },
               { value: 'fallback', label: '降级模型（主模型失败后调用）' },
+              { value: 'context', label: '重写 / 压缩模型（上下文处理）' },
               { value: 'standalone', label: '独立模型（不加入问答链路）' },
             ]} />
           </Form.Item>
+
+          <Divider>上下文任务超时</Divider>
+          <Alert type="info" showIcon message="重写或压缩超时会自动回退，不会中断最终问答。未单独配置上下文模型时，使用主模型的这两个值。" />
+          <Row gutter={16} style={{ marginTop: 16 }}>
+            <Col span={12}>
+              <Form.Item name="context_rewrite_timeout_seconds" label="问题重写超时" initialValue={10} rules={[{ required: true }]}>
+                <InputNumber min={3} max={30} addonAfter="秒" style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="context_compaction_timeout_seconds" label="会话压缩超时" initialValue={25} rules={[{ required: true }]}>
+                <InputNumber min={5} max={60} addonAfter="秒" style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+          </Row>
 
           <Form.Item name="is_active" valuePropName="checked" label="启用" initialValue={true}>
             <Switch defaultChecked />

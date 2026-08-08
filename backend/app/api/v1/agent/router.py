@@ -46,6 +46,7 @@ def _agent_to_out(agent: Agent) -> AgentOut:
         status=agent.status,
         persona_preset=agent.persona_preset or "professional",
         persona_custom_instruction=agent.persona_custom_instruction,
+        context_window_k=agent.context_window_k or 64,
         created_at=as_beijing(agent.created_at),
         updated_at=as_beijing(agent.updated_at),
     )
@@ -111,6 +112,7 @@ async def create_agent(
         reply_mode="ai",
         persona_preset=request.persona_preset,
         persona_custom_instruction=request.persona_custom_instruction if request.persona_preset == "custom" else None,
+        context_window_k=request.context_window_k,
         is_active=False,
         status="stopped",
     )

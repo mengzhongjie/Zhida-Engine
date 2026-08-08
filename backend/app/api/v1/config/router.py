@@ -74,6 +74,9 @@ def _config_to_out(config: LLMConfig) -> LLMConfigOut:
         api_key=_mask_api_key(config.api_key),  # 脱敏
         is_primary=config.is_primary,
         is_fallback=config.is_fallback,
+        is_context_model=config.is_context_model,
+        context_rewrite_timeout_seconds=config.context_rewrite_timeout_seconds,
+        context_compaction_timeout_seconds=config.context_compaction_timeout_seconds,
         is_active=config.is_active,
         extra_config=config.extra_config,
         max_tokens_per_request=config.max_tokens_per_request,
@@ -165,6 +168,8 @@ async def create_config(
     """创建 LLM 配置"""
     if request.provider_id == "ollama":
         raise HTTPException(status_code=422, detail="不再支持本地模型配置，请使用云端 API")
+    if sum((request.is_primary, request.is_fallback, request.is_context_model)) > 1:
+        raise HTTPException(status_code=422, detail="主模型、降级模型和重写/压缩模型角色不能同时选择")
     # 如果设为主模型，先将该 Agent 的其他主模型取消
     if request.is_primary:
         primary_query = select(LLMConfig).where(
@@ -175,6 +180,13 @@ async def create_config(
         existing_primary = result.scalars().all()
         for config in existing_primary:
             config.is_primary = False
+    if request.is_context_model:
+        context_query = select(LLMConfig).where(
+            LLMConfig.is_context_model == True,  # noqa: E712
+            LLMConfig.agent_id == request.agent_id,
+        )
+        for context_config in (await db.execute(context_query)).scalars().all():
+            context_config.is_context_model = False
 
     # 获取厂商模板，自动填充缺失字段
     template = get_provider_by_id(request.provider_id)
@@ -190,6 +202,9 @@ async def create_config(
         api_key=encrypt_api_key(request.api_key or ""),  # 加密存储
         is_primary=request.is_primary,
         is_fallback=request.is_fallback and not request.is_primary,
+        is_context_model=request.is_context_model,
+        context_rewrite_timeout_seconds=request.context_rewrite_timeout_seconds,
+        context_compaction_timeout_seconds=request.context_compaction_timeout_seconds,
         extra_config=request.extra_config,
         max_tokens_per_request=request.max_tokens_per_request,
         max_requests_per_minute=request.max_requests_per_minute,
@@ -216,6 +231,14 @@ async def update_config(
     if config is None:
         raise HTTPException(status_code=404, detail="LLM 配置不存在")
 
+    effective_roles = (
+        request.is_primary if request.is_primary is not None else config.is_primary,
+        request.is_fallback if request.is_fallback is not None else config.is_fallback,
+        request.is_context_model if request.is_context_model is not None else config.is_context_model,
+    )
+    if sum(bool(role) for role in effective_roles) > 1:
+        raise HTTPException(status_code=422, detail="主模型、降级模型和重写/压缩模型角色不能同时选择")
+
     # 如果设为主模型，先将该 Agent 的其他主模型取消
     if request.is_primary:
         primary_query = select(LLMConfig).where(
@@ -226,6 +249,14 @@ async def update_config(
         result = await db.execute(primary_query)
         for c in result.scalars().all():
             c.is_primary = False
+    if request.is_context_model:
+        context_query = select(LLMConfig).where(
+            LLMConfig.is_context_model == True,  # noqa: E712
+            LLMConfig.agent_id == config.agent_id,
+            LLMConfig.id != config_id,
+        )
+        for context_config in (await db.execute(context_query)).scalars().all():
+            context_config.is_context_model = False
 
     # 更新字段
     update_data = request.model_dump(exclude_unset=True)
