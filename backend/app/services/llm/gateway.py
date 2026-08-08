@@ -9,7 +9,6 @@
 - 完全从数据库配置读取，不使用硬编码模型列表
 """
 
-import json
 import time
 from typing import Optional, AsyncIterator, Any
 from dataclasses import dataclass
@@ -157,24 +156,6 @@ class LLMGateway:
             provider=provider,
         )
 
-    @staticmethod
-    def _model_extra_body(model_client: ModelClient, request_extra: Optional[dict] = None) -> Optional[dict]:
-        """读取管理员保存的、允许透传的模型选项。"""
-        extra: dict[str, Any] = {}
-        raw = getattr(model_client.config, "extra_config", None)
-        if raw:
-            try:
-                configured = json.loads(raw)
-                thinking = configured.get("thinking") if isinstance(configured, dict) else None
-                if isinstance(thinking, dict) and thinking.get("type") == "disabled":
-                    # DeepSeek OpenAI 兼容接口：{"thinking": {"type": "disabled"}}。
-                    extra["thinking"] = {"type": "disabled"}
-            except (TypeError, ValueError):
-                logger.warning("模型 {} 的额外配置不是有效 JSON，已忽略", model_client.config.model_name)
-        if request_extra:
-            extra.update(request_extra)
-        return extra or None
-
     # ================================================================
     # 对话接口
     # ================================================================
@@ -211,10 +192,7 @@ class LLMGateway:
         # 尝试主模型
         if self._primary_client:
             try:
-                return await self._call_model(
-                    self._primary_client, messages, temperature, max_tokens,
-                    self._model_extra_body(self._primary_client, extra_body),
-                )
+                return await self._call_model(self._primary_client, messages, temperature, max_tokens, extra_body)
             except Exception as e:
                 logger.warning(f"主模型 {self._primary_client.config.model_name} 调用失败: {e}，尝试降级模型")
 
@@ -222,10 +200,7 @@ class LLMGateway:
         for fallback in self._fallback_clients:
             try:
                 logger.info(f"使用降级模型: {fallback.config.model_name}")
-                return await self._call_model(
-                    fallback, messages, temperature, max_tokens,
-                    self._model_extra_body(fallback, extra_body),
-                )
+                return await self._call_model(fallback, messages, temperature, max_tokens, extra_body)
             except Exception as e:
                 logger.warning(f"降级模型 {fallback.config.model_name} 也失败: {e}")
                 continue
@@ -261,9 +236,7 @@ class LLMGateway:
         for index, client in enumerate(clients):
             emitted = False
             try:
-                async for chunk in self._call_model_stream(
-                    client, messages, temperature, max_tokens, self._model_extra_body(client),
-                ):
+                async for chunk in self._call_model_stream(client, messages, temperature, max_tokens):
                     emitted = True
                     yield chunk
                 return
@@ -341,28 +314,15 @@ class LLMGateway:
         messages: list[dict],
         temperature: float,
         max_tokens: int,
-        extra_body: Optional[dict] = None,
     ) -> AsyncIterator[str]:
         """调用单个模型（流式）"""
-        request_kwargs = dict(
+        stream = await model_client.client.chat.completions.create(
             model=model_client.config.model_name,
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
             stream=True,
         )
-        if extra_body:
-            request_kwargs["extra_body"] = extra_body
-        try:
-            stream = await model_client.client.chat.completions.create(**request_kwargs)
-        except Exception:
-            # 部分 OpenAI 兼容接口不认识 thinking 参数。请求尚未产生输出时，
-            # 去掉扩展参数重试一次，不让兼容性选项直接打断可用性。
-            if not extra_body:
-                raise
-            logger.info("模型 {} 不支持流式扩展参数，回退普通调用", model_client.config.model_name)
-            request_kwargs.pop("extra_body", None)
-            stream = await model_client.client.chat.completions.create(**request_kwargs)
 
         # 流式 SDK 会在最后一个 chunk 给出 finish_reason。此前该信息被静默
         # 丢弃，排查“详细模式是否被模型长度上限截断”时没有证据。
