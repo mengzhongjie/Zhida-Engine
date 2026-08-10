@@ -62,6 +62,10 @@ interface ModuleSettings {
 
 interface WebSearchConfig { enabled: boolean; provider: string; tavily_api_key: string; exa_api_key: string; tavily_configured: boolean; exa_configured: boolean; max_results: number }
 type WebSearchHealth = { success: boolean; message: string }
+interface ObservabilityConfig {
+  langfuse_enabled: boolean; langfuse_host: string; langfuse_public_key: string; langfuse_secret_key: string
+  public_key_configured: boolean; secret_key_configured: boolean; online_evaluation_enabled: boolean; last_test_success: boolean | null; last_test_at: string | null; last_test_message: string | null
+}
 
 const SEARCH_PROVIDERS = [
   { id: 'tavily', name: 'Tavily', description: '面向 AI 的网页搜索与摘要', keyRequired: true },
@@ -70,7 +74,7 @@ const SEARCH_PROVIDERS = [
   { id: 'bing_rss', name: 'Bing RSS', description: '免费 RSS 降级通道，无需密钥', keyRequired: false },
 ]
 export default function SettingsPage() {
-  const { section } = useParams()
+  const { section, provider } = useParams()
   const navigate = useNavigate()
   const [templates, setTemplates] = useState<{
     cloud: ProviderTemplate[]
@@ -91,6 +95,11 @@ export default function SettingsPage() {
   const [webSearchModalOpen, setWebSearchModalOpen] = useState(false)
   const [webSearchEditingProvider, setWebSearchEditingProvider] = useState('tavily')
   const [webSearchHealth, setWebSearchHealth] = useState<Record<string, WebSearchHealth>>({})
+  const [observabilityConfig, setObservabilityConfig] = useState<ObservabilityConfig | null>(null)
+  const [observabilityForm] = Form.useForm()
+  const [observabilitySaving, setObservabilitySaving] = useState(false)
+  const [observabilityTesting, setObservabilityTesting] = useState(false)
+  const [observabilityModalOpen, setObservabilityModalOpen] = useState(false)
 
   const loadWebSearchConfig = useCallback(async () => {
     try {
@@ -98,6 +107,14 @@ export default function SettingsPage() {
       setWebSearchConfig(config)
     } catch { message.error('加载网络检索配置失败') }
   }, [])
+
+  const loadObservabilityConfig = useCallback(async () => {
+    try {
+      const config = await api.get<ObservabilityConfig>('/admin/observability')
+      setObservabilityConfig(config)
+      observabilityForm.setFieldsValue({ ...config, langfuse_public_key: '', langfuse_secret_key: '' })
+    } catch { message.error('加载可观测配置失败') }
+  }, [observabilityForm])
 
   const loadData = useCallback(async () => {
     setLoading(true)
@@ -129,6 +146,65 @@ export default function SettingsPage() {
   }, [loadData])
 
   useEffect(() => { loadWebSearchConfig() }, [loadWebSearchConfig])
+  useEffect(() => { loadObservabilityConfig() }, [loadObservabilityConfig])
+  useEffect(() => {
+    if (section === 'observability' && provider === 'langfuse') setObservabilityModalOpen(true)
+  }, [section, provider])
+
+  const saveObservabilityConfig = async () => {
+    const values = await observabilityForm.validateFields()
+    setObservabilitySaving(true)
+    try {
+      const saved = await api.put<ObservabilityConfig>('/admin/observability', values)
+      setObservabilityConfig(saved)
+      observabilityForm.setFieldsValue({ ...saved, langfuse_public_key: '', langfuse_secret_key: '' })
+      message.success('Langfuse 可观测配置已保存')
+      setObservabilityModalOpen(false)
+      navigate('/settings/observability')
+    } catch (error: any) { message.error(error?.response?.data?.detail || '保存失败') }
+    finally { setObservabilitySaving(false) }
+  }
+
+  const testObservabilityConfig = async () => {
+    setObservabilityTesting(true)
+    try {
+      const result = await api.post<{ success: boolean; message: string }>('/admin/observability/test')
+      message[result.success ? 'success' : 'error'](result.message)
+      await loadObservabilityConfig()
+    } catch (error: any) { message.error(error?.response?.data?.detail || '连接测试失败') }
+    finally { setObservabilityTesting(false) }
+  }
+
+  const toggleObservabilityConfig = async () => {
+    if (!observabilityConfig) return
+    const enabled = !observabilityConfig.langfuse_enabled
+    setObservabilitySaving(true)
+    try {
+      const saved = await api.put<ObservabilityConfig>('/admin/observability', {
+        langfuse_enabled: enabled,
+        langfuse_host: observabilityConfig.langfuse_host,
+      })
+      setObservabilityConfig(saved)
+      observabilityForm.setFieldsValue({ ...saved, langfuse_public_key: '', langfuse_secret_key: '' })
+      message.success(enabled ? '观测平台已启用' : '观测平台已停用')
+    } catch (error: any) { message.error(error?.response?.data?.detail || '更新状态失败') }
+    finally { setObservabilitySaving(false) }
+  }
+
+  const deleteObservabilityConfig = () => {
+    Modal.confirm({
+      title: '删除观测平台配置？',
+      content: '将删除本地保存的 Host、密钥和自动评测配置，并立即停止上报。此操作不可恢复。',
+      okText: '删除', okButtonProps: { danger: true }, cancelText: '取消',
+      onOk: async () => {
+        try {
+          await api.delete('/admin/observability')
+          await loadObservabilityConfig()
+          message.success('观测平台配置已删除')
+        } catch (error: any) { message.error(error?.response?.data?.detail || '删除失败') }
+      },
+    })
+  }
 
   const saveWebSearchConfig = async () => {
     const values = await webSearchForm.validateFields()
@@ -432,6 +508,18 @@ export default function SettingsPage() {
       ),
     },
     {
+      key: 'observability',
+      label: 'Agent 链路观测',
+      children: <div className="web-search-settings">
+        <Alert type="info" showIcon message="Agent 链路观测" description="启用后会向配置的 HTTPS Langfuse 地址完整上报用户问题、模型回答、检索知识片段、用户标识及性能数据。上报失败不会影响用户回答；密钥仅加密保存在本地。保存配置后，数据库配置优先于部署环境变量；未保存时才使用环境变量初始值。" />
+        <Card size="small" className={`web-search-provider-card observability-provider-card ${observabilityConfig?.langfuse_enabled ? 'is-active' : ''}`} style={{ marginTop: 16 }}>
+          <div className="web-search-provider-main"><div><Text strong>Langfuse</Text><Text type="secondary">记录完整 Agent Trace、检索证据和模型调用{observabilityConfig?.online_evaluation_enabled ? '；已提供在线 Judge 评分上下文' : ''}</Text></div><div className="web-search-provider-status"><Tag className={observabilityConfig?.langfuse_enabled ? 'search-chain-active' : undefined} color={observabilityConfig?.langfuse_enabled ? 'success' : 'default'}>{observabilityConfig?.langfuse_enabled ? '正在上报' : '未启用'}</Tag><Text type={observabilityConfig?.last_test_success === false ? 'danger' : 'secondary'}>{observabilityConfig?.last_test_success === true ? '连接正常' : observabilityConfig?.last_test_success === false ? '连接异常' : '待检测'}</Text></div></div>
+          <Text className="web-search-health-copy" type="secondary">{observabilityConfig?.last_test_message || '配置完成后可测试 Langfuse 项目连接'}</Text>
+          <Space wrap className="web-search-provider-actions"><Button onClick={() => setObservabilityModalOpen(true)}>配置</Button><Button onClick={testObservabilityConfig} loading={observabilityTesting} disabled={!observabilityConfig?.public_key_configured || !observabilityConfig?.secret_key_configured}>测试连接</Button><Button type={observabilityConfig?.langfuse_enabled ? 'default' : 'primary'} onClick={toggleObservabilityConfig} loading={observabilitySaving}>{observabilityConfig?.langfuse_enabled ? '停用' : '启用'}</Button><Button danger icon={<DeleteOutlined />} onClick={deleteObservabilityConfig} disabled={!observabilityConfig?.public_key_configured && !observabilityConfig?.secret_key_configured}>删除</Button></Space>
+        </Card>
+      </div>,
+    },
+    {
       key: 'modules',
       label: '功能开关',
       children: (
@@ -500,13 +588,25 @@ export default function SettingsPage() {
       ),
     },
   ]
-  const tabKey = ({ models: 'llm', search: 'web-search', runtime: 'system' }[section || ''] || 'llm')
+  const tabKey = ({ models: 'llm', search: 'web-search', observability: 'observability', runtime: 'system' }[section || ''] || 'llm')
   const activeItem = tabItems.find(item => item.key === tabKey)
 
+  const backPath = tabKey === 'observability' && provider ? '/settings/observability' : '/settings'
   return (
     <div className={styles.container}>
-      <div className="page-header"><div><Button type="text" icon={<ArrowLeftOutlined />} onClick={() => navigate('/settings')} style={{ marginLeft: -8 }}>返回设置</Button><Title level={3}>{activeItem?.label || '设置'}</Title><Text type="secondary" className="page-header-copy">{tabKey === 'llm' ? '管理问答模型、降级链路与连接测试。' : tabKey === 'web-search' ? '仅在外部事实缺失或用户明确要求时联网补充。' : '独立配置页面。'}</Text></div>{tabKey === 'llm' && <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>新增配置</Button>}</div>
+      <div className="page-header"><div><Button type="text" icon={<ArrowLeftOutlined />} onClick={() => navigate(backPath)} style={{ marginLeft: -8 }}>{provider ? '返回平台列表' : '返回设置'}</Button><Title level={3}>{provider === 'langfuse' ? 'Langfuse' : activeItem?.label || '设置'}</Title><Text type="secondary" className="page-header-copy">{tabKey === 'llm' ? '管理问答模型、降级链路与连接测试。' : tabKey === 'web-search' ? '仅在外部事实缺失或用户明确要求时联网补充。' : tabKey === 'observability' ? '统一记录 Agent 的问答、检索与模型调用链路。' : '独立配置页面。'}</Text></div>{tabKey === 'llm' && <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>新增配置</Button>}</div>
       {activeItem?.children}
+
+      <Modal title="配置 Langfuse" open={observabilityModalOpen} onCancel={() => { setObservabilityModalOpen(false); if (provider) navigate('/settings/observability') }} footer={null} destroyOnHidden width={560}>
+        <Form form={observabilityForm} layout="vertical">
+          <Form.Item name="langfuse_enabled" label="启用 Langfuse" valuePropName="checked"><Switch /></Form.Item>
+          <Form.Item name="langfuse_host" label="Langfuse Host" extra="为保护密钥与上报数据，当前仅支持官方 Langfuse Cloud。"><Input disabled /></Form.Item>
+          <Form.Item name="langfuse_public_key" label="Public Key" extra={observabilityConfig?.public_key_configured ? `当前：${observabilityConfig.langfuse_public_key}；留空表示不修改` : '在 Langfuse Project Settings 中获取'}><Input.Password autoComplete="new-password" placeholder="pk-lf-..." /></Form.Item>
+          <Form.Item name="langfuse_secret_key" label="Secret Key" extra={observabilityConfig?.secret_key_configured ? `当前：${observabilityConfig.langfuse_secret_key}；留空表示不修改` : '在 Langfuse Project Settings 中获取'}><Input.Password autoComplete="new-password" placeholder="sk-lf-..." /></Form.Item>
+          <Form.Item name="online_evaluation_enabled" label="为 Langfuse 在线 Judge 提供评分上下文" valuePropName="checked" extra="开启后，answer 节点会额外上传用户问题和实际检索证据；仅在你已在 Langfuse 配置 LLM-as-a-Judge 时开启。"><Switch /></Form.Item>
+          <Space><Button onClick={testObservabilityConfig} loading={observabilityTesting} disabled={!observabilityConfig?.public_key_configured || !observabilityConfig?.secret_key_configured}>测试连接</Button><Button type="primary" onClick={saveObservabilityConfig} loading={observabilitySaving}>保存配置</Button></Space>
+        </Form>
+      </Modal>
 
       <Modal title={`配置 ${SEARCH_PROVIDERS.find(item => item.id === webSearchEditingProvider)?.name || '搜索服务'}`} open={webSearchModalOpen} onCancel={() => setWebSearchModalOpen(false)} footer={null} destroyOnHidden>
         <Form form={webSearchForm} layout="vertical">

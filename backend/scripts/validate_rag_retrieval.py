@@ -13,6 +13,7 @@ JSONL 每行一个问题。建议先用无标注模式导出候选 parent_id，�
 
 import argparse
 import asyncio
+import json
 import sys
 from pathlib import Path
 

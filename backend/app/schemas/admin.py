@@ -60,6 +60,32 @@ class WebSearchTestResponse(BaseModel):
     result_count: int = 0
 
 
+class ObservabilityConfigOut(BaseModel):
+    langfuse_enabled: bool = False
+    langfuse_host: str = "https://cloud.langfuse.com"
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+    public_key_configured: bool = False
+    secret_key_configured: bool = False
+    online_evaluation_enabled: bool = False
+    last_test_success: Optional[bool] = None
+    last_test_at: Optional[datetime] = None
+    last_test_message: Optional[str] = None
+
+
+class ObservabilityConfigUpdate(BaseModel):
+    langfuse_enabled: bool = False
+    langfuse_host: str = Field("https://cloud.langfuse.com", min_length=8, max_length=500)
+    langfuse_public_key: Optional[str] = Field(None, max_length=1000)
+    langfuse_secret_key: Optional[str] = Field(None, max_length=1000)
+    online_evaluation_enabled: bool = False
+
+
+class ObservabilityTestResponse(BaseModel):
+    success: bool
+    message: str
+
+
 # ============================================================
 # 模块开关 Schema
 # ============================================================

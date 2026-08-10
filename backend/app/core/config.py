@@ -15,6 +15,7 @@ from pydantic_settings import BaseSettings
 
 # 与启动目录无关，始终读取 backend/.env，便于本地与容器部署。
 _BACKEND_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
+LANGFUSE_CLOUD_HOST = "https://cloud.langfuse.com"
 
 
 # 获取应用数据目录
@@ -160,13 +161,12 @@ class Settings(BaseSettings):
     WEB_SEARCH_API_KEY: str = ""
     WEB_SEARCH_MAX_RESULTS: int = 3
 
-    # ---- 仅开发部署使用的 Langfuse 观测（不在应用内配置或展示）----
+    # ---- Langfuse Agent 链路观测（环境变量为初始值，数据库配置优先）----
     LANGFUSE_ENABLED: bool = False
-    LANGFUSE_HOST: str = "https://cloud.langfuse.com"
+    LANGFUSE_HOST: str = LANGFUSE_CLOUD_HOST
     LANGFUSE_PUBLIC_KEY: str = ""
     LANGFUSE_SECRET_KEY: str = ""
-    LANGFUSE_EVALUATOR_ENABLED: bool = False
-    LANGFUSE_EVALUATOR_MODEL_CONFIG_ID: int | None = None
+    LANGFUSE_ONLINE_EVALUATION_ENABLED: bool = False
 
     # ---- 限流配置 ----
     RATE_LIMIT_TOKEN_RATE: float = 10.0  # 令牌桶速率（令牌/秒）

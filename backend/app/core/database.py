@@ -112,6 +112,7 @@ async def init_db():
         import app.models.embedding_config  # noqa: F401
         import app.models.embedding_profile # noqa: F401
         import app.models.web_search_config # noqa: F401
+        import app.models.observability_config  # noqa: F401
         import app.models.feishu_config   # noqa: F401
         import app.models.import_job      # noqa: F401
         import app.models.vision_config   # noqa: F401
@@ -184,6 +185,10 @@ async def _run_compatible_migrations(conn):
         "ALTER TABLE conversations ADD COLUMN context_summary TEXT",
         "ALTER TABLE conversations ADD COLUMN summarized_through_history_id INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE conversations ADD COLUMN summary_updated_at DATETIME",
+        "ALTER TABLE observability_configs ADD COLUMN online_evaluation_enabled BOOLEAN NOT NULL DEFAULT 0",
+        "ALTER TABLE observability_configs ADD COLUMN last_test_success BOOLEAN",
+        "ALTER TABLE observability_configs ADD COLUMN last_test_at DATETIME",
+        "ALTER TABLE observability_configs ADD COLUMN last_test_message VARCHAR(500)",
     ]
     for sql in migrations:
         try:

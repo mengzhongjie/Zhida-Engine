@@ -4,10 +4,12 @@
 提供仪表盘统计、模块开关、缓存管理等接口。
 """
 
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
+import asyncio
 import platform
 import sys
 import json
+from urllib.parse import urlparse
 from typing import Optional, Literal
 from pydantic import BaseModel, Field
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -15,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, text
 from loguru import logger
 
-from app.core.config import settings
+from app.core.config import LANGFUSE_CLOUD_HOST, settings
 from app.core.database import get_db
 from app.core.time import beijing_now, beijing_today, utc_day_range
 from app.core.resource_manager import resource_manager
@@ -24,6 +26,7 @@ from app.models.knowledge import KnowledgeBase, Document
 from app.models.qa import QAHistory
 from app.models.llm_config import LLMConfig
 from app.models.web_search_config import WebSearchConfig
+from app.models.observability_config import ObservabilityConfig
 from app.models.persona_preset import PersonaPreset, DEFAULT_PERSONA_PRESETS
 from app.schemas.admin import (
     DashboardStatsOut,
@@ -42,6 +45,9 @@ from app.schemas.admin import (
     WebSearchConfigUpdate,
     WebSearchTestRequest,
     WebSearchTestResponse,
+    ObservabilityConfigOut,
+    ObservabilityConfigUpdate,
+    ObservabilityTestResponse,
 )
 from app.services.cache.query_cache import query_cache
 from app.services.cache.rate_limiter import rate_limiter
@@ -50,6 +56,26 @@ from app.core.security import encrypt_api_key, decrypt_api_key, mask_api_key
 from app.services.knowledge.data_integrity import data_integrity_service
 
 router = APIRouter(prefix="/admin", tags=["管理后台"])
+_OBSERVABILITY_TEST_COOLDOWN_SECONDS = 10
+_observability_test_lock = asyncio.Lock()
+
+
+def _is_langfuse_cloud_host(host: str) -> bool:
+    """仅允许官方云端地址，避免管理员配置被滥用为内网请求或密钥外送。"""
+    try:
+        parsed = urlparse(host)
+        return (
+            parsed.scheme == "https"
+            and parsed.hostname == "cloud.langfuse.com"
+            and parsed.port in {None, 443}
+            and not parsed.username
+            and not parsed.password
+            and parsed.path in {"", "/"}
+            and not parsed.query
+            and not parsed.fragment
+        )
+    except ValueError:
+        return False
 
 
 class PersonaPresetOut(BaseModel):
@@ -172,6 +198,132 @@ async def load_web_search_config(db: AsyncSession) -> None:
     settings.WEB_SEARCH_API_KEY = decrypt_api_key(
         config.exa_api_key if config.provider == "exa" else config.tavily_api_key
     )
+
+
+async def load_observability_config(db: AsyncSession) -> None:
+    """将数据库配置同步给异步 Langfuse 上报器。"""
+    config = await db.get(ObservabilityConfig, 1)
+    if config is None:
+        return
+    settings.LANGFUSE_ENABLED = config.langfuse_enabled
+    settings.LANGFUSE_HOST = config.langfuse_host
+    settings.LANGFUSE_PUBLIC_KEY = decrypt_api_key(config.langfuse_public_key)
+    settings.LANGFUSE_SECRET_KEY = decrypt_api_key(config.langfuse_secret_key)
+    settings.LANGFUSE_ONLINE_EVALUATION_ENABLED = config.online_evaluation_enabled
+
+
+def _observability_out(config: ObservabilityConfig | None) -> ObservabilityConfigOut:
+    if config is None:
+        return ObservabilityConfigOut(
+            langfuse_enabled=settings.LANGFUSE_ENABLED,
+            langfuse_host=LANGFUSE_CLOUD_HOST,
+            langfuse_public_key=mask_api_key(settings.LANGFUSE_PUBLIC_KEY),
+            langfuse_secret_key=mask_api_key(settings.LANGFUSE_SECRET_KEY),
+            public_key_configured=bool(settings.LANGFUSE_PUBLIC_KEY),
+            secret_key_configured=bool(settings.LANGFUSE_SECRET_KEY),
+            online_evaluation_enabled=settings.LANGFUSE_ONLINE_EVALUATION_ENABLED,
+        )
+    return ObservabilityConfigOut(
+        langfuse_enabled=config.langfuse_enabled,
+        # 历史自建地址不会继续暴露在管理台；保存一次即可迁移到固定云端地址。
+        langfuse_host=LANGFUSE_CLOUD_HOST,
+        langfuse_public_key=mask_api_key(decrypt_api_key(config.langfuse_public_key)),
+        langfuse_secret_key=mask_api_key(decrypt_api_key(config.langfuse_secret_key)),
+        public_key_configured=bool(config.langfuse_public_key),
+        secret_key_configured=bool(config.langfuse_secret_key),
+        online_evaluation_enabled=config.online_evaluation_enabled,
+        last_test_success=config.last_test_success,
+        last_test_at=config.last_test_at,
+        last_test_message=config.last_test_message,
+    )
+
+
+@router.get("/observability", response_model=ObservabilityConfigOut)
+async def get_observability_config(db: AsyncSession = Depends(get_db)):
+    return _observability_out(await db.get(ObservabilityConfig, 1))
+
+
+@router.put("/observability", response_model=ObservabilityConfigOut)
+async def update_observability_config(
+    request: ObservabilityConfigUpdate, db: AsyncSession = Depends(get_db)
+):
+    host = request.langfuse_host.strip().rstrip("/")
+    if not _is_langfuse_cloud_host(host):
+        raise HTTPException(status_code=400, detail=f"Langfuse Host 固定为 {LANGFUSE_CLOUD_HOST}")
+    config = await db.get(ObservabilityConfig, 1)
+    if config is None:
+        config = ObservabilityConfig(id=1)
+        db.add(config)
+    config.langfuse_enabled = request.langfuse_enabled
+    config.langfuse_host = host
+    config.online_evaluation_enabled = request.online_evaluation_enabled
+    if request.langfuse_public_key:
+        config.langfuse_public_key = encrypt_api_key(request.langfuse_public_key.strip())
+    if request.langfuse_secret_key:
+        config.langfuse_secret_key = encrypt_api_key(request.langfuse_secret_key.strip())
+    if config.langfuse_enabled and (not config.langfuse_public_key or not config.langfuse_secret_key):
+        raise HTTPException(status_code=400, detail="启用 Langfuse 前必须同时配置 Public Key 和 Secret Key")
+    await db.flush()
+    await load_observability_config(db)
+    return _observability_out(config)
+
+
+@router.post("/observability/test", response_model=ObservabilityTestResponse)
+async def test_observability_config(db: AsyncSession = Depends(get_db)):
+    """使用已保存的密钥验证 Langfuse 项目连通性，并记录最近结果。"""
+    async with _observability_test_lock:
+        config = await db.get(ObservabilityConfig, 1)
+        if config is None or not config.langfuse_public_key or not config.langfuse_secret_key:
+            raise HTTPException(status_code=400, detail="请先保存 Langfuse Public Key 和 Secret Key")
+        if not _is_langfuse_cloud_host(config.langfuse_host):
+            raise HTTPException(status_code=400, detail=f"Langfuse Host 必须为 {LANGFUSE_CLOUD_HOST}，请重新保存配置")
+        now = beijing_now().replace(tzinfo=None)
+        if config.last_test_at and now - config.last_test_at < timedelta(seconds=_OBSERVABILITY_TEST_COOLDOWN_SECONDS):
+            raise HTTPException(status_code=429, detail=f"请在 {_OBSERVABILITY_TEST_COOLDOWN_SECONDS} 秒后再测试")
+        try:
+            from langfuse import Langfuse
+
+            def check_connection() -> bool:
+                client = Langfuse(
+                    public_key=decrypt_api_key(config.langfuse_public_key),
+                    secret_key=decrypt_api_key(config.langfuse_secret_key),
+                    host=LANGFUSE_CLOUD_HOST,
+                )
+                return bool(client.auth_check())
+
+            success = await asyncio.wait_for(asyncio.to_thread(check_connection), timeout=15)
+            message = "Langfuse 项目连接正常" if success else "Langfuse 拒绝了当前密钥"
+        except asyncio.TimeoutError:
+            success, message = False, "连接超时，请检查网络后重试"
+        except Exception as exc:
+            error_name = type(exc).__name__.lower()
+            if "ssl" in error_name or "certificate" in error_name:
+                message = "TLS 证书校验失败，请检查系统网络环境"
+            elif "auth" in error_name or "unauthorized" in error_name or "forbidden" in error_name:
+                message = "认证失败，请检查 Public Key 和 Secret Key"
+            else:
+                message = "连接失败，请检查网络和密钥后重试"
+            success = False
+            logger.warning("Langfuse 连接测试失败：{}", type(exc).__name__)
+        config.last_test_success = success
+        config.last_test_at = now
+        config.last_test_message = message
+        await db.flush()
+        return ObservabilityTestResponse(success=success, message=message)
+
+
+@router.delete("/observability", status_code=204)
+async def delete_observability_config(db: AsyncSession = Depends(get_db)):
+    """删除本地保存的平台配置，并立即停止当前进程的上报。"""
+    config = await db.get(ObservabilityConfig, 1)
+    if config is not None:
+        await db.delete(config)
+        await db.flush()
+    settings.LANGFUSE_ENABLED = False
+    settings.LANGFUSE_PUBLIC_KEY = ""
+    settings.LANGFUSE_SECRET_KEY = ""
+    settings.LANGFUSE_ONLINE_EVALUATION_ENABLED = False
+    return None
 
 
 @router.get("/web-search", response_model=WebSearchConfigOut)

@@ -49,6 +49,7 @@ function App() {
         <Route path="settings/system" element={<ReliabilitySettings />} />
         <Route path="settings/vision" element={<VisionSettings />} />
         <Route path="settings/embedding" element={<EmbeddingSettings />} />
+        <Route path="settings/:section/:provider" element={<Settings />} />
         <Route path="settings/:section" element={<Settings />} />
         <Route path="knowledge" element={<Knowledge />} />
         <Route path="knowledge/:id" element={<KnowledgeDetail />} />
