@@ -24,9 +24,13 @@
 - **🤖 Agent 管理** — 创建 AI 助手，绑定知识库和 LLM 配置
 - **💬 管理台对话** — 选择已启用 Agent，直接使用其知识库进行对话
 - **🔐 网页访问控制** — 管理员使用账号、密码和图形验证码登录；用户使用受 Agent 授权的一次性激活码登录
+- **🧠 上下文感知会话** — Agent 独立上下文窗口（32-256K），自动问题改写、会话压缩与历史裁剪
 - **🧠 长期记忆** — 基于 Mem0 的跨会话个性化记忆
 - **🔒 格式校验** — 上传文件自动检测真实类型，防止扩展名伪装，确保数据安全
 - **⚡ 可选 MinerU 解析** — 可选集成 MinerU 引擎，支持复杂 PDF 布局/OCR/公式识别
+- **🌐 网页/飞书导入** — 从 URL 或飞书云文档导入资料，自动去重
+- **📊 可观测性** — 可选接入 Langfuse，记录检索与生成全过程，支持云端在线评测
+- **🔧 开发维护模式** — 一键暂停用户端问答，维护期间不消耗用户额度
 
 ---
 
@@ -39,13 +43,15 @@
 | 框架 | Python 3.11+ / FastAPI / SQLAlchemy (async) |
 | 数据库 | SQLite（aiosqlite） |
 | 向量数据库 | ChromaDB（嵌入式） |
-| 嵌入模型 | 云端 Embedding API（OpenAI 兼容） |
-| LLM 网关 | litellm + OpenAI 兼容客户端（云端厂商模板 + 自定义） |
-| 缓存 | diskcache（基于 SQLite） |
+| 嵌入模型 | 云端 Embedding API（OpenAI 兼容，多档案管理） |
+| LLM 网关 | litellm + OpenAI 兼容客户端（主模型 / 降级 / 上下文三角色） |
+| 缓存 | diskcache（基于 SQLite）+ 进程内 L1 |
 | 文档解析 | pdfplumber, python-docx, openpyxl, pandas |
 | 可选解析 | MinerU（magic-pdf，需额外安装） |
 | 中文分词 | jieba |
 | 格式校验 | filetype（magic bytes）+ langdetect（语言识别） |
+| 可观测性 | Langfuse（可选，云端在线评测） |
+| 网络检索 | Tavily / Exa（RAG 未命中补充，可选） |
 
 ### 前端
 
@@ -140,19 +146,21 @@ docker compose up -d
 │   ├── app/
 │   │   ├── core/                   # 核心配置/安全/数据库
 │   │   │   ├── config.py           # Pydantic Settings（环境变量 + .env）
-│   │   │   ├── database.py         # SQLAlchemy 异步引擎
-│   │   │   ├── security.py         # 加密/进程锁/权限
+│   │   │   ├── database.py         # SQLAlchemy 异步引擎 + 迁移
+│   │   │   ├── security.py         # 加密/进程锁/权限/可信代理
 │   │   │   └── resource_manager.py # 资源管理器
-│   │   ├── models/                 # ORM 模型
+│   │   ├── models/                 # ORM 模型（agent/knowledge/llm_config/auth/qa/observability）
 │   │   ├── schemas/                # Pydantic Schema
 │   │   ├── api/v1/                 # API 路由
+│   │   │   ├── auth/               # 认证：管理员注册/登录/激活码/会话
+│   │   │   ├── user/               # 用户站：Agent/会话/流式问答/额度
 │   │   │   ├── knowledge/          # 知识库
 │   │   │   ├── agent/              # Agent
-│   │   │   ├── channel/            # 渠道
 │   │   │   ├── config/             # LLM 配置
 │   │   │   ├── embedding/          # 向量化配置
+│   │   │   ├── vision/             # 视觉模型配置
 │   │   │   ├── qa/                 # 问答
-│   │   │   └── admin/              # 系统管理
+│   │   │   └── admin/              # 系统管理/维护模式/可观测性
 │   │   └── services/               # 服务层
 │   │       ├── knowledge/          # 文档解析/切片/向量化/索引
 │   │       │   ├── parser.py       # DocumentParser（含 MinerU 策略）
@@ -160,20 +168,13 @@ docker compose up -d
 │   │       │   ├── embedder.py     # EmbeddingService
 │   │       │   ├── indexer.py      # IndexManager -> ChromaDB
 │   │       │   └── mineru/         # MinerU 可选解析
-│   │       │       ├── config.py   # MinerUConfig
-│   │       │       ├── backend.py  # Embedded/Http 后端
-│   │       │       └── parser.py   # MinerUParser
 │   │       ├── validation/         # 格式校验模块
-│   │       │   ├── config.py       # ValidationConfig
-│   │       │   ├── file_validator.py # magic bytes 检测
-│   │       │   ├── precheck.py     # 上传前预检
-│   │       │   └── quality_checker.py # 解析后质检
-│   │       ├── llm/                # LLM 网关
-│   │       ├── qa/                 # 问答服务
+│   │       ├── llm/                # LLM 网关（主/降级/上下文三角色）
+│   │       ├── qa/                 # 问答服务（改写/多路检索/压缩 + Langfuse 观察）
 │   │       ├── memory/             # Mem0 记忆层
-│   │       └── cache/              # 缓存服务
+│   │       └── cache/              # 缓存/请求合并/降级/限流
 │   └── tests/
-├── frontend-admin/                 # React 管理后台
+├── frontend-admin/                 # 前端（管理台 + 用户站共用，按 mode 构建）
 ├── docs/
 ├── API_DOCS.md
 ├── ARCHITECTURE.md
@@ -208,11 +209,13 @@ docker compose up -d
 
 ### 模块开关
 
-```python
-ENABLE_SINGLE_FLIGHT      # 幂等请求合并
-ENABLE_STREAMING          # 流式输出
-ENABLE_SOURCE_CITATION    # 来源引用
-```
+管理端「系统设置 → 功能开关」中可切换，进程内生效（重启后回退到 `.env`）：
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `ZHIDA_ENABLE_STREAMING` | `true` | 流式输出 |
+| `ZHIDA_ENABLE_SOURCE_CITATION` | `true` | 来源引用 |
+| `ZHIDA_DEVELOPMENT_MODE` | `false` | 开发维护模式：暂停用户端问答（返回 503，不消耗额度） |
 
 ### 网页登录与兑换码
 
@@ -231,6 +234,40 @@ ZHIDA_CORS_ORIGINS=https://admin.example.com,https://app.example.com
 
 会话使用 `HttpOnly + Secure + SameSite=Strict` Cookie。管理员默认有效期为 8 小时、用户默认为 7 天；在剩余有效期低于完整周期三分之一时，正常请求会触发一次滑动续期。用户清除浏览器数据或长期未访问导致 Cookie 失效时，管理员可在管理台“重置登录”换发一枚新的单次激活码；旧设备会立即下线，用户历史仍保留。停用、过期、删除访问资格或退出登录都会立即阻断后续会话；删除会同时清理该用户的会话与问答记录。
 
+### 可观测性（Langfuse）
+
+可选接入 Langfuse 记录 RAG 全过程（检索块明细、生成、token 用量），并支持云端在线评测。在管理台「系统设置 → 可观测性」配置，或直接写入环境变量：
+
+```env
+ZHIDA_LANGFUSE_ENABLED=true
+ZHIDA_LANGFUSE_PUBLIC_KEY=...
+ZHIDA_LANGFUSE_SECRET_KEY=...
+# 可选：开启云端在线评测（把问题与检索证据提供给云端 Judge 评分）
+ZHIDA_LANGFUSE_ONLINE_EVALUATION_ENABLED=false
+```
+
+> 安全说明：Langfuse host 固定为 `https://cloud.langfuse.com`，非可信域名拒绝上报；密钥在数据库中加密存储、API 脱敏返回。
+
+项目附带当前知识库的黄金评测集。以下命令会导出可在 Langfuse Dataset 页面导入的 CSV；它只导出题目、标准答案与元数据，不会从云端调用模型：
+
+```bash
+cd backend
+.venv/bin/python scripts/export_langfuse_dataset.py
+```
+
+导出的文件为 `tests/fixtures/langfuse_rag_golden_dataset.csv`。在线 Judge 应绑定新产生的 `rag-answer` Trace；启用在线评测开关后，Trace 会包含问题、实际检索证据与最终回答。
+
+### 网络检索（可选）
+
+RAG 本地证据不足时自动补充联网搜索（支持 Tavily / Exa）：
+
+```env
+ZHIDA_WEB_SEARCH_ENABLED=true
+ZHIDA_WEB_SEARCH_PROVIDER=tavily
+ZHIDA_WEB_SEARCH_API_KEY=tvly-...
+ZHIDA_WEB_SEARCH_MAX_RESULTS=3
+```
+
 ---
 
 ## API 文档
@@ -241,21 +278,29 @@ ZHIDA_CORS_ORIGINS=https://admin.example.com,https://app.example.com
 
 | 端点 | 方法 | 说明 |
 |------|------|------|
+| `/api/v1/auth/captcha` | GET | 获取图形验证码 |
+| `/api/v1/auth/admin/register` | POST | 首次部署注册管理员 |
+| `/api/v1/auth/admin/login` | POST | 管理员登录 |
+| `/api/v1/auth/user/login` | POST | 用户激活码登录 |
+| `/api/v1/auth/admin/access-codes` | GET/POST | 激活码列表 / 创建 |
+| `/api/v1/user/chat/stream` | POST | 用户端流式问答（SSE） |
 | `/api/v1/knowledge/bases` | GET/POST | 知识库 CRUD |
 | `/api/v1/knowledge/bases/{kb_id}/upload` | POST | 文档上传（含格式校验）|
-| `/api/v1/knowledge/documents/{id}` | DELETE | 删除文档 |
+| `/api/v1/knowledge/bases/{kb_id}/web/import` | POST | 网页导入 |
 | `/api/v1/agents` | GET/POST | Agent CRUD |
 | `/api/v1/agents/{id}/start` | POST | 启动 Agent |
-| `/api/v1/channels` | GET/POST | 渠道配置 |
-| `/api/v1/channels/{type}/login/qrcode` | POST | 生成登录二维码 |
 | `/api/v1/qa/ask` | POST | 提问 |
-| `/api/v1/admin/settings` | GET/PUT | 系统设置 |
+| `/api/v1/admin/settings` | GET/PUT | 系统设置（含维护模式） |
+| `/api/v1/admin/observability` | GET/PUT | Langfuse 可观测性配置 |
+| `/api/v1/admin/observability/test` | POST | 测试已保存的 Langfuse 连接 |
 
 ---
 
 ## 作为服务接入其他应用
 
 智答引擎可以作为一个独立的本地 RAG 服务，被 Web 应用、桌面端、企业内部工具或其他 AI Agent 调用。调用方只需要保存 `agent_id`；该 Agent 已挂载的所有知识库会一起参与检索。
+
+> 以下管理 API（包括 `/qa/ask`）需要管理员会话。浏览器在管理台登录后会自动携带 Cookie；命令行或服务端接入请使用受保护的 Cookie Jar，或在反向代理前增加面向调用方的认证层。用户端应使用 `/api/v1/user/chat/stream`，不能把用户身份字段直接传给管理 API。
 
 ### 1. 启动与健康检查
 
@@ -280,18 +325,24 @@ curl http://127.0.0.1:18900/health
 同一个知识库可以挂载给多个 Agent；一个 Agent 也可以挂载多个知识库。
 
 ```bash
+# 管理员登录一次，将会话保存到受保护的本地 Cookie Jar
+curl -c ./zhida-admin.cookie \
+  -X POST http://127.0.0.1:18900/api/v1/auth/admin/login \
+  -H 'Content-Type: application/json' \
+  -d '{"captcha_id":"...","captcha_answer":"...","username":"admin","password":"..."}'
+
 # 创建 Agent（新建后默认停用）
-curl -X POST http://127.0.0.1:18900/api/v1/agents \
+curl -b ./zhida-admin.cookie -X POST http://127.0.0.1:18900/api/v1/agents \
   -H 'Content-Type: application/json' \
   -d '{"name":"产品知识助手","description":"回答产品与交付问题"}'
 
 # 将已有知识库 12 挂载到 Agent 3
-curl -X POST http://127.0.0.1:18900/api/v1/knowledge/bases/12/attach \
+curl -b ./zhida-admin.cookie -X POST http://127.0.0.1:18900/api/v1/knowledge/bases/12/attach \
   -H 'Content-Type: application/json' \
   -d '{"agent_id":3}'
 
 # 启动：启动后即可在管理台对话页和外部问答 API 中使用
-curl -X POST http://127.0.0.1:18900/api/v1/agents/3/start
+curl -b ./zhida-admin.cookie -X POST http://127.0.0.1:18900/api/v1/agents/3/start
 ```
 
 ### 3. 调用 RAG 问答
@@ -299,7 +350,7 @@ curl -X POST http://127.0.0.1:18900/api/v1/agents/3/start
 `POST /api/v1/qa/ask` 是其他应用最常用的接口。它会执行混合检索、父块扩展、回答生成与来源整理，并返回本轮使用的模型和文档来源。
 
 ```bash
-curl -X POST http://127.0.0.1:18900/api/v1/qa/ask \
+curl -b ./zhida-admin.cookie -X POST http://127.0.0.1:18900/api/v1/qa/ask \
   -H 'Content-Type: application/json' \
   -d '{
     "agent_id": 3,
@@ -336,6 +387,7 @@ JavaScript 调用示例：
 ```ts
 const response = await fetch('http://127.0.0.1:18900/api/v1/qa/ask', {
   method: 'POST',
+  credentials: 'include', // 管理员已登录且为同站请求时才会携带 Cookie
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({
     agent_id: 3,
@@ -355,7 +407,7 @@ const result = await response.json()
 本地文件使用 `multipart/form-data` 上传，接口会立即返回文档任务；解析和向量化在后台执行。通过 `GET /api/v1/knowledge/documents?kb_id={kb_id}` 查询 `status`，直到为 `completed` 后再作为稳定知识参与问答。
 
 ```bash
-curl -X POST http://127.0.0.1:18900/api/v1/knowledge/bases/12/upload \
+curl -b ./zhida-admin.cookie -X POST http://127.0.0.1:18900/api/v1/knowledge/bases/12/upload \
   -F 'file=@./售后政策.pdf'
 ```
 
@@ -365,7 +417,7 @@ curl -X POST http://127.0.0.1:18900/api/v1/knowledge/bases/12/upload \
 
 - 问答接口只接受已启用的 Agent；停止 Agent 后，调用会返回“Agent 不存在或未启用”。
 - `/api/v1/qa/ask` 当前返回完整 JSON 回答；外部应用需要打字机效果时，应在自身 UI 层按段或按字展示 `answer`。
-- 桌面管理 API 默认没有面向公网的多租户鉴权设计。接入第三方应用前，应由宿主应用或网关负责身份认证、授权和限流。
+- 管理 API 使用管理员 Cookie，不是面向公网的多租户 API。接入第三方应用前，应由宿主应用或网关负责身份认证、授权和限流，且不要把管理员 Cookie 下发到客户端。
 - API Key、飞书密钥等只在本机加密保存；接入方不应从 API 或日志中读取、传递这些密钥。
 
 ---
@@ -379,6 +431,28 @@ curl -X POST http://127.0.0.1:18900/api/v1/knowledge/bases/12/upload \
 ```
 上传文件 → magic bytes 校验 → 解析（MinerU / 本地）→ 质量检查 → 父子块切分 → 向量化 → ChromaDB
 ```
+
+### 问答管线（RAG 增强）
+
+```
+问题 → 请求合并 → 缓存命中 → 记忆检索 → 问题改写（上下文模型生成最多 3 条改写）
+    → 多路混合检索（加权 RRF 融合，父块粒度去重）
+    → 联网补充（可选）→ Prompt 构建 → LLM 生成（主 → 降级 → 离线兜底）
+    → 回写缓存 / 记忆 / Langfuse
+```
+
+检索排序由 RRF 融合（向量 0.45 / 关键词 0.55）+ 身份文件名加分完成。
+
+### 上下文管理
+
+每个 Agent 有独立上下文窗口（`context_window_k`，默认 64K）。系统按占用比例自动调整：
+
+- **≥95%**：触发会话压缩，把早期对话滚动压缩为摘要（存于会话，游标防重复压缩）
+- **≥80%**：只保留最近 4 轮原文，同时降低检索量与记忆量
+- **≥60%**：保留最近 6 轮原文
+- 其余：保留最近 12 轮
+
+压缩与改写由「重写/压缩模型」执行（未单独配置时复用主模型），两任务各有独立超时。
 
 ### MinerU 集成（可选）
 

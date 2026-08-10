@@ -1,76 +1,70 @@
 # 智答引擎（ZhiDa Engine）架构图
 
-> 当前交付范围为管理后台与微信小程序。本文中 QQ、Wechaty、NapCat、群聊自动学习、图检索和重排序相关内容为历史设计，不属于当前部署功能；以 `README.md` 和 `docs/MINIAPP_DEPLOYMENT.md` 为准。
+> 当前交付范围为**管理后台 + 独立用户站**。渠道（QQ/微信/NapCat/Wechaty）、群聊自动学习、独立重排序器为历史设计，当前版本未注册任何渠道/自动学习路由，检索排序由 RRF 融合完成；以 `README.md` 与 `API_DOCS.md` 为准。
 
 ## 一、整体架构
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        前端管理台 (React)                        │
-│  ┌──────────┬──────────┬──────────┬──────────┬──────────┐       │
-│  │  仪表盘   │ 知识库   │ Agent   │ 渠道配置 │ 系统设置  │       │
-│  └──────────┴──────────┴──────────┴──────────┴──────────┘       │
-└────────────────────────────────┬────────────────────────────────┘
-                                 │ HTTP REST API
+┌────────────────────────────────────────────────────────────────────────┐
+│                          前端（React + Ant Design）                      │
+│  ┌───────────────────────────┐  ┌───────────────────────────┐          │
+│  │  管理台 admin.example.com │  │  用户站 app.example.com    │          │
+│  │  仪表盘/知识库/Agent/      │  │  对话界面（独立前端，       │          │
+│  │  LLM 配置/系统设置/激活码  │  │  仅含聊天功能）             │          │
+│  └──────────────┬────────────┘  └──────────────┬────────────┘          │
+│                 │                             │                        │
+│                 └─────────── HTTP REST API ────┘                        │
+└────────────────────────────────┬───────────────────────────────────────┘
+                                 │ /api/v1
                                  ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      FastAPI 后端服务                            │
-│  ┌─────────────────────────────────────────────────────────┐    │
-│  │                    API 层 (api/v1/)                      │    │
-│  │  config/  embedding/  knowledge/  agent/  channel/      │    │
-│  │  qa/  admin/                                            │    │
-│  └─────────────────────────────────────────────────────────┘    │
-│                              │                                  │
-│                              ▼                                  │
-│  ┌─────────────────────────────────────────────────────────┐    │
-│  │                   Service 服务层                          │    │
-│  │                                                          │    │
-│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐      │    │
-│  │  │  LLM 网关    │  │  知识库服务   │  │  QA 问答     │      │    │
-│  │  │ (litellm)   │  │  (解析/切分) │  │ (检索/生成) │      │    │
-│  │  └─────────────┘  └─────────────┘  └─────────────┘      │    │
-│  │                                                          │    │
-│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐      │    │
-│  │  │  渠道适配器   │  │  自动学习   │  │  格式校验   │      │    │
-│  │  │ (QQ/微信)    │  │ (QA提取)    │  │ (magic字节) │      │    │
-│  │  └─────────────┘  └─────────────┘  └─────────────┘      │    │
-│  │                                                          │    │
-│  │  ┌───────────────────────────┐  ┌─────────────┐          │    │
-│  │  │ MinerU 可选解析           │  │  记忆服务   │          │    │
-│  │  │ (embedded / HTTP 服务)   │  │  (Mem0)    │          │    │
-│  │  └───────────────────────────┘  └─────────────┘          │    │
-│  │                                                          │    │
-│  │  ┌───────────────────────────────────────────────┐      │    │
-│  │  │            缓存服务 (diskcache)                 │      │    │
-│  │  │  查询缓存 / 单飞合并 / 降级策略 / 限流          │      │    │
-│  │  └───────────────────────────────────────────────┘      │    │
-│  └─────────────────────────────────────────────────────────┘    │
-│                              │                                  │
-│                              ▼                                  │
-│  ┌─────────────────────────────────────────────────────────┐    │
-│  │                    数据存储层                              │    │
-│  │                                                          │    │
-│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐   │    │
-│  │  │   SQLite     │  │  ChromaDB    │  │  diskcache   │   │    │
-│  │  │ (业务数据)   │  │  (向量索引)  │  │   (缓存)     │   │    │
-│  │  └──────────────┘  └──────────────┘  └──────────────┘   │    │
-│  └─────────────────────────────────────────────────────────┘    │
-└─────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────┐
+│                      FastAPI 后端服务 (127.0.0.1:18900)                 │
+│                                                                        │
+│  ┌──────────────────────────── API 层 (api/v1/) ───────────────────┐   │
+│  │  auth(认证)  user(用户站)  config(LLM)  embedding  vision        │   │
+│  │  knowledge  agent  qa  admin                                    │   │
+│  └──────────────────────────────┬──────────────────────────────────┘   │
+│                                 │                                      │
+│                                 ▼                                      │
+│  ┌──────────────────────────── Service 服务层 ─────────────────────┐   │
+│  │  ┌──────────────────────┐  ┌───────────────────────────────┐   │   │
+│  │  │ LLM 网关              │  │ QA 问答管线                    │   │   │
+│  │  │ 主模型/降级/上下文角色  │  │ 问题改写→多路检索→压缩→生成      │   │   │
+│  │  └──────────────────────┘  └───────────────────────────────┘   │   │
+│  │  ┌──────────────────────┐  ┌───────────────────────────────┐   │   │
+│  │  │ 知识库服务             │  │ 上下文管理                     │   │   │
+│  │  │ 解析/质检/切分/向量化   │  │ 会话压缩/窗口裁剪/摘要游标       │   │   │
+│  │  └──────────────────────┘  └───────────────────────────────┘   │   │
+│  │  ┌──────────────────────┐  ┌───────────────────────────────┐   │   │
+│  │  │ 记忆服务 (Mem0)       │  │ 缓存服务 (diskcache)           │   │   │
+│  │  │ 跨会话个性化记忆        │  │ 查询缓存/请求合并/降级/限流      │   │   │
+│  │  └──────────────────────┘  └───────────────────────────────┘   │   │
+│  │  ┌──────────────────────┐  ┌───────────────────────────────┐   │   │
+│  │  │ 可观测性 (Langfuse)   │  │ 维护模式 / 额度 / 会话认证       │   │   │
+│  │  └──────────────────────┘  └───────────────────────────────┘   │   │
+│  └──────────────────────────────┬──────────────────────────────────┘   │
+│                                 │                                      │
+│                                 ▼                                      │
+│  ┌──────────────────────────── 数据存储层 ──────────────────────────┐  │
+│  │  SQLite (业务/会话/摘要)  ChromaDB (向量)  diskcache (缓存)       │  │
+│  └───────────────────────────────────────────────────────────────┘  │
+└────────────────────────────────┬──────────────────────────────────────┘
                                  │
                                  ▼
-              ┌──────────────────────────────────┐
-              │       外部渠道 / 模型服务         │
-              │  QQ (NapCat) / 微信 (Wechaty)    │
-              │  LLM API / Embedding API         │
-              │  MinerU API (可选 Docker 服务)   │
-              └──────────────────────────────────┘
+             ┌──────────────────────────────────────────────┐
+             │           外部服务                            │
+             │  LLM API（主/降级/上下文模型）                 │
+             │  Embedding API（OpenAI 兼容云端）              │
+             │  Langfuse 云端可观测性                         │
+             │  Tavily/Exa 网络检索（可选）                   │
+             │  MinerU API（可选 Docker 服务）                │
+             │  飞书开放平台（可选数据源）                     │
+             └──────────────────────────────────────────────┘
 ```
 
 ## 二、核心模块说明
 
 ### 1. 文档解析链路
-
-**文档处理流程（上传前格式校验 → 解析 → 父子块切分 → 向量化）：**
 
 ```
 文档上传 (multipart/form-data)
@@ -95,8 +89,7 @@
 │  │   PDF → pdfplumber + 表格提取            │
 │  │   DOCX → python-docx + 表格提取          │
 │  │   XLSX → openpyxl + pandas → Markdown   │
-│  │   TXT/MD/JSON/XML → 原生读取             │
-│  │   CSV  → pandas → Markdown 表格          │
+│  │   TXT/MD/CSV/JSON/XML → 原生读取         │
 │  └─ 降级链：MinerU → 本地 → 纯文本 → 分页   │
 └─────────────────────┬──────────────────────┘
                       │
@@ -119,218 +112,253 @@ TextSplitter.split_parent_child()  ──  父子块切分（LangChain）
     └── TextChunk (子块)
             │
             ▼
-    Embedder.embed()  ──  向量化（本地BGE模型 / 云端API）
+    Embedder.embed()  ──  向量化（云端 API / 本地 BGE）
             │
             ▼
     IndexManager.index_chunks()  ──► ChromaDB Collection
 ```
 
-### 2. 渠道适配层（Channel Adapter）
+其他导入路径：**网页导入**（后台抓取 → LLM 保真重写 → 视觉识别）、**飞书导入**（异步任务，逐篇进度 + SHA-256 去重）。文档处理支持取消（`cancel`），失败可重试与清除残留。
 
-```
-ChannelAdapterFactory (全局单例，adapter_factory)
-    │
-    ├── register(type, class)  -- 注册适配器类
-    ├── create(type)           -- 获取适配器实例（单例模式）
-    └── get_supported_channels()
-           │
-           ▼
-ChannelAdapter (抽象基类)
-    │
-    ├── QQAdapter (基于 NapCat QQ)
-    │     - 扫码登录 (需 NapCat 运行中)
-    │     - 群聊/好友列表 (通过 NapCat API)
-    │     - 群成员列表
-    │     - 消息收发 (HTTP API)
-    │
-    └── WeChatAdapter (基于 Wechaty)
-          - 扫码登录 (需 Wechaty Puppet Token)
-          - 群聊/好友列表
-          - 群成员列表
-          - 消息收发 (WebSocket)
-
-注意：渠道适配器不再提供模拟模式，SDK 未就绪时 API 返回明确的错误信息。
-```
-
-**关键方法：**
-- `generate_qrcode()` - 生成登录二维码
-- `check_login_status(login_id)` - 查询登录状态
-- `get_contact_list()` - 获取群聊+好友列表
-- `get_group_member_list(group_id)` - 获取群成员列表
-- `start()` / `stop()` - 启动/停止监听
-- `send(request)` - 发送消息
-
-### 3. 向量化服务设计（代理模式）
-
-```
-embedding_service (全局单例，EmbeddingServiceProxy)
-    │
-    ├── switch_to(new_impl)  -- 运行时切换内部实现
-    │
-    ├── LocalBGEEmbedding (本地模型，sentence-transformers)
-    │     model: BAAI/bge-large-zh-v1.5
-    │     dimension: 1024
-    │
-    └── CloudEmbedding (云端 API，OpenAI 兼容)
-          model: text-embedding-3-small 等
-          dimension: 1536 等
-```
-
-### 4. QA 问答服务
+### 2. QA 问答管线（当前真实链路）
 
 ```
 用户问题
     │
     ▼
-HybridRetriever.retrieve()  ──  混合检索（向量+关键词）
-    │                            子块检索 → 通过parent_id获取父块
-    ▼
-Reranker.rerank()  ──  重排序（可选）
+qa_request_coalescer ── 进程内请求合并（同 Agent/用户/问题合并并发请求）
     │
     ▼
-AnswerGenerator.generate()  ──  答案生成
+query_cache 命中检查 ── 命中直接返回缓存
+    │ 未命中
+    ▼
+memory_service 记忆检索（可选，按上下文压力缩放条数）
     │
     ▼
-LLMGateway.chat()  ──  LLM调用（主模型/降级模型）
-```
-
-### 5. 格式校验模块
-
-```
-validation/              (app/services/validation/)
-  ├── config.py          → ValidationConfig (ZHIDA_FORMAT_*)
-  ├── file_validator.py  → FileFormatValidator (magic bytes 检测)
-  ├── precheck.py        → UploadPreChecker (上传前三合一)
-  └── quality_checker.py → ParseQualityChecker (解析后多维评分)
-
-上传前预检:
-  magic bytes → 真实类型 (PDF %PDF, ZIP 容器, PNG 89PNG...)
-    ├─ 扩展名匹配 → 通过 / 拒绝 (STRICT 模式)
-    ├─ 文件名清洗 → 移除 ../ 等危险字符
-    └─ 损坏检测   → PDF %%EOF, ZIP testzip, PNG IEND
-
-解析后质检:
-  ├─ 空内容检测 → FORMAT_MIN_TEXT_LENGTH (默认 10)
-  ├─ 乱码检测   → 不可打印字符 / � / 控制字符比例
-  ├─ 语言检测   → langdetect (中文/英文/混合)
-  ├─ 完整度评分 → 结尾符号/页码/空白率/密度 (0-100)
-  └─ 结构评分   → 表格/公式/代码/标题对应 (0-100)
-```
-
-### 6. MinerU 解析（可选）
-
-```
-MinerU 集成在 DocumentParser 内部，作为可选的前置解析策略。
-需设置 ZHIDA_ENABLE_MINERU=true 并选择部署模式：
-
-嵌入式模式 (embedded):
-  - pip install magic-pdf (约 4-6GB, 含 torch + paddleocr)
-  - 直接调用 Python API aio_do_parse()
-  - 支持后端: pipeline(CPU可用) / vlm-engine(GPU)
-
-HTTP 服务模式 (service):
-  - Docker: docker run -d -p 18901:8000 opendatalab/mineru:latest
-  - 通过 HTTP 调用 mineru-api 异步任务接口
-  - 进程隔离，避免 AGPL-3.0 许可证传染性
-
-MinerU 优势: 布局检测 / OCR / 公式 LaTeX / 表格结构识别
-降级策略:   MinerU 失败 → 自动回退到本地解析器 (pdfplumber 等)
-```
-
-### 7. 缓存层
-
-```
-L1: 内存字典 (进程内，最快)
+_query_variants 问题改写 ── 保留原问题(权重1.3) + 上下文模型生成最多3条
+    │                       改写查询(权重1.0)，仅用于检索
+    ▼
+HybridRetriever.retrieve_multi_query ── 并行多路检索，加权 RRF 融合
+    │  每路: 子块向量检索 → 父块扩展 → 关键词检索 → RRF(向量0.45/关键词0.55)
+    │        → 文件名精确匹配加分 → 父块粒度去重
+    ▼
+联网补充（可选）── 本地证据不足时调用 web_search_service (Tavily/Exa)
     │
     ▼
-L2: diskcache (SQLite 持久化，跨进程)
+prompt_template.build_qa_prompt ── 上下文 + 记忆 + 会话摘要 + persona
     │
     ▼
-L3: 实际 LLM/检索调用 (最慢)
+LLMGateway.chat / chat_stream ── 主模型 → 降级 → 离线兜底
+    │
+    ▼
+回写：非降级时写 query_cache；异步写记忆；异步上报 Langfuse
 ```
+
+> **说明**：检索后的排序由 **RRF 融合 + 身份文件名加分** 完成，当前没有独立的 cross-encoder 重排器。流式生成有长度预算重试（最多提升到 12000 token）；并发由 `QAStreamConcurrency`（信号量 + 队列）+ `PerUserStreamGuard`（每用户单条）保护。
+
+### 3. 上下文管理（Context Management）
+
+```
+Agent.context_window_k（默认 64K，范围 32-256）—— 每个 Agent 独立的上下文窗口
+    │
+    ▼
+_context_usage_ratio ── 估算请求占用比例
+    │  = (estimate_tokens(摘要+历史+问题) + 8000预留RAG/规则 + 12000输出预留)
+    │    / (context_window_k × 1000)
+    ▼
+_context_policy（固定阈值策略）
+    ├─ 占用率 ≥0.95 且历史>4轮 ──► 触发会话压缩 compact_conversation
+    │     上下文模型生成滚动摘要 → 存 Conversation.context_summary
+    │     推进 summarized_through_history_id 游标（防重复压缩）
+    ├─ 占用率 ≥0.80 ──► 保留最近 4 轮原文
+    ├─ 占用率 ≥0.60 ──► 保留最近 6 轮原文
+    └─ 其余       ──► 保留最近 12 轮原文
+    │
+    ▼
+_trim_records_to_budget ── 压缩后把请求压回窗口 55% 的安全水位
+    │
+    ▼
+context_pressure 传入生成器，缩放检索与记忆：
+    占用 ≥0.80 → top_k 压到 4、记忆 1 条
+    占用 ≥0.60 → top_k 压到 6、记忆 3 条
+    其余       → 使用原 top_k、记忆 5 条
+```
+
+**token 估算** `estimate_tokens`：无 tokenizer 的保守启发式——中文按 1 token/字，其余非空白字符按 4 字符/token。
+
+**会话摘要**：压缩由上下文模型执行（`chat_context(task="compaction")`，输出预算 2000 token），摘要上限 8000 字符；组装 prompt 时取最新 1 条摘要 + 最近 24 条原始消息。用户端流式问答会在压缩前推送 `status` 事件「正在整理此前对话…」。
+
+### 4. LLM 网关角色模型
+
+```
+llm_gateway（全局单例，按 Agent 初始化）
+    │
+    ├── _primary_client   主模型       —— 正常问答
+    ├── _fallback_clients 降级模型列表  —— 主模型失败后依次尝试
+    └── _context_client   上下文模型    —— 问题重写 / 会话压缩
+         │
+         ├── chat_context(task="rewrite")     超时=context_rewrite_timeout_seconds(10s)
+         └── chat_context(task="compaction")  超时=context_compaction_timeout_seconds(25s)
+```
+
+- **角色互斥**：一个 LLM 配置只能选择主模型 / 降级模型 / 重写压缩模型之一；每个 Agent 有唯一上下文模型（全局配置自动补充）。
+- **回退**：`chat` 主→降级→全部失败抛错；`chat_stream` 仅在尚未输出任何内容时允许切模型，已输出则保持流一致；`chat_context` 缺省回退主模型。
+- **离线兜底**：生成器捕获全部失败后用 `degradation_manager` 的离线提示语，标记 `model_used="offline"`、`degraded=True`。
+
+### 5. 认证与访问控制
+
+- **两种角色、两套 Cookie**：管理员 `zhida_admin_session`（8 小时）/ 用户 `zhida_user_session`（7 天），均为 `HttpOnly + SameSite=Strict` 的 host-only Cookie，互不携带。
+- **管理员注册**：首次部署开放注册唯一管理员（固定主键原子插入互斥，防并发重复创建）；生产环境不提供默认账号密码。
+- **用户激活码**：24 位随机字符，登录时 HMAC-SHA256 校验哈希，明文 AES-GCM 加密存储仅供管理员重复制，**领取后密文销毁**。
+- **密码哈希**：scrypt（n=2¹⁶、r=8、p=1、maxmem=128MB），存储格式 `scrypt$salt$digest`，验证时兼容旧哈希（n=2¹⁴）并用常量时间比较。
+- **会话续期**：剩余有效期低于完整周期 1/3 时滑动续期（Cookie 值不变），登录时撤销同一主体的旧会话。
+- **图形验证码**：5 字符 SVG、5 分钟过期、最多 5 次尝试后销毁；用户/管理员/注册各自限流（5-10 次/15 分钟/IP）。
+- **维护模式**：`development_mode` 开启后用户端问答返回 503、不消耗额度；可在管理台系统信息页切换，进程内生效。
+
+### 6. 记忆层与缓存层
+
+**记忆层（Mem0）**：向量库复用项目 ChromaDB（collection `zhida_memory`），LLM 配置取自主模型、embedder 取自云端向量配置。支持 `user_id` / `agent_id` / `run_id` 多级隔离。自动抽取事实/偏好/关系，自动更新、合并、删除矛盾记忆；初始化惰性、失败自动降级。
+
+**缓存层级**：
+
+```
+L1: 内存字典（进程内，TTL 3600s）── 最快
+    │
+    ▼
+L2: diskcache（SQLite 持久化，跨进程）
+    │
+    ▼
+L3: 实际 LLM/检索调用（最慢）
+```
+
+- 问答答案缓存键含 agent、user、历史哈希以隔离，命中回填 L1、写入双写。
+- **请求合并** `qa_request_coalescer`：同上下文并发请求只执行一次检索与模型调用（进程内幂等，非持久化）。
+- **降级管理** `DegradationManager`：按服务追踪 FULL/DEGRADED/MINIMAL/OFFLINE，`execute_with_fallback` 主策略→降级→兜底。
+- **限流** `RateLimiter`：令牌桶 + 滑动窗口 + 相同问题冷却（300s）+ 静默时段，私聊放宽 3 倍。
+
+### 7. 可观测性（Langfuse）
+
+```
+generator 完成回答后
+    │
+    ▼
+observe_qa()（fire-and-forget，asyncio.create_task，异常只打 warning）
+    │
+    ├── trace "rag-answer": input 问题 / output 答案 / metadata(agent_id,
+    │       retrieval_time, generation_time, web_search_count, degraded)
+    ├── span "retrieval": 检索块明细（rank/document/parent_id/score/content 前1200字，
+    │       供「无关引用」评估）
+    └── generation "answer": model / output / usage token
+```
+
+- **配置双层**：环境变量 `LANGFUSE_*` 作初始值，数据库 `ObservabilityConfig`（id=1 单套、密钥加密）优先。
+- **安全**：host 固定校验为 `https://cloud.langfuse.com`，非可信域名拒绝上报。
+- **在线评测**：`online_evaluation_enabled` 开启后把完整评分材料（问题 + 检索证据）放入 trace，供云端 Judge 评分。
+
+### 8. 网络检索（可选）
+
+RAG 未命中补充：`_needs_web_supplement` 检测本地证据缺口（显式联网指令 / 通用释义 / 外部事实意图 / 独立文档数 <2）后触发 `web_search_service`，支持 Tavily / Exa / DuckDuckGo / Bing RSS，结果并入上下文。配置在管理台「网络检索」页或 `/admin/web-search` API。
+
+---
 
 ## 三、数据模型
 
 ### 核心实体关系
 
 ```
-Agent (1) ──┬── (N) KnowledgeBase (可独立存在，agent_id 可空)
-            │     支持动态挂载/解绑
+Agent (1) ──┬── (N) KnowledgeBase (可独立存在，agent_id 可空，支持动态挂载/解绑)
             │
-            ├── (N) ChannelConfig
+            ├── (N) LLMConfig（主/降级/上下文 三角色，agent_id 可空=全局）
             │
-            ├── (N) LLMConfig
-            │
-            └── (N) QAHistory
+            └── (N) Conversation（用户站会话，含滚动摘要）
+                    │
+                    └── (N) QAHistory（问答历史）
+
+AccessCode (N) ──┬── (N) Agent（AccessCodeAgent 多对多绑定）
+                 ├── (N) AccessCodeDailyUsage（每日额度，并发原子扣减）
+                 └── 1 AnonymousUser（绑定一个匿名用户身份）
+
+ObservabilityConfig (1) ── Langfuse 单套配置（加密密钥、在线评测开关、最近连接测试）
+
+AdminUser（唯一管理员，首次注册）
+AdminRegistrationLock（固定 id=1，注册互斥锁）
 
 KnowledgeBase (1) ── (N) Document ── (N) DocumentChunk (父块)
         │                                   │
-        │                                   ├── ChromaDB 子块向量
-        │                                   │   (通过 parent_id 关联)
-        │                                   │
+        │                                   ├── ChromaDB 子块向量（parent_id 关联）
         │                                   └── metadata_json (TextChunk 元数据)
-        │
-        └── 统计字段：document_count, chunk_count, parent_chunk_count, total_size_bytes
-
-Document
-    - status: pending / processing / completed / failed
-    - chunk_count: 子切片数量
-    - parent_chunk_count: 父块数量
-    - parse_time_ms: 解析耗时
-    - 注：解析成功即为 completed，向量化索引失败不影响状态（在 error_message 中提示）
-
-EmbeddingConfig (id=1 单例)
-    - mode: local / cloud
-    - local_model, local_device
-    - cloud_base_url, cloud_api_key (加密), cloud_model, cloud_dimension
-
-ChannelConfig
-    - channel_type: qq / wechat
-    - chat_id: 群聊/用户 ID
-    - target_users: 监听用户白名单（JSON 数组）
-    - listen_mode: all / mentioned / questions
+        └── 统计：document_count, chunk_count, parent_chunk_count, total_size_bytes
 ```
 
-## 四、扫码登录流程
+### 关键字段
+
+**Agent**
+- `persona_preset`: professional / tutor / friendly / direct / custom
+- `persona_custom_instruction`: 自定义人格提示词
+- `context_window_k`: 上下文窗口（K tokens），默认 64，范围 32-256
+- `status`: running / stopped / error；`is_active`: 是否参与问答
+
+**LLMConfig**
+- 角色：`is_primary` / `is_fallback` / `is_context_model`（互斥，每 Agent 唯一上下文模型）
+- 超时：`context_rewrite_timeout_seconds`(10) / `context_compaction_timeout_seconds`(25)
+- 限流：`max_tokens_per_request`(4096) / `max_requests_per_minute`(30) / `max_tokens_per_minute` / `max_tokens_per_day`
+- `api_key`：AES-256-GCM 加密存储（密钥派生自机器指纹）
+
+**Conversation**
+- `id`(String 48), `owner_type` / `owner_id`, `agent_id`
+- `context_summary`：滚动会话摘要
+- `summarized_through_history_id`：已摘要到的历史游标（默认 0）
+
+**AccessCode**
+- `code_hash`(HMAC-SHA256 唯一), `code_hint`(明文后 8 位), `code_ciphertext`(AES-GCM，领取后销毁)
+- `daily_question_limit`(默认 50), `status`: active / claimed / expired / revoked
+
+---
+
+## 四、认证与激活流程
+
+### 首次部署（管理员注册）
 
 ```
-前端                          后端                          渠道 SDK
- │                              │                              │
- │  1. 点击"添加渠道"            │                              │
- │─────────────────────────────►│                              │
- │                              │                              │
- │  2. 显示扫码弹窗              │                              │
- │  3. 选择 QQ/微信 平台          │                              │
- │                              │                              │
- │  4. 请求生成二维码            │                              │
- │─────────────────────────────►│                              │
- │                              │  5. 调用渠道 SDK 生成二维码   │
- │                              │─────────────────────────────►│
- │                              │                              │
- │                              │  6. 返回二维码内容 + login_id │
- │                              │◄─────────────────────────────│
- │  7. 显示二维码                │                              │
- │◄─────────────────────────────│                              │
- │                              │                              │
- │  8. 轮询登录状态 (2s/次)      │                              │
- │─────────────────────────────►│                              │
- │                              │  9. 查询 SDK 登录状态         │
- │                              │─────────────────────────────►│
- │                              │                              │
- │  状态: waiting/scanned/...   │                              │
- │                              │                              │
- │  10. 登录成功 (status=success)│                              │
- │◄─────────────────────────────│                              │
- │                              │                              │
- │  11. 显示群聊/好友列表         │                              │
- │─────────────────────────────►│                              │
- │                              │                              │
- │  12. 选择群聊/好友             │                              │
- │  13. (群聊) 查看群成员         │                              │
- │  14. 选择监听用户 (可选)       │                              │
- │  15. 确认添加渠道             │                              │
- │─────────────────────────────►│                              │
- │                              │  16. 保存到 ChannelConfig 表 │
- │  17. 添加成功                 │                              │
- │◄─────────────────────────────│                              │
+前端                          后端
+ │  1. 访问管理台，选择"注册管理员"    │
+ │──────────────────────────────►│
+ │  2. 获取图形验证码             │
+ │◄──────────────────────────────│
+ │  3. 提交 账号+密码+验证码       │
+ │──────────────────────────────►│  4. 验证码校验 + 密码 scrypt 哈希
+ │                               │  5. INSERT OR IGNORE admin_registration_locks (id=1)
+ │                               │     竞争成功才继续，否则 409
+ │  6. 签发管理员 Cookie          │
+ │◄──────────────────────────────│
 ```
+
+### 用户激活
+
+```
+管理员创建激活码 → 用户访问用户站 → 输入激活码+验证码
+    → 激活码原子领取（并发防重）→ 签发用户 Cookie → 绑定匿名用户身份
+    → 历史会话/长期记忆/每日额度与该身份绑定
+```
+
+重置登录（用户丢失 Cookie）：管理员在管理台换发新激活码并撤销旧设备会话，用户历史保留；删除激活码则级联清理该用户会话、问答与记忆。
+
+---
+
+## 五、部署拓扑
+
+```
+浏览器 ──HTTPS──► Nginx（反向代理，保留 Host / 覆盖转发头）
+                     │
+          ┌──────────┴───────────┐
+          │ /api/ 代理            │  静态前端由后端按 Host 提供
+          ▼                      │  （admin.example.com → 管理台前端
+    FastAPI 后端 (18900)          │    app.example.com → 用户站前端）
+          │                      │
+          ├── SQLite / ChromaDB / diskcache（数据目录）
+          └── 外部：LLM / Embedding / Langfuse / Tavily(Exa) / 飞书
+```
+
+- 认证 Cookie 为 host-only，用户站不携带管理员会话 Cookie。
+- `ZHIDA_TRUSTED_PROXY_IPS` 只信任明确配置的反代 IP 写入 `X-Real-IP` / `X-Forwarded-Proto`，防客户端伪造真实 IP。
+- 生产必须 HTTPS（`AUTH_REQUIRE_HTTPS=true`），公网 HTTP 请求被拒绝，并下发 HSTS。
