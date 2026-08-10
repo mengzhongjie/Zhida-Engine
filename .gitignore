@@ -81,3 +81,5 @@ temp/
 
 # ---- 独立采集工具（不属于智答引擎产品或部署镜像） ----
 tools/MediaCrawler/
+backend/scripts/run_langfuse_dataset_experiment.py
+backend/reports/langfuse/

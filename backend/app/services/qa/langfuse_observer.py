@@ -33,22 +33,23 @@ async def observe_qa(**data) -> None:
             # 因此将完整评分材料放到根 Trace，标准 Context/Faithfulness 等评估器才能触发。
             trace_input["retrieval_context"] = retrieval_chunks
             trace_output = {"answer": data.get("answer", "")}
-        trace = client.trace(
+        trace = client.start_observation(
             name="rag-answer",
-            user_id=data.get("user_id"),
-            session_id=data.get("session_id"),
+            as_type="span",
             input=trace_input,
             output=trace_output,
-            metadata=data.get("metadata", {}),
+            metadata={**data.get("metadata", {}), "user_id": data.get("user_id"), "session_id": data.get("session_id")},
         )
         # 这是 Langfuse 中评估“无关引用”的证据。不要只传文件名：同一长文档的
         # 不同父块也可能一个相关、另一个完全跑题。
-        trace.span(
+        retrieval = trace.start_observation(
             name="retrieval",
+            as_type="span",
             input={"question": data.get("question", "")},
             output={"chunks": retrieval_chunks},
             metadata={"result_count": len(retrieval_chunks)},
         )
+        retrieval.end()
         generation_kwargs = {
             "name": "answer",
             "model": data.get("model", "unknown"),
@@ -62,7 +63,9 @@ async def observe_qa(**data) -> None:
                 "question": data.get("question", ""),
                 "retrieval_context": retrieval_chunks,
             }
-        trace.generation(**generation_kwargs)
+        generation = trace.start_observation(as_type="generation", **generation_kwargs)
+        generation.end()
+        trace.end()
         client.flush()
         logger.info("Langfuse 观测已上报：model={}, source={}", data.get("model", "unknown"), data.get("metadata", {}).get("source", "sync"))
     except Exception as exc:
