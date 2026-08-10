@@ -118,8 +118,8 @@ class Settings(BaseSettings):
     # 云端 Embedding 配置（OpenAI 兼容）
     EMBEDDING_CLOUD_BASE_URL: str = ""
     EMBEDDING_CLOUD_API_KEY: str = ""
-    EMBEDDING_CLOUD_MODEL: str = "text-embedding-3-small"
-    EMBEDDING_CLOUD_DIMENSION: int = 1536
+    EMBEDDING_CLOUD_MODEL: str = ""
+    EMBEDDING_CLOUD_DIMENSION: int = 0
 
     # ---- 日志 ----
     LOG_LEVEL: str = "INFO"

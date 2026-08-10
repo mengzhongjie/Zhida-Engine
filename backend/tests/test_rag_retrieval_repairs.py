@@ -6,7 +6,13 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.core.database import Base
 from app.models.agent import Agent  # noqa: F401 - 注册外键目标表
 from app.models.knowledge import Document, DocumentChunk, KnowledgeBase
-from app.services.knowledge.embedder import BGE_QUERY_INSTRUCTION, _prepare_query
+from app.core.config import settings
+from app.services.knowledge.embedder import (
+    BGE_QUERY_INSTRUCTION,
+    UnconfiguredEmbedding,
+    _prepare_query,
+    create_embedding_service,
+)
 from app.services.knowledge.indexer import IndexManager, IndexResult
 from app.services.knowledge.splitter import text_splitter
 from app.services.knowledge.text_normalizer import normalize_text
@@ -23,6 +29,18 @@ def test_bge_instruction_is_query_only_and_model_specific():
     query = "如何开发 RAG"
     assert _prepare_query("BAAI/bge-large-zh-v1.5", query) == BGE_QUERY_INSTRUCTION + query
     assert _prepare_query("text-embedding-3-small", query) == query
+
+
+def test_embedding_service_never_uses_example_model_without_a_saved_configuration(monkeypatch):
+    monkeypatch.setattr(settings, "EMBEDDING_CLOUD_BASE_URL", "")
+    monkeypatch.setattr(settings, "EMBEDDING_CLOUD_API_KEY", "")
+    monkeypatch.setattr(settings, "EMBEDDING_CLOUD_MODEL", "")
+    monkeypatch.setattr(settings, "EMBEDDING_CLOUD_DIMENSION", 0)
+
+    service = create_embedding_service()
+
+    assert isinstance(service, UnconfiguredEmbedding)
+    assert service.model_name == "未配置"
 
 
 @pytest.mark.asyncio

@@ -24,8 +24,8 @@ class EmbeddingConfigOut(BaseModel):
     # 云端 API 配置
     cloud_base_url: str = Field("", description="云端 API 基础地址")
     cloud_api_key: str = Field("", description="云端 API Key（脱敏后返回）")
-    cloud_model: str = Field("text-embedding-3-small", description="云端模型名称")
-    cloud_dimension: int = Field(1536, description="向量维度")
+    cloud_model: str = Field("", description="云端模型名称")
+    cloud_dimension: int = Field(0, description="向量维度")
 
     # 状态
     is_ready: bool = Field(False, description="是否就绪（模型已加载）")

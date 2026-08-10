@@ -80,7 +80,7 @@ class CloudEmbedding(EmbeddingService):
         self,
         base_url: str,
         api_key: str,
-        model_name: str = "text-embedding-3-small",
+        model_name: str,
         dimension: int = 1536,
     ):
         self._base_url = base_url
@@ -220,22 +220,49 @@ class CloudEmbedding(EmbeddingService):
         return error_str
 
 
+class UnconfiguredEmbedding(EmbeddingService):
+    """尚未选择有效向量配置时的显式占位实现。
+
+    禁止把厂商示例模型当作实际运行配置，避免“页面配置 A、索引却使用 B”。
+    """
+
+    _MESSAGE = "未配置可用的云端 Embedding 模型，请先在管理台保存并启用向量化配置"
+
+    @property
+    def dimension(self) -> int:
+        return 0
+
+    @property
+    def model_name(self) -> str:
+        return "未配置"
+
+    async def is_ready(self) -> bool:
+        return False
+
+    async def embed_text(self, text: str) -> list[float]:
+        raise RuntimeError(self._MESSAGE)
+
+    async def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        raise RuntimeError(self._MESSAGE)
+
+
 def create_embedding_service() -> EmbeddingService:
     """
     创建云端 Embedding 服务实例。
 
-    缺少凭据时仍保持云端实现，由健康检查和实际请求返回明确配置错误；
-    不会回退到本地模型或下载模型权重。
+    缺少完整配置时使用不可用的占位实现；绝不回退到厂商示例模型。
     """
     settings.EMBEDDING_MODE = "cloud"
     base_url = getattr(settings, "EMBEDDING_CLOUD_BASE_URL", "")
     api_key = getattr(settings, "EMBEDDING_CLOUD_API_KEY", "")
-    model = getattr(settings, "EMBEDDING_CLOUD_MODEL", "text-embedding-3-small")
-    dimension = getattr(settings, "EMBEDDING_CLOUD_DIMENSION", 1536)
-    if not base_url or not api_key:
-        logger.warning("云端 Embedding 配置不完整，等待在管理台完成配置")
-    else:
-        logger.info(f"创建云端 Embedding 服务: {model} @ {base_url}")
+    model = getattr(settings, "EMBEDDING_CLOUD_MODEL", "")
+    dimension = getattr(settings, "EMBEDDING_CLOUD_DIMENSION", 0)
+    if not base_url or not api_key or not model or not dimension:
+        logger.warning("云端 Embedding 未配置完整，向量化服务保持不可用状态")
+        return UnconfiguredEmbedding()
+    logger.info(f"创建云端 Embedding 服务: {model} @ {base_url}")
     return CloudEmbedding(base_url=base_url, api_key=api_key, model_name=model, dimension=dimension)
 
 

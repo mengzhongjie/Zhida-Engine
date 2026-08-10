@@ -26,7 +26,7 @@ from app.schemas.embedding import (
     EmbeddingTestRequest,
     EmbeddingTestResponse,
 )
-from app.services.knowledge.embedder import embedding_service, CloudEmbedding
+from app.services.knowledge.embedder import embedding_service, CloudEmbedding, UnconfiguredEmbedding
 from app.services.knowledge.document_processor import schedule_knowledge_base_rebuild
 from app.services.knowledge.embedding_providers import (
     BUILTIN_EMBEDDING_PROVIDERS,
@@ -81,8 +81,8 @@ async def _ensure_embedding_profile(db: AsyncSession) -> None:
         local_device="",
         cloud_base_url=current.cloud_base_url if current else getattr(settings, "EMBEDDING_CLOUD_BASE_URL", ""),
         cloud_api_key=current.cloud_api_key if current else getattr(settings, "EMBEDDING_CLOUD_API_KEY", ""),
-        cloud_model=current.cloud_model if current else getattr(settings, "EMBEDDING_CLOUD_MODEL", "text-embedding-3-small"),
-        cloud_dimension=current.cloud_dimension if current else getattr(settings, "EMBEDDING_CLOUD_DIMENSION", 1536),
+        cloud_model=current.cloud_model if current else getattr(settings, "EMBEDDING_CLOUD_MODEL", ""),
+        cloud_dimension=current.cloud_dimension if current else getattr(settings, "EMBEDDING_CLOUD_DIMENSION", 0),
         is_primary=True, is_active=True,
     )
     db.add(item)
@@ -245,13 +245,16 @@ async def load_embedding_config_from_db(db: AsyncSession) -> bool:
     config = result.scalar_one_or_none()
 
     if config is None:
-        logger.info("数据库中无向量化配置，使用默认值")
+        logger.info("数据库中无向量化配置，向量化服务保持未配置状态")
         return False
 
-    # 将数据库配置同步到 settings
+    # 只有完整的历史配置才允许进入运行时，不能用空凭据 + 默认模型伪装为可用配置。
     if config.mode != "cloud":
         logger.warning("检测到旧本地向量配置，已忽略；请在管理台新建云端向量配置")
         settings.EMBEDDING_MODE = "cloud"
+        return False
+    if not config.cloud_base_url or not config.cloud_model or not decrypt_api_key(config.cloud_api_key):
+        logger.warning("数据库中的云端 Embedding 配置不完整，已忽略")
         return False
     settings.EMBEDDING_MODE = "cloud"
     settings.EMBEDDING_CLOUD_BASE_URL = config.cloud_base_url
@@ -281,8 +284,8 @@ async def save_embedding_config_to_db(db: AsyncSession) -> EmbeddingConfig:
     config.local_device = ""
     config.cloud_base_url = getattr(settings, "EMBEDDING_CLOUD_BASE_URL", "")
     config.cloud_api_key = getattr(settings, "EMBEDDING_CLOUD_API_KEY", "")
-    config.cloud_model = getattr(settings, "EMBEDDING_CLOUD_MODEL", "text-embedding-3-small")
-    config.cloud_dimension = getattr(settings, "EMBEDDING_CLOUD_DIMENSION", 1536)
+    config.cloud_model = getattr(settings, "EMBEDDING_CLOUD_MODEL", "")
+    config.cloud_dimension = getattr(settings, "EMBEDDING_CLOUD_DIMENSION", 0)
 
     await db.flush()
     await db.refresh(config)
@@ -328,7 +331,7 @@ async def init_embedding_config(db: AsyncSession):
         _reload_embedding_service()
         logger.info("向量化配置初始化完成（从旧配置加载）")
     else:
-        logger.info("向量化配置初始化完成（使用默认值）")
+        logger.info("向量化配置初始化完成（未发现有效配置，服务保持不可用）")
 
 
 # ============================================================
@@ -422,8 +425,8 @@ def _get_config_out() -> EmbeddingConfigOut:
         mode="cloud",
         cloud_base_url=getattr(settings, "EMBEDDING_CLOUD_BASE_URL", ""),
         cloud_api_key=mask_api_key(decrypt_api_key(getattr(settings, "EMBEDDING_CLOUD_API_KEY", ""))),
-        cloud_model=getattr(settings, "EMBEDDING_CLOUD_MODEL", "text-embedding-3-small"),
-        cloud_dimension=getattr(settings, "EMBEDDING_CLOUD_DIMENSION", 1536),
+        cloud_model=getattr(settings, "EMBEDDING_CLOUD_MODEL", ""),
+        cloud_dimension=getattr(settings, "EMBEDDING_CLOUD_DIMENSION", 0),
         is_ready=False,  # 由调用方单独检查
         current_model=embedding_service.model_name,
         current_dimension=embedding_service.dimension,
@@ -435,8 +438,11 @@ def _reload_embedding_service():
     settings.EMBEDDING_MODE = "cloud"
     base_url = getattr(settings, "EMBEDDING_CLOUD_BASE_URL", "")
     api_key = decrypt_api_key(getattr(settings, "EMBEDDING_CLOUD_API_KEY", ""))
-    model = getattr(settings, "EMBEDDING_CLOUD_MODEL", "text-embedding-3-small")
-    dimension = getattr(settings, "EMBEDDING_CLOUD_DIMENSION", 1536)
+    model = getattr(settings, "EMBEDDING_CLOUD_MODEL", "")
+    dimension = getattr(settings, "EMBEDDING_CLOUD_DIMENSION", 0)
+    if not base_url or not api_key or not model or not dimension:
+        embedding_service.switch_to(UnconfiguredEmbedding())
+        return
     embedding_service.switch_to(CloudEmbedding(base_url=base_url, api_key=api_key, model_name=model, dimension=dimension))
 
 
@@ -483,7 +489,7 @@ async def update_embedding_config(
         current = {
             "mode": "cloud",
             "cloud_model": getattr(settings, "EMBEDDING_CLOUD_MODEL", ""),
-            "cloud_dimension": getattr(settings, "EMBEDDING_CLOUD_DIMENSION", 1536),
+            "cloud_dimension": getattr(settings, "EMBEDDING_CLOUD_DIMENSION", 0),
         }
         candidate = {**current, **update_data}
         changed = any(candidate.get(key) != current.get(key) for key in current if key in candidate)
