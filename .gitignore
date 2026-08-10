@@ -23,6 +23,7 @@ env/
 # ---- IDE ----
 .idea/
 .vscode/
+.trae/
 *.swp
 *.swo
 *~
@@ -70,6 +71,8 @@ backend/static-user/
 htmlcov/
 .pytest_cache/
 .tox/
+# 基于实际知识库编写的本地评测数据，不进入公开仓库。
+backend/tests/fixtures/
 
 # ---- 临时文件 ----
 tmp/
