@@ -327,7 +327,7 @@ async def _rewrite_web_page(kb: KnowledgeBase, title: str, url: str, content: st
     """按段落保真重写网页，保留全文细节而非压缩为摘要。"""
     content, image_count, vision_image_count, vision_time_ms = await _enrich_web_images(content)
     gateway = LLMGateway()
-    await gateway.initialize(kb.agent_id)
+    await gateway.initialize()
     chunks = _split_web_content_for_rewrite(content)
     semaphore = asyncio.Semaphore(_WEB_REWRITE_CONCURRENCY)
 

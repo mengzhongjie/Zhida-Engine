@@ -79,6 +79,11 @@ async def test_llm_api_rejects_conflicting_model_roles_before_database_write():
     assert exc_info.value.status_code == 422
 
 
+def test_llm_config_schema_rejects_removed_agent_scope():
+    with pytest.raises(ValidationError):
+        LLMConfigCreate(provider_id="custom", model_name="test", agent_id=2)
+
+
 @pytest.mark.asyncio
 async def test_context_gateway_prefers_dedicated_context_client(monkeypatch):
     gateway = LLMGateway()
@@ -103,10 +108,41 @@ async def test_context_gateway_prefers_dedicated_context_client(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_gateway_loads_global_configs_only(monkeypatch):
+    """Agent 专属模型记录不得进入实际问答链路。"""
+    gateway = LLMGateway()
+    global_config = SimpleNamespace(agent_id=None, is_primary=True, is_fallback=False, is_context_model=False)
+    agent_config = SimpleNamespace(agent_id=2, is_primary=True, is_fallback=False, is_context_model=False)
+    captured = []
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def execute(self, query):
+            captured.append(str(query))
+            return SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: [global_config]))
+
+    class FakeSessionFactory:
+        def __call__(self):
+            return FakeSession()
+
+    monkeypatch.setattr("app.core.database.async_session_factory", FakeSessionFactory())
+    configs = await gateway._load_configs()
+
+    assert configs == [global_config]
+    assert captured and "llm_configs.agent_id IS NULL" in captured[0]
+    assert agent_config not in configs
+
+
+@pytest.mark.asyncio
 async def test_query_rewrite_keeps_original_and_parses_three_variants(monkeypatch):
     generator = AnswerGenerator()
 
-    async def fake_initialize(_agent_id):
+    async def fake_initialize():
         return None
 
     async def fake_context(*_args, **_kwargs):
@@ -158,7 +194,7 @@ async def test_multi_query_retrieval_keeps_successful_routes(monkeypatch):
 async def test_compaction_uses_context_model_and_returns_summary(monkeypatch):
     generator = AnswerGenerator()
 
-    async def fake_initialize(_agent_id):
+    async def fake_initialize():
         return None
 
     async def fake_context(*_args, **_kwargs):

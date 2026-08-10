@@ -48,12 +48,12 @@ class LLMGateway:
     """
     LLM 统一网关 —— 管理所有已配置的 LLM 模型
 
-    配置驱动：从数据库读取模型配置，不使用硬编码列表。
-    每个 Agent 可以配置独立的主模型和降级模型。
+    配置驱动：从数据库读取全局模型配置，不使用硬编码模型列表。
+    所有 Agent 共用同一套主模型、降级模型和上下文模型配置。
 
     Usage:
         gateway = LLMGateway()
-        await gateway.initialize(agent_id=1)
+        await gateway.initialize()
 
         # 普通调用
         response = await gateway.chat("你好，请介绍一下自己")
@@ -64,30 +64,25 @@ class LLMGateway:
     """
 
     def __init__(self):
-        # 当前 Agent 的模型客户端
+        # 当前全局模型配置对应的客户端
         self._primary_client: Optional[ModelClient] = None     # 主模型
         self._fallback_clients: list[ModelClient] = []          # 降级模型列表
         self._context_client: Optional[ModelClient] = None      # 问题重写 / 会话压缩
-        self._agent_id: Optional[int] = None
 
     # ================================================================
     # 初始化
     # ================================================================
 
-    async def initialize(self, agent_id: Optional[int] = None):
+    async def initialize(self):
         """
-        初始化网关 —— 从数据库加载 Agent 的 LLM 配置
-
-        Args:
-            agent_id: Agent ID，为 None 时使用全局配置
+        初始化网关 —— 从数据库加载全局 LLM 配置。
         """
-        self._agent_id = agent_id
         self._primary_client = None
         self._fallback_clients = []
         self._context_client = None
 
         # 从数据库加载配置
-        configs = await self._load_configs(agent_id)
+        configs = await self._load_configs()
 
         # 构建模型客户端
         for config in configs:
@@ -104,16 +99,16 @@ class LLMGateway:
         if self._primary_client is None and answer_configs:
             self._primary_client = self._build_client(answer_configs[0])
             logger.warning(
-                f"Agent {agent_id}: 没有标记主模型，临时使用 {answer_configs[0].model_name}；"
+                f"全局 LLM 配置没有标记主模型，临时使用 {answer_configs[0].model_name}；"
                 "请在设置中将其设为主模型"
             )
 
         # 如果没有配置主模型，记录警告
         if self._primary_client is None:
-            logger.warning(f"Agent {agent_id}: 未配置主模型，LLM 功能不可用")
+            logger.warning("未配置全局主模型，LLM 功能不可用")
 
         logger.info(
-            f"LLM 网关初始化完成: Agent={agent_id}, "
+            "LLM 网关初始化完成: 全局配置, "
             f"主模型={self._primary_client.config.model_name if self._primary_client else '无'}, "
             f"降级模型={len(self._fallback_clients)} 个"
         )
@@ -140,8 +135,8 @@ class LLMGateway:
             timeout=max(int(timeout or 0), 1),
         )
 
-    async def _load_configs(self, agent_id: Optional[int]) -> list[LLMConfig]:
-        """从数据库加载 LLM 配置；Agent 未单独配置时回退全局主模型。"""
+    async def _load_configs(self) -> list[LLMConfig]:
+        """仅从数据库加载启用的全局 LLM 配置。"""
         from app.core.database import async_session_factory
         from sqlalchemy import select
 
@@ -149,24 +144,6 @@ class LLMGateway:
             query = select(LLMConfig).where(
                 LLMConfig.is_active == True,  # noqa: E712
             )
-            if agent_id is not None:
-                agent_result = await session.execute(
-                    query.where(LLMConfig.agent_id == agent_id).order_by(LLMConfig.is_primary.desc())
-                )
-                agent_configs = list(agent_result.scalars().all())
-                if agent_configs:
-                    if not any(config.is_context_model for config in agent_configs):
-                        global_context = (await session.execute(
-                            query.where(
-                                LLMConfig.agent_id.is_(None),
-                                LLMConfig.is_context_model == True,  # noqa: E712
-                            )
-                        )).scalars().first()
-                        if global_context is not None:
-                            agent_configs.append(global_context)
-                    return agent_configs
-                logger.info(f"Agent {agent_id} 未配置专属模型，回退使用全局 LLM 配置")
-
             result = await session.execute(
                 query.where(LLMConfig.agent_id.is_(None)).order_by(LLMConfig.is_primary.desc())
             )

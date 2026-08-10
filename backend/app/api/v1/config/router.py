@@ -4,8 +4,7 @@
 提供厂商模板查询、LLM 配置 CRUD、测试连接等接口。
 """
 
-from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from loguru import logger
@@ -66,7 +65,6 @@ def _config_to_out(config: LLMConfig) -> LLMConfigOut:
     """将数据库模型转为输出 Schema"""
     return LLMConfigOut(
         id=config.id,
-        agent_id=config.agent_id,
         provider_id=config.provider_id,
         provider_name=config.provider_name,
         base_url=config.base_url,
@@ -143,17 +141,14 @@ async def autofill_provider(request: ProviderAutoFillRequest):
 
 @router.get("/configs", response_model=list[LLMConfigOut])
 async def list_configs(
-    agent_id: Optional[int] = Query(None, description="Agent ID，空=全局配置"),
     db: AsyncSession = Depends(get_db),
 ):
-    """获取 LLM 配置列表"""
-    query = select(LLMConfig)
-    if agent_id is not None:
-        query = query.where(LLMConfig.agent_id == agent_id)
-    else:
-        query = query.where(LLMConfig.agent_id.is_(None))
-
-    query = query.order_by(LLMConfig.is_primary.desc(), LLMConfig.is_fallback.desc())
+    """获取全局 LLM 配置列表。Agent 专属配置不再支持。"""
+    query = (
+        select(LLMConfig)
+        .where(LLMConfig.agent_id.is_(None))
+        .order_by(LLMConfig.is_primary.desc(), LLMConfig.is_fallback.desc())
+    )
     result = await db.execute(query)
     configs = result.scalars().all()
 
@@ -170,11 +165,11 @@ async def create_config(
         raise HTTPException(status_code=422, detail="不再支持本地模型配置，请使用云端 API")
     if sum((request.is_primary, request.is_fallback, request.is_context_model)) > 1:
         raise HTTPException(status_code=422, detail="主模型、降级模型和重写/压缩模型角色不能同时选择")
-    # 如果设为主模型，先将该 Agent 的其他主模型取消
+    # 全局配置中同一角色只能有一个模型。
     if request.is_primary:
         primary_query = select(LLMConfig).where(
             LLMConfig.is_primary == True,  # noqa: E712
-            LLMConfig.agent_id == request.agent_id,
+            LLMConfig.agent_id.is_(None),
         )
         result = await db.execute(primary_query)
         existing_primary = result.scalars().all()
@@ -183,7 +178,7 @@ async def create_config(
     if request.is_context_model:
         context_query = select(LLMConfig).where(
             LLMConfig.is_context_model == True,  # noqa: E712
-            LLMConfig.agent_id == request.agent_id,
+            LLMConfig.agent_id.is_(None),
         )
         for context_config in (await db.execute(context_query)).scalars().all():
             context_config.is_context_model = False
@@ -194,7 +189,7 @@ async def create_config(
     base_url = request.base_url or (template.base_url if template else "")
 
     config = LLMConfig(
-        agent_id=request.agent_id,
+        agent_id=None,
         provider_id=request.provider_id,
         provider_name=provider_name,
         base_url=base_url,
@@ -226,7 +221,10 @@ async def update_config(
     db: AsyncSession = Depends(get_db),
 ):
     """更新 LLM 配置"""
-    result = await db.execute(select(LLMConfig).where(LLMConfig.id == config_id))
+    result = await db.execute(select(LLMConfig).where(
+        LLMConfig.id == config_id,
+        LLMConfig.agent_id.is_(None),
+    ))
     config = result.scalar_one_or_none()
     if config is None:
         raise HTTPException(status_code=404, detail="LLM 配置不存在")
@@ -239,11 +237,11 @@ async def update_config(
     if sum(bool(role) for role in effective_roles) > 1:
         raise HTTPException(status_code=422, detail="主模型、降级模型和重写/压缩模型角色不能同时选择")
 
-    # 如果设为主模型，先将该 Agent 的其他主模型取消
+    # 全局配置中同一角色只能有一个模型。
     if request.is_primary:
         primary_query = select(LLMConfig).where(
             LLMConfig.is_primary == True,  # noqa: E712
-            LLMConfig.agent_id == config.agent_id,
+            LLMConfig.agent_id.is_(None),
             LLMConfig.id != config_id,
         )
         result = await db.execute(primary_query)
@@ -252,7 +250,7 @@ async def update_config(
     if request.is_context_model:
         context_query = select(LLMConfig).where(
             LLMConfig.is_context_model == True,  # noqa: E712
-            LLMConfig.agent_id == config.agent_id,
+            LLMConfig.agent_id.is_(None),
             LLMConfig.id != config_id,
         )
         for context_config in (await db.execute(context_query)).scalars().all():
@@ -290,7 +288,10 @@ async def delete_config(
     db: AsyncSession = Depends(get_db),
 ):
     """删除 LLM 配置"""
-    result = await db.execute(select(LLMConfig).where(LLMConfig.id == config_id))
+    result = await db.execute(select(LLMConfig).where(
+        LLMConfig.id == config_id,
+        LLMConfig.agent_id.is_(None),
+    ))
     config = result.scalar_one_or_none()
     if config is None:
         raise HTTPException(status_code=404, detail="LLM 配置不存在")
@@ -336,7 +337,10 @@ async def test_configured_model(
     """测试已保存的 LLM 配置连接"""
     from app.services.llm.gateway import llm_gateway  # 延迟导入，避免启动时加载 openai
 
-    result = await db.execute(select(LLMConfig).where(LLMConfig.id == config_id))
+    result = await db.execute(select(LLMConfig).where(
+        LLMConfig.id == config_id,
+        LLMConfig.agent_id.is_(None),
+    ))
     config = result.scalar_one_or_none()
     if config is None:
         raise HTTPException(status_code=404, detail="LLM 配置不存在")

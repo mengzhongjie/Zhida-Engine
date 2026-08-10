@@ -6,7 +6,7 @@
 
 from datetime import datetime
 from typing import Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # ============================================================
@@ -40,8 +40,10 @@ class ProviderTemplateListOut(BaseModel):
 # ============================================================
 
 class LLMConfigCreate(BaseModel):
-    """创建 LLM 配置"""
-    agent_id: Optional[int] = Field(None, description="Agent ID，空=全局配置")
+    """创建全局 LLM 配置"""
+    # 明确拒绝已废弃的 agent_id，避免调用方误以为创建了专属模型，实际却改写全局配置。
+    model_config = ConfigDict(extra="forbid")
+
     provider_id: str = Field(..., description="厂商 ID")
     provider_name: Optional[str] = Field(None, description="厂商显示名称（自定义时必填）")
     base_url: Optional[str] = Field(None, description="API 基础地址（自定义时必填）")
@@ -83,7 +85,6 @@ class LLMConfigUpdate(BaseModel):
 class LLMConfigOut(BaseModel):
     """LLM 配置输出"""
     id: int
-    agent_id: Optional[int] = None
     provider_id: str
     provider_name: str
     base_url: str
