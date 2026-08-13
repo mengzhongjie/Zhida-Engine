@@ -368,7 +368,7 @@ export default function SettingsPage() {
           message: string
           latency_ms: number
         }>(`/llm/configs/${editingId}/test`)
-        if (res.success) message.success(`连接成功！延迟 ${res.latency_ms.toFixed(0)}ms`)
+        if (res.success) message.success(`连接成功！${Number.isFinite(res.latency_ms) ? `延迟 ${res.latency_ms.toFixed(0)}ms` : ''}`)
         else message.error(`连接失败: ${res.message}`)
         return
       }
@@ -383,12 +383,13 @@ export default function SettingsPage() {
       })
 
       if (res.success) {
-        message.success(`连接成功！延迟 ${res.latency_ms.toFixed(0)}ms`)
+        message.success(`连接成功！${Number.isFinite(res.latency_ms) ? `延迟 ${res.latency_ms.toFixed(0)}ms` : ''}`)
       } else {
         message.error(`连接失败: ${res.message}`)
       }
     } catch (err) {
-      message.error('连接测试失败')
+      const detail = (err as any)?.response?.data?.detail || (err as any)?.message || '连接测试失败'
+      message.error(detail)
     } finally {
       setTesting(false)
     }
@@ -429,13 +430,13 @@ export default function SettingsPage() {
         latency_ms: number
       }>(`/llm/configs/${config.id}/test`)
       if (res.success) {
-        message.success(`连接成功！延迟 ${res.latency_ms.toFixed(0)}ms`)
+        message.success(`连接成功！${Number.isFinite(res.latency_ms) ? `延迟 ${res.latency_ms.toFixed(0)}ms` : ''}`)
       } else {
         message.error(`连接失败: ${res.message}`)
       }
       loadData()
-    } catch (err) {
-      message.error('测试失败')
+    } catch (err: any) {
+      message.error(err?.response?.data?.detail || err?.message || '测试失败')
     } finally {
       setConfigTestingId(null)
     }
