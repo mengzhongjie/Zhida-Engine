@@ -5,15 +5,20 @@
 """
 
 import hashlib
+import hmac
 import asyncio
 import json
 import os
 import uuid
 import re
 import time
+import io
+import zipfile
+from urllib.parse import quote
 from datetime import datetime
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, Form
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
@@ -77,6 +82,9 @@ _WEB_REWRITE_CHUNK_SIZE = 2_400
 _WEB_REWRITE_CONCURRENCY = 12
 # 网页和云文档统一采用全篇均匀抽样，避免长图文将全部图片变成视觉模型调用。
 _MAX_VISION_IMAGES_PER_DOCUMENT = 40
+_KB_ARCHIVE_VERSION = 1
+_MAX_KB_ARCHIVE_BYTES = 100 * 1024 * 1024
+_MAX_KB_ARCHIVE_DOCUMENTS = 1_000
 
 
 # ============================================================
@@ -197,6 +205,15 @@ async def _sync_kb_statistics(db: AsyncSession, kb: KnowledgeBase) -> None:
     kb.parent_chunk_count = parent_chunk_count
     kb.total_size_bytes = total_size_bytes
     kb.total_characters = total_characters
+
+
+def _safe_archive_filename(value: str) -> str:
+    """ZIP 内部路径只使用受控名称，防止 Zip Slip 覆盖任意本地文件。"""
+    return upload_prechecker.sanitize_filename(value).replace("/", "_").replace("\\", "_")
+
+
+def _archive_document_path(document: Document) -> str:
+    return f"documents/{document.id}_{_safe_archive_filename(document.filename)}"
 
 
 def _feishu_config_out(config: FeishuConfig | None) -> FeishuConfigOut:
@@ -727,7 +744,7 @@ async def list_independent_knowledge_bases(
     )
 
 
-@router.get("/bases/{kb_id}", response_model=KnowledgeBaseOut)
+@router.get("/bases/{kb_id:int}", response_model=KnowledgeBaseOut)
 async def get_knowledge_base(
     kb_id: int,
     db: AsyncSession = Depends(get_db),
@@ -739,6 +756,146 @@ async def get_knowledge_base(
         raise HTTPException(status_code=404, detail="知识库不存在")
 
     await _sync_kb_statistics(db, kb)
+    return _kb_to_out(kb)
+
+
+@router.get("/bases/{kb_id}/export")
+async def export_knowledge_base(kb_id: int, db: AsyncSession = Depends(get_db)):
+    """导出单个知识库的原始资料。
+
+    导出包刻意不包含 API Key、用户/会话、Agent 挂载关系、向量索引和解析后的
+    内部切片；导入后会重新走当前的安全解析与向量化流程。
+    """
+    kb = await db.get(KnowledgeBase, kb_id)
+    if kb is None:
+        raise HTTPException(status_code=404, detail="知识库不存在")
+    if kb.total_size_bytes > _MAX_KB_ARCHIVE_BYTES:
+        raise HTTPException(status_code=413, detail="知识库原始资料超过 100 MB，暂不支持通过管理台导出")
+    documents = list((await db.execute(
+        select(Document).where(Document.knowledge_base_id == kb_id).order_by(Document.id.asc())
+    )).scalars())
+    if len(documents) > _MAX_KB_ARCHIVE_DOCUMENTS:
+        raise HTTPException(status_code=413, detail="知识库文档数超过导出上限（1000 篇）")
+
+    archive = io.BytesIO()
+    manifest_documents = []
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as bundle:
+        for document in documents:
+            archive_path = _archive_document_path(document)
+            try:
+                with open(document.file_path, "rb") as source:
+                    content = source.read()
+            except OSError:
+                # 已不存在的原文件不应让其他资料无法备份，同时清楚标识给导入方。
+                manifest_documents.append({"filename": document.filename, "missing": True})
+                continue
+            bundle.writestr(archive_path, content)
+            manifest_documents.append({
+                "filename": document.filename,
+                "archive_path": archive_path,
+                "file_type": document.file_type,
+                "content_hash": hashlib.sha256(content).hexdigest(),
+            })
+        manifest = {
+            "format": "zhida-knowledge-base",
+            "version": _KB_ARCHIVE_VERSION,
+            "knowledge_base": {"name": kb.name, "description": kb.description or ""},
+            "documents": manifest_documents,
+        }
+        manifest_bytes = json.dumps(manifest, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        bundle.writestr("manifest.json", manifest_bytes)
+        # 清单自身也需完整性保护：先校验清单，再按清单校验每一份原始资料。
+        bundle.writestr("manifest.sha256", hashlib.sha256(manifest_bytes).hexdigest() + "\n")
+    archive.seek(0)
+    filename = _safe_archive_filename(kb.name or "知识库") + ".zip"
+    return StreamingResponse(
+        archive,
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+    )
+
+
+@router.post("/bases/import", response_model=KnowledgeBaseOut)
+async def import_knowledge_base(
+    file: UploadFile = File(...),
+    name: str | None = Form(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """安全导入本系统导出的知识库包，并以新知识库重新入库。"""
+    if not (file.filename or "").lower().endswith(".zip"):
+        raise HTTPException(status_code=422, detail="请选择知识库导出 ZIP 文件")
+    payload = await file.read(_MAX_KB_ARCHIVE_BYTES + 1)
+    if len(payload) > _MAX_KB_ARCHIVE_BYTES:
+        raise HTTPException(status_code=413, detail="导入包不能超过 100 MB")
+    try:
+        bundle = zipfile.ZipFile(io.BytesIO(payload))
+        infos = bundle.infolist()
+        if len(infos) > _MAX_KB_ARCHIVE_DOCUMENTS + 1:
+            raise HTTPException(status_code=422, detail="导入包中文件数超过上限")
+        if sum(info.file_size for info in infos) > _MAX_KB_ARCHIVE_BYTES or any(info.file_size > _MAX_KB_ARCHIVE_BYTES for info in infos):
+            raise HTTPException(status_code=413, detail="解压后的资料超过 100 MB 安全上限")
+        if any(info.is_dir() or info.filename.startswith(("/", "\\")) or ".." in info.filename.split("/") for info in infos):
+            raise HTTPException(status_code=422, detail="导入包包含不安全路径")
+        manifest_bytes = bundle.read("manifest.json")
+        expected_manifest_hash = bundle.read("manifest.sha256").decode("ascii").strip().lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", expected_manifest_hash) or not hmac.compare_digest(hashlib.sha256(manifest_bytes).hexdigest(), expected_manifest_hash):
+            raise HTTPException(status_code=422, detail="导出包清单校验失败，文件可能已损坏或被篡改")
+        manifest = json.loads(manifest_bytes)
+    except HTTPException:
+        raise
+    except (OSError, zipfile.BadZipFile, KeyError, json.JSONDecodeError):
+        raise HTTPException(status_code=422, detail="无效的知识库导出包")
+    if manifest.get("format") != "zhida-knowledge-base" or manifest.get("version") != _KB_ARCHIVE_VERSION:
+        raise HTTPException(status_code=422, detail="不支持的知识库导出包版本")
+    entries = [item for item in manifest.get("documents", []) if isinstance(item, dict) and item.get("archive_path")]
+    if not entries or len(entries) > _MAX_KB_ARCHIVE_DOCUMENTS:
+        raise HTTPException(status_code=422, detail="导出包中没有可导入的文档")
+    if len({str(item["archive_path"]) for item in entries}) != len(entries):
+        raise HTTPException(status_code=422, detail="导出包包含重复文档路径")
+    source_name = str((manifest.get("knowledge_base") or {}).get("name") or "导入知识库")
+    kb = KnowledgeBase(name=(name or source_name).strip()[:200], description=str((manifest.get("knowledge_base") or {}).get("description") or ""))
+    db.add(kb)
+    await db.flush()
+    upload_dir = os.path.join(settings.DATA_DIR, "uploads", f"kb_{kb.id}")
+    os.makedirs(upload_dir, exist_ok=True)
+    imported_ids: list[int] = []
+    try:
+        for entry in entries:
+            archive_path, filename = str(entry["archive_path"]), _safe_archive_filename(str(entry.get("filename") or "资料"))
+            if archive_path not in bundle.namelist() or not archive_path.startswith("documents/"):
+                raise HTTPException(status_code=422, detail="导出包文档清单不一致")
+            content = bundle.read(archive_path)
+            content_hash = hashlib.sha256(content).hexdigest()
+            if content_hash != entry.get("content_hash"):
+                raise HTTPException(status_code=422, detail=f"文档校验失败：{filename}")
+            file_type = str(entry.get("file_type") or "").lower()
+            if file_type not in {"pdf", "docx", "xlsx", "txt", "md", "csv", "json"}:
+                raise HTTPException(status_code=422, detail=f"导出包包含不支持的文件类型：{file_type or '未知'}")
+            target_path = os.path.join(upload_dir, f"{content_hash[:16]}_{filename}")
+            with open(target_path, "wb") as target:
+                target.write(content)
+            document = Document(
+                knowledge_base_id=kb.id, filename=filename, file_type=file_type, file_path=target_path,
+                file_size=len(content), content_hash=content_hash, source_type="imported", status="pending",
+            )
+            db.add(document)
+            await db.flush()
+            imported_ids.append(document.id)
+        await _sync_kb_statistics(db, kb)
+        await db.flush()
+        await db.commit()
+        await db.refresh(kb)
+    except Exception:
+        # 数据库事务回滚；已写入的受控上传目录由下面的清理尽力删除。
+        for path in os.listdir(upload_dir):
+            try:
+                os.unlink(os.path.join(upload_dir, path))
+            except OSError:
+                pass
+        await db.rollback()
+        raise
+    for document_id in imported_ids:
+        schedule_document_processing(document_id)
     return _kb_to_out(kb)
 
 
