@@ -83,7 +83,9 @@ _WEB_REWRITE_CONCURRENCY = 12
 # 网页和云文档统一采用全篇均匀抽样，避免长图文将全部图片变成视觉模型调用。
 _MAX_VISION_IMAGES_PER_DOCUMENT = 40
 _KB_ARCHIVE_VERSION = 1
-_MAX_KB_ARCHIVE_BYTES = 100 * 1024 * 1024
+# 知识库导入 ZIP 上限；导出不受此值限制。读取上限与解压后总量均校验，
+# 避免上传/解压 ZIP 炸弹耗尽服务器资源。
+_MAX_KB_ARCHIVE_BYTES = 200 * 1024 * 1024
 _MAX_KB_ARCHIVE_DOCUMENTS = 1_000
 
 
@@ -769,8 +771,6 @@ async def export_knowledge_base(kb_id: int, db: AsyncSession = Depends(get_db)):
     kb = await db.get(KnowledgeBase, kb_id)
     if kb is None:
         raise HTTPException(status_code=404, detail="知识库不存在")
-    if kb.total_size_bytes > _MAX_KB_ARCHIVE_BYTES:
-        raise HTTPException(status_code=413, detail="知识库原始资料超过 100 MB，暂不支持通过管理台导出")
     documents = list((await db.execute(
         select(Document).where(Document.knowledge_base_id == kb_id).order_by(Document.id.asc())
     )).scalars())
@@ -826,14 +826,14 @@ async def import_knowledge_base(
         raise HTTPException(status_code=422, detail="请选择知识库导出 ZIP 文件")
     payload = await file.read(_MAX_KB_ARCHIVE_BYTES + 1)
     if len(payload) > _MAX_KB_ARCHIVE_BYTES:
-        raise HTTPException(status_code=413, detail="导入包不能超过 100 MB")
+        raise HTTPException(status_code=413, detail="导入包不能超过 200 MB")
     try:
         bundle = zipfile.ZipFile(io.BytesIO(payload))
         infos = bundle.infolist()
         if len(infos) > _MAX_KB_ARCHIVE_DOCUMENTS + 1:
             raise HTTPException(status_code=422, detail="导入包中文件数超过上限")
         if sum(info.file_size for info in infos) > _MAX_KB_ARCHIVE_BYTES or any(info.file_size > _MAX_KB_ARCHIVE_BYTES for info in infos):
-            raise HTTPException(status_code=413, detail="解压后的资料超过 100 MB 安全上限")
+            raise HTTPException(status_code=413, detail="解压后的资料超过 200 MB 安全上限")
         if any(info.is_dir() or info.filename.startswith(("/", "\\")) or ".." in info.filename.split("/") for info in infos):
             raise HTTPException(status_code=422, detail="导入包包含不安全路径")
         manifest_bytes = bundle.read("manifest.json")
