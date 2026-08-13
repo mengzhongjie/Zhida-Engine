@@ -52,6 +52,7 @@ class LLMConfigCreate(BaseModel):
     is_primary: bool = Field(True, description="是否为主模型")
     is_fallback: bool = Field(False, description="是否为降级模型")
     is_context_model: bool = Field(False, description="是否为问题重写与会话压缩模型")
+    is_active: bool = Field(True, description="是否启用该配置")
     context_rewrite_timeout_seconds: int = Field(10, ge=3, le=30, description="问题重写超时（秒）")
     context_compaction_timeout_seconds: int = Field(25, ge=5, le=60, description="会话压缩超时（秒）")
     extra_config: Optional[str] = Field(None, description="额外配置（JSON 格式）")

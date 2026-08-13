@@ -198,6 +198,7 @@ async def create_config(
         is_primary=request.is_primary,
         is_fallback=request.is_fallback and not request.is_primary,
         is_context_model=request.is_context_model,
+        is_active=request.is_active,
         context_rewrite_timeout_seconds=request.context_rewrite_timeout_seconds,
         context_compaction_timeout_seconds=request.context_compaction_timeout_seconds,
         extra_config=request.extra_config,
