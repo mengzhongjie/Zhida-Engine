@@ -34,6 +34,7 @@ class KnowledgeBase(Base):
     total_size_bytes = Column(Integer, default=0, comment="总大小（字节）")
     total_characters = Column(Integer, default=0, comment="资料正文总字符数")
     qa_pair_count = Column(Integer, default=0, comment="Q&A 对数量")
+    capacity_status = Column(String(20), default="normal", nullable=False, comment="容量状态: normal/near_limit/full")
 
     # 索引指纹：避免不同嵌入模型/维度/距离空间的向量被混用。
     embedding_model = Column(String(300), nullable=True)

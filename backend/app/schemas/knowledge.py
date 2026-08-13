@@ -37,6 +37,9 @@ class KnowledgeBaseOut(BaseModel):
     chunk_count: int = 0
     total_size_bytes: int = 0
     total_characters: int = 0
+    capacity_status: str = "normal"
+    document_limit: int = 200
+    size_limit_bytes: int = 120 * 1024 * 1024
     is_active: bool = True
     index_status: str = "ready"
     embedding_model: Optional[str] = None
@@ -52,6 +55,16 @@ class KnowledgeBaseListOut(BaseModel):
     """知识库列表输出"""
     total: int = Field(..., description="总数")
     items: list[KnowledgeBaseOut] = Field(default_factory=list, description="知识库列表")
+
+
+class KnowledgeBaseBatchDeleteRequest(BaseModel):
+    """批量删除知识库请求。"""
+    ids: list[int] = Field(..., min_length=1, max_length=50, description="知识库 ID 列表")
+
+
+class KnowledgeBaseBatchDeleteOut(BaseModel):
+    deleted: list[int] = Field(default_factory=list)
+    failed: list[dict] = Field(default_factory=list)
 
 
 # ============================================================

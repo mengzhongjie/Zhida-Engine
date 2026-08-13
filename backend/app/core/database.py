@@ -155,6 +155,7 @@ async def _run_compatible_migrations(conn):
         "ALTER TABLE documents ADD COLUMN vision_image_count INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE documents ADD COLUMN vision_time_ms FLOAT NOT NULL DEFAULT 0",
         "ALTER TABLE knowledge_bases ADD COLUMN total_characters INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE knowledge_bases ADD COLUMN capacity_status VARCHAR(20) NOT NULL DEFAULT 'normal'",
         "ALTER TABLE knowledge_bases ADD COLUMN embedding_model VARCHAR(300)",
         "ALTER TABLE knowledge_bases ADD COLUMN embedding_dimension INTEGER",
         "ALTER TABLE knowledge_bases ADD COLUMN index_space VARCHAR(20)",

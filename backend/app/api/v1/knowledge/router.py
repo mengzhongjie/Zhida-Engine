@@ -40,6 +40,8 @@ from app.schemas.knowledge import (
     KnowledgeBaseCreate,
     KnowledgeBaseUpdate,
     KnowledgeBaseListOut,
+    KnowledgeBaseBatchDeleteRequest,
+    KnowledgeBaseBatchDeleteOut,
     KnowledgeStatsOut,
     OptimizeRequest,
     OptimizeResponse,
@@ -83,10 +85,12 @@ _WEB_REWRITE_CONCURRENCY = 12
 # 网页和云文档统一采用全篇均匀抽样，避免长图文将全部图片变成视觉模型调用。
 _MAX_VISION_IMAGES_PER_DOCUMENT = 40
 _KB_ARCHIVE_VERSION = 1
-# 知识库导入 ZIP 上限；导出不受此值限制。读取上限与解压后总量均校验，
-# 避免上传/解压 ZIP 炸弹耗尽服务器资源。
-_MAX_KB_ARCHIVE_BYTES = 200 * 1024 * 1024
-_MAX_KB_ARCHIVE_DOCUMENTS = 1_000
+# 知识库导入/导出与在线资料容量上限。读取上限与解压后总量均校验，
+# 避免上传/解压 ZIP 炸弹耗尽服务器资源，并让导出保持轻量可控。
+_MAX_KB_ARCHIVE_BYTES = 120 * 1024 * 1024
+_MAX_KB_ARCHIVE_DOCUMENTS = 200
+_KB_CAPACITY_NEAR_RATIO = 0.8
+_knowledge_base_export_locks: dict[int, asyncio.Lock] = {}
 
 
 # ============================================================
@@ -181,6 +185,9 @@ def _kb_to_out(kb: KnowledgeBase) -> KnowledgeBaseOut:
         chunk_count=kb.chunk_count,
         total_size_bytes=kb.total_size_bytes,
         total_characters=kb.total_characters or 0,
+        capacity_status=kb.capacity_status or "normal",
+        document_limit=_MAX_KB_ARCHIVE_DOCUMENTS,
+        size_limit_bytes=_MAX_KB_ARCHIVE_BYTES,
         is_active=kb.is_active,
         index_status=kb.index_status or "ready",
         embedding_model=kb.embedding_model,
@@ -207,6 +214,11 @@ async def _sync_kb_statistics(db: AsyncSession, kb: KnowledgeBase) -> None:
     kb.parent_chunk_count = parent_chunk_count
     kb.total_size_bytes = total_size_bytes
     kb.total_characters = total_characters
+    usage_ratio = max(
+        document_count / _MAX_KB_ARCHIVE_DOCUMENTS if _MAX_KB_ARCHIVE_DOCUMENTS else 0,
+        total_size_bytes / _MAX_KB_ARCHIVE_BYTES if _MAX_KB_ARCHIVE_BYTES else 0,
+    )
+    kb.capacity_status = "full" if usage_ratio >= 1 else "near_limit" if usage_ratio >= _KB_CAPACITY_NEAR_RATIO else "normal"
 
 
 def _safe_archive_filename(value: str) -> str:
@@ -768,51 +780,58 @@ async def export_knowledge_base(kb_id: int, db: AsyncSession = Depends(get_db)):
     导出包刻意不包含 API Key、用户/会话、Agent 挂载关系、向量索引和解析后的
     内部切片；导入后会重新走当前的安全解析与向量化流程。
     """
-    kb = await db.get(KnowledgeBase, kb_id)
-    if kb is None:
-        raise HTTPException(status_code=404, detail="知识库不存在")
-    documents = list((await db.execute(
-        select(Document).where(Document.knowledge_base_id == kb_id).order_by(Document.id.asc())
-    )).scalars())
-    if len(documents) > _MAX_KB_ARCHIVE_DOCUMENTS:
-        raise HTTPException(status_code=413, detail="知识库文档数超过导出上限（1000 篇）")
+    lock = _knowledge_base_export_locks.setdefault(kb_id, asyncio.Lock())
+    if lock.locked():
+        raise HTTPException(status_code=409, detail="该知识库正在导出，请等待当前任务完成")
+    async with lock:
+        kb = await db.get(KnowledgeBase, kb_id)
+        if kb is None:
+            raise HTTPException(status_code=404, detail="知识库不存在")
+        await _sync_kb_statistics(db, kb)
+        documents = list((await db.execute(
+            select(Document).where(Document.knowledge_base_id == kb_id).order_by(Document.id.asc())
+        )).scalars())
+        if len(documents) > _MAX_KB_ARCHIVE_DOCUMENTS:
+            raise HTTPException(status_code=413, detail="知识库文档数超过导出上限（200 篇）")
+        if kb.total_size_bytes > _MAX_KB_ARCHIVE_BYTES:
+            raise HTTPException(status_code=413, detail="知识库原始资料超过 120 MB，请先精简文档后再导出")
 
-    archive = io.BytesIO()
-    manifest_documents = []
-    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as bundle:
-        for document in documents:
-            archive_path = _archive_document_path(document)
-            try:
-                with open(document.file_path, "rb") as source:
-                    content = source.read()
-            except OSError:
-                # 已不存在的原文件不应让其他资料无法备份，同时清楚标识给导入方。
-                manifest_documents.append({"filename": document.filename, "missing": True})
-                continue
-            bundle.writestr(archive_path, content)
-            manifest_documents.append({
-                "filename": document.filename,
-                "archive_path": archive_path,
-                "file_type": document.file_type,
-                "content_hash": hashlib.sha256(content).hexdigest(),
-            })
-        manifest = {
-            "format": "zhida-knowledge-base",
-            "version": _KB_ARCHIVE_VERSION,
-            "knowledge_base": {"name": kb.name, "description": kb.description or ""},
-            "documents": manifest_documents,
-        }
-        manifest_bytes = json.dumps(manifest, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-        bundle.writestr("manifest.json", manifest_bytes)
-        # 清单自身也需完整性保护：先校验清单，再按清单校验每一份原始资料。
-        bundle.writestr("manifest.sha256", hashlib.sha256(manifest_bytes).hexdigest() + "\n")
-    archive.seek(0)
-    filename = _safe_archive_filename(kb.name or "知识库") + ".zip"
-    return StreamingResponse(
-        archive,
-        media_type="application/zip",
-        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
-    )
+        archive = io.BytesIO()
+        manifest_documents = []
+        with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as bundle:
+            for document in documents:
+                archive_path = _archive_document_path(document)
+                try:
+                    with open(document.file_path, "rb") as source:
+                        content = source.read()
+                except OSError:
+                    # 已不存在的原文件不应让其他资料无法备份，同时清楚标识给导入方。
+                    manifest_documents.append({"filename": document.filename, "missing": True})
+                    continue
+                bundle.writestr(archive_path, content)
+                manifest_documents.append({
+                    "filename": document.filename,
+                    "archive_path": archive_path,
+                    "file_type": document.file_type,
+                    "content_hash": hashlib.sha256(content).hexdigest(),
+                })
+            manifest = {
+                "format": "zhida-knowledge-base",
+                "version": _KB_ARCHIVE_VERSION,
+                "knowledge_base": {"name": kb.name, "description": kb.description or ""},
+                "documents": manifest_documents,
+            }
+            manifest_bytes = json.dumps(manifest, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+            bundle.writestr("manifest.json", manifest_bytes)
+            # 清单自身也需完整性保护：先校验清单，再按清单校验每一份原始资料。
+            bundle.writestr("manifest.sha256", hashlib.sha256(manifest_bytes).hexdigest() + "\n")
+        archive.seek(0)
+        filename = _safe_archive_filename(kb.name or "知识库") + ".zip"
+        return StreamingResponse(
+            archive,
+            media_type="application/zip",
+            headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+        )
 
 
 @router.post("/bases/import", response_model=KnowledgeBaseOut)
@@ -826,14 +845,14 @@ async def import_knowledge_base(
         raise HTTPException(status_code=422, detail="请选择知识库导出 ZIP 文件")
     payload = await file.read(_MAX_KB_ARCHIVE_BYTES + 1)
     if len(payload) > _MAX_KB_ARCHIVE_BYTES:
-        raise HTTPException(status_code=413, detail="导入包不能超过 200 MB")
+        raise HTTPException(status_code=413, detail="导入包不能超过 120 MB")
     try:
         bundle = zipfile.ZipFile(io.BytesIO(payload))
         infos = bundle.infolist()
         if len(infos) > _MAX_KB_ARCHIVE_DOCUMENTS + 1:
             raise HTTPException(status_code=422, detail="导入包中文件数超过上限")
         if sum(info.file_size for info in infos) > _MAX_KB_ARCHIVE_BYTES or any(info.file_size > _MAX_KB_ARCHIVE_BYTES for info in infos):
-            raise HTTPException(status_code=413, detail="解压后的资料超过 200 MB 安全上限")
+            raise HTTPException(status_code=413, detail="解压后的资料超过 120 MB 安全上限")
         if any(info.is_dir() or info.filename.startswith(("/", "\\")) or ".." in info.filename.split("/") for info in infos):
             raise HTTPException(status_code=422, detail="导入包包含不安全路径")
         manifest_bytes = bundle.read("manifest.json")
@@ -993,6 +1012,24 @@ async def delete_knowledge_base(
         raise HTTPException(status_code=500, detail="知识库清理未完成，请稍后重试") from None
 
     return {"message": "删除成功", "id": kb_id}
+
+
+@router.post("/bases/batch-delete", response_model=KnowledgeBaseBatchDeleteOut)
+async def batch_delete_knowledge_bases(
+    request: KnowledgeBaseBatchDeleteRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """批量删除知识库；每个知识库沿用单项删除的安全清理流程。"""
+    ids = list(dict.fromkeys(request.ids))
+    deleted: list[int] = []
+    failed: list[dict] = []
+    for kb_id in ids:
+        try:
+            await delete_knowledge_base(kb_id, db)
+            deleted.append(kb_id)
+        except HTTPException as exc:
+            failed.append({"id": kb_id, "detail": str(exc.detail), "status": exc.status_code})
+    return KnowledgeBaseBatchDeleteOut(deleted=deleted, failed=failed)
 
 
 # ============================================================
@@ -1275,7 +1312,8 @@ async def upload_document_to_kb(
     """
     上传文档到指定知识库
 
-    支持 PDF、Word、Excel、TXT 格式，文件大小限制 100MB。
+    支持 PDF、Word、Excel、TXT 格式；单个文件大小仍由系统上传限制控制，
+    知识库总容量最多 120 MB、最多 200 篇文档。
     文件接收后立即返回，解析与向量化由轻量后台任务完成。
     """
     # 查找知识库
@@ -1285,6 +1323,9 @@ async def upload_document_to_kb(
     kb = kb_result.scalar_one_or_none()
     if kb is None:
         raise HTTPException(status_code=404, detail="知识库不存在")
+    await _sync_kb_statistics(db, kb)
+    if kb.document_count >= _MAX_KB_ARCHIVE_DOCUMENTS:
+        raise HTTPException(status_code=413, detail="该知识库已达到文档数量上限（200 篇）")
 
     # 文件类型校验
     allowed_types = {".pdf", ".docx", ".doc", ".xlsx", ".xls", ".txt", ".md", ".csv", ".json", ".xml"}
@@ -1356,6 +1397,9 @@ async def upload_document_to_kb(
             await db.refresh(duplicate)
             schedule_document_processing(duplicate.id)
         return _document_to_out(duplicate, duplicate=True)
+
+    if kb.total_size_bytes + len(content) > _MAX_KB_ARCHIVE_BYTES:
+        raise HTTPException(status_code=413, detail="该知识库容量将超过 120 MB 上限，请先删除部分资料")
 
     # 保存文件到本地
     upload_dir = os.path.join(settings.DATA_DIR, "uploads", f"kb_{kb_id}")
