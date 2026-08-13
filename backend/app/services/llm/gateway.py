@@ -11,7 +11,7 @@
 
 import asyncio
 import time
-from typing import Optional, AsyncIterator, Any, Literal
+from typing import Optional, AsyncIterator, Any, Literal, Callable
 from dataclasses import dataclass
 
 from loguru import logger
@@ -41,6 +41,7 @@ class ChatResult:
     text: str
     model_used: str = ""
     input_tokens: int = 0
+    cached_input_tokens: int = 0
     output_tokens: int = 0
 
 
@@ -228,6 +229,7 @@ class LLMGateway:
         system_prompt: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: int = 2048,
+        on_usage: Optional[Callable[[int, int, int], None]] = None,
     ) -> AsyncIterator[str]:
         """
         流式对话 —— 逐 token 返回模型回复
@@ -250,7 +252,7 @@ class LLMGateway:
         for index, client in enumerate(clients):
             emitted = False
             try:
-                async for chunk in self._call_model_stream(client, messages, temperature, max_tokens):
+                async for chunk in self._call_model_stream(client, messages, temperature, max_tokens, on_usage):
                     emitted = True
                     yield chunk
                 return
@@ -315,10 +317,25 @@ class LLMGateway:
                 f"模型返回空正文（finish_reason={finish_reason}, reasoning={len(reasoning_content)} 字符）"
             )
 
+        # OpenAI 兼容厂商的缓存 usage 字段并不统一：OpenAI/部分网关放在
+        # prompt_tokens_details.cached_tokens，DeepSeek 等常见 prompt_cache_hit_tokens。
+        # 仅采集响应明确返回的数字，未知厂商保持 0，绝不估算。
+        prompt_details = getattr(usage, "prompt_tokens_details", None) if usage else None
+        cached_input_tokens = (
+            getattr(prompt_details, "cached_tokens", None)
+            or getattr(usage, "prompt_cache_hit_tokens", None)
+            or getattr(usage, "cached_tokens", None)
+            or 0
+        )
+        try:
+            cached_input_tokens = max(0, min(int(cached_input_tokens), int(usage.prompt_tokens if usage else 0)))
+        except (TypeError, ValueError):
+            cached_input_tokens = 0
         return ChatResult(
             text=content,
             model_used=model_client.config.model_name,
             input_tokens=usage.prompt_tokens if usage else 0,
+            cached_input_tokens=cached_input_tokens,
             output_tokens=usage.completion_tokens if usage else 0,
         )
 
@@ -328,6 +345,7 @@ class LLMGateway:
         messages: list[dict],
         temperature: float,
         max_tokens: int,
+        on_usage: Optional[Callable[[int, int, int], None]] = None,
     ) -> AsyncIterator[str]:
         """调用单个模型（流式）"""
         stream = await model_client.client.chat.completions.create(
@@ -344,6 +362,21 @@ class LLMGateway:
         content_emitted = False
         reasoning_characters = 0
         async for chunk in stream:
+            usage = getattr(chunk, "usage", None)
+            if usage and on_usage:
+                prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+                completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+                details = getattr(usage, "prompt_tokens_details", None)
+                cached_tokens = (
+                    getattr(details, "cached_tokens", None)
+                    or getattr(usage, "prompt_cache_hit_tokens", None)
+                    or getattr(usage, "cached_tokens", None)
+                    or 0
+                )
+                try:
+                    on_usage(prompt_tokens, min(max(0, int(cached_tokens)), prompt_tokens), completion_tokens)
+                except (TypeError, ValueError):
+                    on_usage(prompt_tokens, 0, completion_tokens)
             if not chunk.choices:
                 continue
             choice = chunk.choices[0]

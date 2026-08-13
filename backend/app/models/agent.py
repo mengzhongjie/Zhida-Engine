@@ -45,6 +45,10 @@ class Agent(Base):
     persona_preset = Column(String(30), default="professional", nullable=False, comment="人格预设")
     persona_custom_instruction = Column(Text, nullable=True, comment="自定义人格提示词")
     context_window_k = Column(Integer, default=64, nullable=False, comment="上下文窗口（K tokens）")
+    concise_top_k = Column(Integer, default=4, nullable=False, comment="简洁回答检索 Top-K")
+    detailed_top_k = Column(Integer, default=8, nullable=False, comment="详细回答检索 Top-K")
+    concise_rewrite_count = Column(Integer, default=3, nullable=False, comment="简洁回答检索改写数量")
+    detailed_rewrite_count = Column(Integer, default=3, nullable=False, comment="详细回答检索改写数量")
 
     # 时间戳
     created_at = Column(DateTime, default=datetime.utcnow, comment="创建时间")

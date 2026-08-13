@@ -39,13 +39,17 @@ class PromptTemplate:
 ## 回答身份与详略
 {profile_section}
 
-## 当前时间
-{current_time}
+"""
 
-## 参考内容
+    # 动态内容必须位于固定 system 指令之后：这样同一 Agent 的稳定规则可以被
+    # 模型厂商的 Prompt Cache 复用，而每次检索、会话、时间和提问仍保持最新。
+    DEFAULT_USER_PROMPT = """## 参考内容
 {context}
 
 {conversation_section}
+
+## 当前时间
+{current_time}
 
 ## 用户问题
 {question}
@@ -191,11 +195,52 @@ class PromptTemplate:
             f"{self.DETAIL_PRESETS.get(response_detail, self.DETAIL_PRESETS['concise'])}"
         )
         return self.DEFAULT_SYSTEM_PROMPT.format(
+            profile_section=profile_section,
+        ) + self.DEFAULT_USER_PROMPT.format(
             current_time=current_time,
             context=context,
             conversation_section=conversation_section,
             question=question,
-            profile_section=profile_section,
+        )
+
+    def build_qa_messages(
+        self,
+        question: str,
+        context: str,
+        source_info: str = "",
+        include_sources: bool = False,
+        conversation_context: str = "",
+        persona_preset: str = "professional",
+        persona_custom_instruction: str = "",
+        response_detail: str = "concise",
+    ) -> tuple[str, str]:
+        """构建默认 RAG 的稳定 system 指令与动态 user 内容。
+
+        将固定规则与 Agent 人设放在 system message，动态检索结果和会话置于
+        user message，可提高厂商前缀缓存命中；内容与 ``build_qa_prompt`` 相同。
+        """
+        current_time = beijing_now().strftime("%Y年%m月%d日 %H:%M")
+        conversation_section = (
+            f"## 最近对话\n{conversation_context}\n"
+            if conversation_context else ""
+        )
+        persona_instruction = (
+            persona_custom_instruction.strip()
+            if persona_preset == "custom" and persona_custom_instruction.strip()
+            else self.PERSONA_PRESETS.get(persona_preset, self.PERSONA_PRESETS['professional'])
+        )
+        profile_section = (
+            f"{persona_instruction}\n"
+            f"{self.DETAIL_PRESETS.get(response_detail, self.DETAIL_PRESETS['concise'])}"
+        )
+        return (
+            self.DEFAULT_SYSTEM_PROMPT.format(profile_section=profile_section),
+            self.DEFAULT_USER_PROMPT.format(
+                current_time=current_time,
+                context=context,
+                conversation_section=conversation_section,
+                question=question,
+            ),
         )
 
     def build_ecommerce_prompt(

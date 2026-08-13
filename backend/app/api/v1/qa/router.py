@@ -49,13 +49,13 @@ def _sources_from_answer(sources: list[dict]) -> list[QASource]:
     ]
 
 
-def _answer_options(response_detail: str) -> dict:
+def _answer_options(response_detail: str, agent: Agent) -> dict:
     """详略预设同时影响检索片段数与输出上限，详细模式自然耗时更长。"""
     if response_detail == "detailed":
         # 部分带推理能力的模型会先消耗一段 token 进行内部思考；详细回答
         # 保留更高预算，避免思考阶段结束后还来不及输出正文。
-        return {"top_k": 8, "max_tokens": 8192, "temperature": 0.55}
-    return {"top_k": 4, "max_tokens": 4096, "temperature": 0.5}
+        return {"top_k": agent.detailed_top_k or 8, "rewrite_count": agent.detailed_rewrite_count if agent.detailed_rewrite_count is not None else 3, "max_tokens": 8192, "temperature": 0.55}
+    return {"top_k": agent.concise_top_k or 4, "rewrite_count": agent.concise_rewrite_count if agent.concise_rewrite_count is not None else 3, "max_tokens": 4096, "temperature": 0.5}
 
 
 async def _recent_conversation(db: AsyncSession, chat_id: str | None, user_id: str | None) -> list[dict[str, str]]:
@@ -136,7 +136,7 @@ async def ask_question(
         persona_custom_instruction=agent.persona_custom_instruction or "",
         response_detail=request.response_detail,
         conversation_history=await _recent_conversation(db, request.chat_id, request.user_id),
-        **_answer_options(request.response_detail),
+        **_answer_options(request.response_detail, agent),
     )
     sources = _sources_from_answer(answer.sources)
 
@@ -156,6 +156,7 @@ async def ask_question(
             chat_id=request.chat_id,
             user_id=request.user_id,
             input_tokens=answer.input_tokens,
+            cached_input_tokens=answer.cached_input_tokens,
             output_tokens=answer.output_tokens,
             is_degraded=answer.degraded,
             web_search_count=answer.web_search_count,
@@ -221,7 +222,7 @@ async def stream_question(
                 persona_preset=agent.persona_preset,
                 persona_custom_instruction=agent.persona_custom_instruction or "",
                 response_detail=request.response_detail,
-                **_answer_options(request.response_detail),
+                **_answer_options(request.response_detail, agent),
             ):
                 answer_parts.append(chunk)
                 yield f"event: delta\ndata: {json.dumps({'content': chunk}, ensure_ascii=False)}\n\n"
@@ -240,6 +241,9 @@ async def stream_question(
                     channel="web",
                     chat_id=request.chat_id,
                     user_id=request.user_id,
+                    input_tokens=result.input_tokens if result else 0,
+                    cached_input_tokens=result.cached_input_tokens if result else 0,
+                    output_tokens=result.output_tokens if result else 0,
                     is_degraded=bool(result and result.degraded),
                     web_search_count=result.web_search_count if result else 0,
                 ))

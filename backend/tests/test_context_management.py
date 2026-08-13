@@ -13,6 +13,7 @@ from app.schemas.agent import AgentCreate
 from app.schemas.llm_config import LLMConfigCreate
 from app.services.llm.gateway import ChatResult, LLMGateway, llm_gateway
 from app.services.qa.generator import AnswerGenerator
+from app.services.qa.prompt import PromptTemplate
 from app.services.qa.retriever import HybridRetriever
 from app.services.knowledge.indexer import IndexResult
 
@@ -31,6 +32,23 @@ def test_context_policy_uses_fixed_percentage_thresholds():
     assert _context_policy(0.80, 20) == (False, 4)
     assert _context_policy(0.95, 4) == (False, 4)
     assert _context_policy(0.95, 5) == (True, 4)
+
+
+def test_default_rag_prompt_keeps_cacheable_rules_in_system_message():
+    """动态时间、检索与问题不能污染稳定的系统指令前缀。"""
+    system_prompt, user_prompt = PromptTemplate().build_qa_messages(
+        question="Python 如何学习？",
+        context="片段 1：先掌握基础语法。",
+        conversation_context="用户：我刚入门。",
+    )
+
+    assert "不要编造信息" in system_prompt
+    assert "当前时间" not in system_prompt
+    assert "片段 1" not in system_prompt
+    assert "Python 如何学习" not in system_prompt
+    assert "当前时间" in user_prompt
+    assert "片段 1" in user_prompt
+    assert "Python 如何学习" in user_prompt
 
 
 def test_context_ratio_includes_output_and_retrieval_reserves():
@@ -77,6 +95,30 @@ async def test_llm_api_rejects_conflicting_model_roles_before_database_write():
     with pytest.raises(HTTPException) as exc_info:
         await create_config(request=request, db=None)
     assert exc_info.value.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_generate_forwards_rewrite_count_to_internal_pipeline(monkeypatch):
+    """公开入口和内部检索链路都必须有改写数兜底，评测会走这条入口。"""
+    generator = AnswerGenerator()
+    captured = {}
+
+    async def fake_run(_key, factory):
+        return await factory()
+
+    async def fake_generate(**kwargs):
+        captured.update(kwargs)
+        return "ok"
+
+    monkeypatch.setattr("app.services.qa.generator.qa_request_coalescer.run", fake_run)
+    monkeypatch.setattr(generator, "_generate", fake_generate)
+
+    assert await generator.generate(["9"], "测试问题") == "ok"
+    assert captured["rewrite_count"] == 3
+
+    captured.clear()
+    assert await generator.generate(["9"], "测试问题", rewrite_count=1) == "ok"
+    assert captured["rewrite_count"] == 1
 
 
 def test_llm_config_schema_rejects_removed_agent_scope():

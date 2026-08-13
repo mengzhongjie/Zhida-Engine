@@ -2,6 +2,7 @@
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -13,11 +14,26 @@ from app.services.qa.generator import AnswerGenerator, AnswerLengthLimitError  #
 from app.services.llm.gateway import llm_gateway  # noqa: E402
 
 
+def _fake_agent(**overrides) -> SimpleNamespace:
+    """构造仅含检索参数字段的轻量 Agent，供 _answer_options 读取。"""
+    defaults = dict(
+        concise_top_k=4,
+        detailed_top_k=8,
+        concise_rewrite_count=3,
+        detailed_rewrite_count=3,
+    )
+    defaults.update(overrides)
+    return SimpleNamespace(**defaults)
+
+
 @pytest.mark.parametrize("options", [admin_answer_options, user_answer_options])
 def test_response_detail_token_budgets(options):
-    """管理端与用户端不能因路由差异使用不同的输出上限。"""
-    assert options("concise")["max_tokens"] == 4096
-    assert options("detailed")["max_tokens"] == 8192
+    """管理端与用户端不能因路由差异使用不同的输出上限与检索预算。"""
+    agent = _fake_agent()
+    assert options("concise", agent)["max_tokens"] == 4096
+    assert options("detailed", agent)["max_tokens"] == 8192
+    assert options("concise", agent)["top_k"] == 4
+    assert options("detailed", agent)["top_k"] == 8
 
 
 @pytest.mark.asyncio

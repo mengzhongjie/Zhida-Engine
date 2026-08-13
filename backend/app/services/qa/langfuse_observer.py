@@ -55,7 +55,8 @@ async def observe_qa(**data) -> None:
             "model": data.get("model", "unknown"),
             "output": data.get("answer", ""),
             "metadata": data.get("metadata", {}),
-            "usage": {"input": data.get("input_tokens", 0), "output": data.get("output_tokens", 0)},
+            # Langfuse v4 使用 usage_details；v2 的 usage 参数会导致整个 Trace 丢失。
+            "usage_details": {"input": data.get("input_tokens", 0), "output": data.get("output_tokens", 0), "cache_read_input_tokens": data.get("cached_input_tokens", 0)},
         }
         if settings.LANGFUSE_ONLINE_EVALUATION_ENABLED:
             # 让 Langfuse 平台的 LLM-as-a-Judge 在 answer 节点取得完整评分材料。

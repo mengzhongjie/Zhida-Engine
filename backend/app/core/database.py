@@ -119,6 +119,7 @@ async def init_db():
         import app.models.agent_knowledge_base  # noqa: F401
         import app.models.auth              # noqa: F401
         import app.models.persona_preset    # noqa: F401
+        import app.models.evaluation        # noqa: F401
 
         # 创建所有表
         await conn.run_sync(Base.metadata.create_all)
@@ -161,6 +162,7 @@ async def _run_compatible_migrations(conn):
         "ALTER TABLE knowledge_bases ADD COLUMN index_status VARCHAR(30) NOT NULL DEFAULT 'ready'",
         "ALTER TABLE qa_history ADD COLUMN input_tokens INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE qa_history ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE qa_history ADD COLUMN cached_input_tokens INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE qa_history ADD COLUMN is_degraded BOOLEAN NOT NULL DEFAULT 0",
         "ALTER TABLE qa_history ADD COLUMN web_search_count INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE qa_history ADD COLUMN request_id VARCHAR(80)",
@@ -179,6 +181,10 @@ async def _run_compatible_migrations(conn):
         "ALTER TABLE agents ADD COLUMN response_detail VARCHAR(20) NOT NULL DEFAULT 'concise'",
         "ALTER TABLE agents ADD COLUMN persona_custom_instruction TEXT",
         "ALTER TABLE agents ADD COLUMN context_window_k INTEGER NOT NULL DEFAULT 64",
+        "ALTER TABLE agents ADD COLUMN concise_top_k INTEGER NOT NULL DEFAULT 4",
+        "ALTER TABLE agents ADD COLUMN detailed_top_k INTEGER NOT NULL DEFAULT 8",
+        "ALTER TABLE agents ADD COLUMN concise_rewrite_count INTEGER NOT NULL DEFAULT 3",
+        "ALTER TABLE agents ADD COLUMN detailed_rewrite_count INTEGER NOT NULL DEFAULT 3",
         "ALTER TABLE llm_configs ADD COLUMN is_context_model BOOLEAN NOT NULL DEFAULT 0",
         "ALTER TABLE llm_configs ADD COLUMN context_rewrite_timeout_seconds INTEGER NOT NULL DEFAULT 10",
         "ALTER TABLE llm_configs ADD COLUMN context_compaction_timeout_seconds INTEGER NOT NULL DEFAULT 25",
@@ -189,6 +195,35 @@ async def _run_compatible_migrations(conn):
         "ALTER TABLE observability_configs ADD COLUMN last_test_success BOOLEAN",
         "ALTER TABLE observability_configs ADD COLUMN last_test_at DATETIME",
         "ALTER TABLE observability_configs ADD COLUMN last_test_message VARCHAR(500)",
+        "ALTER TABLE evaluation_cases ADD COLUMN reference_answer TEXT",
+        "ALTER TABLE evaluation_runs ADD COLUMN langfuse_dataset_name VARCHAR(200)",
+        "ALTER TABLE evaluation_runs ADD COLUMN langfuse_dataset_run_url VARCHAR(1000)",
+        "ALTER TABLE evaluation_runs ADD COLUMN faithfulness_score FLOAT",
+        "ALTER TABLE evaluation_runs ADD COLUMN answer_relevancy_score FLOAT",
+        "ALTER TABLE evaluation_runs ADD COLUMN answer_correctness_score FLOAT",
+        "ALTER TABLE evaluation_runs ADD COLUMN context_precision_score FLOAT",
+        "ALTER TABLE evaluation_runs ADD COLUMN context_recall_score FLOAT",
+        "ALTER TABLE evaluation_runs ADD COLUMN run_key VARCHAR(500)",
+        "ALTER TABLE evaluation_runs ADD COLUMN recall_at_k_score FLOAT",
+        "ALTER TABLE evaluation_results ADD COLUMN recall_at_k_score FLOAT",
+        "ALTER TABLE evaluation_runs ADD COLUMN ndcg_at_k_score FLOAT",
+        "ALTER TABLE evaluation_results ADD COLUMN ndcg_at_k_score FLOAT",
+        "ALTER TABLE evaluation_runs ADD COLUMN cancel_requested BOOLEAN NOT NULL DEFAULT 0",
+        "ALTER TABLE evaluation_runs ADD COLUMN experiment_name VARCHAR(120)",
+        "ALTER TABLE evaluation_runs ADD COLUMN retrieval_top_k INTEGER NOT NULL DEFAULT 4",
+        "ALTER TABLE evaluation_runs ADD COLUMN input_tokens INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE evaluation_runs ADD COLUMN cached_input_tokens INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE evaluation_runs ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE evaluation_results ADD COLUMN input_tokens INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE evaluation_results ADD COLUMN cached_input_tokens INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE evaluation_results ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0",
+        # 取消中的运行仍属于活动运行，旧索引需要重建以维持并发去重边界。
+        "DROP INDEX IF EXISTS idx_evaluation_runs_active_dedup",
+        "ALTER TABLE evaluation_results ADD COLUMN faithfulness_score FLOAT",
+        "ALTER TABLE evaluation_results ADD COLUMN answer_relevancy_score FLOAT",
+        "ALTER TABLE evaluation_results ADD COLUMN answer_correctness_score FLOAT",
+        "ALTER TABLE evaluation_results ADD COLUMN context_precision_score FLOAT",
+        "ALTER TABLE evaluation_results ADD COLUMN context_recall_score FLOAT",
     ]
     for sql in migrations:
         try:
@@ -288,6 +323,10 @@ async def _create_indexes(conn):
         "CREATE INDEX IF NOT EXISTS idx_access_code_daily_usage_date ON access_code_daily_usage(usage_date)",
         "CREATE INDEX IF NOT EXISTS idx_conversations_owner_time ON conversations(owner_type, owner_id, updated_at)",
         "CREATE INDEX IF NOT EXISTS idx_qa_pairs_agent ON qa_pairs(agent_id)",
+        "CREATE INDEX IF NOT EXISTS idx_evaluation_cases_kb_enabled ON evaluation_cases(knowledge_base_id, is_enabled)",
+        "CREATE INDEX IF NOT EXISTS idx_evaluation_runs_agent_time ON evaluation_runs(agent_id, created_at)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_evaluation_runs_active_dedup ON evaluation_runs(agent_id, run_key) WHERE status IN ('pending', 'running', 'cancelling')",
+        "CREATE INDEX IF NOT EXISTS idx_evaluation_results_run ON evaluation_results(run_id)",
 
         "CREATE INDEX IF NOT EXISTS idx_admin_sessions_expires ON admin_sessions(expires_at)",
     ]

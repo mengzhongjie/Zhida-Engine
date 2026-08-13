@@ -12,6 +12,7 @@ import {
   SettingOutlined,
   BookOutlined,
   MessageOutlined,
+  ExperimentOutlined,
   MenuOutlined,
   KeyOutlined,
   LogoutOutlined,
@@ -33,6 +34,11 @@ const menuItems = [
     key: '/chat',
     icon: <MessageOutlined />,
     label: '对话',
+  },
+  {
+    key: '/evaluations',
+    icon: <ExperimentOutlined />,
+    label: '评测',
   },
   {
     key: '/agents',

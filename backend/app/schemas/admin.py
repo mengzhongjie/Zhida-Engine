@@ -24,7 +24,9 @@ class DashboardStatsOut(BaseModel):
     total_documents: int = Field(0, description="文档总数")
     cache_hit_rate: float = Field(0.0, description="缓存命中率")
     today_input_tokens: int = Field(0, description="今日请求 Token 数")
+    today_cached_input_tokens: int = Field(0, description="今日模型 Prompt Cache 命中的输入 Token 数")
     today_output_tokens: int = Field(0, description="今日回答 Token 数")
+    model_cache_hit_rate: float = Field(0.0, description="今日模型 Prompt Cache 输入 Token 命中率")
     web_search_count: int = Field(0, description="网络检索次数")
 
 

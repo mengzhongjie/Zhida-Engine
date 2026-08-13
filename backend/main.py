@@ -159,6 +159,10 @@ def create_app():
     from app.api.v1.qa.router import router as qa_router
     app.include_router(qa_router, prefix="/api/v1", dependencies=[Depends(require_admin)])
 
+    # 独立评测（黄金集归属知识库，运行归属 Agent）
+    from app.api.v1.evaluation.router import router as evaluation_router
+    app.include_router(evaluation_router, prefix="/api/v1", dependencies=[Depends(require_admin)])
+
     # 管理后台
     from app.api.v1.admin.router import router as admin_router
     app.include_router(admin_router, prefix="/api/v1", dependencies=[Depends(require_admin)])

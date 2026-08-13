@@ -41,6 +41,10 @@ interface DashboardStats {
   success_rate: number
   total_knowledge_chunks: number
   total_documents: number
+  today_input_tokens: number
+  today_cached_input_tokens: number
+  today_output_tokens: number
+  model_cache_hit_rate: number
 }
 interface ModelHealth { chat_models: { name: string; role: string; available: boolean; message: string }[]; embedding: { name: string; available: boolean } }
 interface ComponentHealth { items: { key: string; name: string; available: boolean; configured?: boolean; message: string }[]; checked_at: string }
@@ -214,6 +218,15 @@ export default function Dashboard() {
           </Card>
         </Col>
       </Row>
+
+      <Card title="模型 Token 用量" style={{ marginTop: 20, marginBottom: 28 }} extra={<Text type="secondary">所选日期范围内的真实模型调用；厂商未返回缓存用量时显示 0</Text>}>
+        <Row gutter={[16, 16]}>
+          <Col xs={12} sm={6}><Statistic title="输入 Token" value={stats?.today_input_tokens || 0} /></Col>
+          <Col xs={12} sm={6}><Statistic title="命中缓存" value={stats?.today_cached_input_tokens || 0} valueStyle={{ color: '#52c41a' }} /></Col>
+          <Col xs={12} sm={6}><Statistic title="输出 Token" value={stats?.today_output_tokens || 0} /></Col>
+          <Col xs={12} sm={6}><Statistic title="模型缓存命中率" value={stats?.model_cache_hit_rate || 0} suffix="%" precision={1} valueStyle={{ color: '#1677ff' }} /></Col>
+        </Row>
+      </Card>
 
       <Row gutter={[16, 16]} className="dashboard-health">
         <Col xs={24} sm={15}><Card title="问答模型"><Space direction="vertical" size={12}>{modelHealth?.chat_models?.length ? modelHealth.chat_models.map((model) => <div className="model-line" key={`${model.role}-${model.name}`}><Tag color={model.available ? 'success' : 'error'}>{model.available ? '可用' : '不可用'}</Tag><Text type="secondary">{model.role}</Text><Text strong>{model.name}</Text></div>) : <Text type="secondary">未配置</Text>}</Space></Card></Col>

@@ -47,6 +47,10 @@ def _agent_to_out(agent: Agent) -> AgentOut:
         persona_preset=agent.persona_preset or "professional",
         persona_custom_instruction=agent.persona_custom_instruction,
         context_window_k=agent.context_window_k or 64,
+        concise_top_k=agent.concise_top_k or 4,
+        detailed_top_k=agent.detailed_top_k or 8,
+        concise_rewrite_count=agent.concise_rewrite_count if agent.concise_rewrite_count is not None else 3,
+        detailed_rewrite_count=agent.detailed_rewrite_count if agent.detailed_rewrite_count is not None else 3,
         created_at=as_beijing(agent.created_at),
         updated_at=as_beijing(agent.updated_at),
     )
@@ -113,6 +117,10 @@ async def create_agent(
         persona_preset=request.persona_preset,
         persona_custom_instruction=request.persona_custom_instruction if request.persona_preset == "custom" else None,
         context_window_k=request.context_window_k,
+        concise_top_k=request.concise_top_k,
+        detailed_top_k=request.detailed_top_k,
+        concise_rewrite_count=request.concise_rewrite_count,
+        detailed_rewrite_count=request.detailed_rewrite_count,
         is_active=False,
         status="stopped",
     )

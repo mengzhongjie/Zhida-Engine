@@ -95,11 +95,11 @@ async def _refund_daily_quota(user: WebUser, db: AsyncSession) -> None:
     await db.commit()
 
 
-def _answer_options(response_detail: str) -> dict:
+def _answer_options(response_detail: str, agent: Agent) -> dict:
     if response_detail == "detailed":
         # 与管理端保持一致：推理型主模型需要给详细模式预留正文 token。
-        return {"top_k": 8, "max_tokens": 8192, "temperature": 0.55}
-    return {"top_k": 4, "max_tokens": 4096, "temperature": 0.5}
+        return {"top_k": agent.detailed_top_k or 8, "rewrite_count": agent.detailed_rewrite_count if agent.detailed_rewrite_count is not None else 3, "max_tokens": 8192, "temperature": 0.55}
+    return {"top_k": agent.concise_top_k or 4, "rewrite_count": agent.concise_rewrite_count if agent.concise_rewrite_count is not None else 3, "max_tokens": 4096, "temperature": 0.5}
 
 
 async def _unsummarized_records(db: AsyncSession, conversation: Conversation, user_id: int) -> list[QAHistory]:
@@ -310,13 +310,13 @@ async def stream_chat(payload: UserAskIn, user: WebUser = Depends(require_user),
                 persona_preset=agent.persona_preset, persona_custom_instruction=agent.persona_custom_instruction or "",
                 response_detail=payload.response_detail,
                 context_pressure=usage_ratio,
-                **_answer_options(payload.response_detail),
+                **_answer_options(payload.response_detail, agent),
             ):
                 parts.append(chunk)
                 yield f"event: delta\ndata: {json.dumps({'content': chunk}, ensure_ascii=False)}\n\n"
             answer_completed = True
             sources = completed.sources if completed else []
-            db.add(QAHistory(agent_id=agent.id, question=payload.question, answer="".join(parts), sources=json.dumps(sources, ensure_ascii=False), total_time_ms=(time.time()-started)*1000, channel="web", chat_id=conversation.id, user_id=f"user:{user.id}", conversation_id=conversation.id, owner_type="user", owner_id=user.id, is_degraded=bool(completed and completed.degraded), web_search_count=completed.web_search_count if completed else 0))
+            db.add(QAHistory(agent_id=agent.id, question=payload.question, answer="".join(parts), sources=json.dumps(sources, ensure_ascii=False), total_time_ms=(time.time()-started)*1000, channel="web", chat_id=conversation.id, user_id=f"user:{user.id}", conversation_id=conversation.id, owner_type="user", owner_id=user.id, input_tokens=completed.input_tokens if completed else 0, cached_input_tokens=completed.cached_input_tokens if completed else 0, output_tokens=completed.output_tokens if completed else 0, is_degraded=bool(completed and completed.degraded), web_search_count=completed.web_search_count if completed else 0))
             conversation.updated_at = datetime.utcnow()
             await db.commit()
             yield f"event: done\ndata: {json.dumps({'conversation_id': conversation.id, 'sources': sources, 'remaining_today': await _remaining_daily_quota(user, db)}, ensure_ascii=False)}\n\n"

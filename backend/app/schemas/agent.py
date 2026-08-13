@@ -21,6 +21,10 @@ class AgentCreate(BaseModel):
     persona_preset: Literal["professional", "tutor", "friendly", "direct", "custom"] = "professional"
     persona_custom_instruction: Optional[str] = Field(None, max_length=2000)
     context_window_k: int = Field(64, ge=32, le=256)
+    concise_top_k: int = Field(4, ge=1, le=20)
+    detailed_top_k: int = Field(8, ge=1, le=20)
+    concise_rewrite_count: int = Field(3, ge=0, le=5)
+    detailed_rewrite_count: int = Field(3, ge=0, le=5)
 
 
 class AgentUpdate(BaseModel):
@@ -32,6 +36,10 @@ class AgentUpdate(BaseModel):
     persona_preset: Optional[Literal["professional", "tutor", "friendly", "direct", "custom"]] = None
     persona_custom_instruction: Optional[str] = Field(None, max_length=2000)
     context_window_k: Optional[int] = Field(None, ge=32, le=256)
+    concise_top_k: Optional[int] = Field(None, ge=1, le=20)
+    detailed_top_k: Optional[int] = Field(None, ge=1, le=20)
+    concise_rewrite_count: Optional[int] = Field(None, ge=0, le=5)
+    detailed_rewrite_count: Optional[int] = Field(None, ge=0, le=5)
 
 
 class AgentOut(BaseModel):
@@ -45,6 +53,10 @@ class AgentOut(BaseModel):
     persona_preset: str = "professional"
     persona_custom_instruction: Optional[str] = None
     context_window_k: int = 64
+    concise_top_k: int = 4
+    detailed_top_k: int = 8
+    concise_rewrite_count: int = 3
+    detailed_rewrite_count: int = 3
     created_at: datetime
     updated_at: datetime
 

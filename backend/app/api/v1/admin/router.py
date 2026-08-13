@@ -429,7 +429,9 @@ async def get_dashboard_stats(
     success_rate = (real_answers / today_answers * 100) if today_answers > 0 else 0.0
     # Token 统计
     today_input_tokens = sum(qa.input_tokens or 0 for qa in today_qas)
+    today_cached_input_tokens = sum(qa.cached_input_tokens or 0 for qa in today_qas)
     today_output_tokens = sum(qa.output_tokens or 0 for qa in today_qas)
+    model_cache_hit_rate = (today_cached_input_tokens / today_input_tokens * 100) if today_input_tokens else 0.0
     def _legacy_web_search_count(raw_sources: str | None) -> int:
         """兼容新字段上线前的历史记录；实际新记录以独立计数为准。"""
         try:
@@ -463,7 +465,9 @@ async def get_dashboard_stats(
         total_documents=total_documents,
         cache_hit_rate=round(cache_hit_rate, 1),
         today_input_tokens=today_input_tokens,
+        today_cached_input_tokens=today_cached_input_tokens,
         today_output_tokens=today_output_tokens,
+        model_cache_hit_rate=round(model_cache_hit_rate, 1),
         web_search_count=web_search_count,
     )
 

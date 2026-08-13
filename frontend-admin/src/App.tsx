@@ -22,6 +22,7 @@ import Chat from './pages/chat'
 import LoginPage from './pages/login'
 import UserPage from './pages/user'
 import AccessCodes from './pages/access-codes'
+import Evaluations from './pages/evaluations'
 import { Spin } from 'antd'
 
 function RoleGate({ role }: { role: 'admin' | 'user' }) {
@@ -41,6 +42,7 @@ function App() {
       <Route element={<RoleGate role="admin" />}><Route path="/" element={<MainLayout />}>
         <Route index element={<Dashboard />} />
         <Route path="chat" element={<Chat />} />
+        <Route path="evaluations" element={<Evaluations />} />
         <Route path="agents" element={<AgentList />} />
         <Route path="agents/:id" element={<AgentDetail />} />
         <Route path="agents/new" element={<AgentNew />} />
