@@ -1,4 +1,5 @@
 """Langfuse 完整链路观测；SDK/网络异常绝不影响问答。"""
+import asyncio
 from urllib.parse import urlparse
 
 from loguru import logger
@@ -33,12 +34,15 @@ async def observe_qa(**data) -> None:
             # 因此将完整评分材料放到根 Trace，标准 Context/Faithfulness 等评估器才能触发。
             trace_input["retrieval_context"] = retrieval_chunks
             trace_output = {"answer": data.get("answer", "")}
+        source = data.get("metadata", {}).get("source") or (
+            "evaluation" if str(data.get("user_id", "")).startswith("evaluation:") else "sync"
+        )
         trace = client.start_observation(
             name="rag-answer",
             as_type="span",
             input=trace_input,
             output=trace_output,
-            metadata={**data.get("metadata", {}), "user_id": data.get("user_id"), "session_id": data.get("session_id")},
+            metadata={**data.get("metadata", {}), "source": source, "user_id": data.get("user_id"), "session_id": data.get("session_id")},
         )
         # 这是 Langfuse 中评估“无关引用”的证据。不要只传文件名：同一长文档的
         # 不同父块也可能一个相关、另一个完全跑题。
@@ -67,7 +71,8 @@ async def observe_qa(**data) -> None:
         generation = trace.start_observation(as_type="generation", **generation_kwargs)
         generation.end()
         trace.end()
-        client.flush()
+        # flush 是同步网络请求，不能阻塞 FastAPI 主事件循环。
+        await asyncio.to_thread(client.flush)
         logger.info("Langfuse 观测已上报：model={}, source={}", data.get("model", "unknown"), data.get("metadata", {}).get("source", "sync"))
     except Exception as exc:
         logger.warning(f"Langfuse 观测写入失败（不影响问答）: {exc}")

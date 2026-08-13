@@ -3,6 +3,7 @@ import asyncio
 import csv
 import io
 import json
+import hashlib
 import math
 import re
 from datetime import datetime
@@ -54,7 +55,7 @@ class CaseIn(BaseModel):
 
 class RunIn(BaseModel):
     agent_id: int
-    knowledge_base_ids: list[int] = Field(min_length=1, max_length=50)
+    knowledge_base_ids: list[int] = Field(default_factory=list, max_length=50)
     experiment_name: str | None = Field(None, max_length=120)
     retrieval_top_k: int = Field(default=5, ge=1, le=20)
 
@@ -75,6 +76,7 @@ class LangfuseDatasetIn(BaseModel):
     dataset_name: str | None = Field(None, max_length=200)
 
 class LangfuseExperimentIn(RunIn):
+    knowledge_base_ids: list[int] = Field(min_length=1, max_length=50)
     dataset_name: str = Field(min_length=1, max_length=200)
 
     @field_validator("dataset_name")
@@ -142,12 +144,25 @@ def _dataset_metadata(item) -> dict:
     value = _item_value(item, "metadata", {})
     return value if isinstance(value, dict) else {}
 
+def _metadata_list(metadata: dict, *keys: str) -> list:
+    """兼容 Langfuse metadata 中数组和 JSON 字符串两种存储格式。"""
+    for key in keys:
+        value = metadata.get(key)
+        if isinstance(value, list):
+            return value
+        if isinstance(value, str) and value.strip():
+            try:
+                decoded = json.loads(value)
+            except (TypeError, ValueError):
+                decoded = [part.strip() for part in value.replace("，", ",").split(",") if part.strip()]
+            if isinstance(decoded, list):
+                return decoded
+    return []
+
 def _validate_remote_dataset_items(items: list, allowed_knowledge_base_ids: list[int]) -> None:
-    """远端 Dataset 是不可信输入：限制规模、文本和跨知识库路由。"""
+    """远端 Dataset 必须显式绑定本次选择的知识库。"""
     if not items or len(items) > _MAX_REMOTE_DATASET_ITEMS:
         raise ValueError("数据集题目数量必须在 1 到 500 之间")
-    bindings: set[int] = set()
-    has_unbound_item = False
     for item in items:
         question = _dataset_question(item)
         if not question or len(question) > _MAX_REMOTE_QUESTION_LENGTH:
@@ -159,14 +174,8 @@ def _validate_remote_dataset_items(items: list, allowed_knowledge_base_ids: list
             raise ValueError("数据集参考答案不能超过 12000 字符")
         metadata = _dataset_metadata(item)
         binding = metadata.get("zhida_knowledge_base_id")
-        if binding is None:
-            has_unbound_item = True
-        elif isinstance(binding, int) and binding in allowed_knowledge_base_ids:
-            bindings.add(binding)
-        else:
-            raise ValueError("数据集题目的 zhida_knowledge_base_id 不属于已选择知识库")
-    if has_unbound_item and len(allowed_knowledge_base_ids) != 1:
-        raise ValueError("未绑定知识库的 Dataset 只能选择一个 Agent 知识库")
+        if not isinstance(binding, int) or binding not in allowed_knowledge_base_ids:
+            raise ValueError("数据集题目的 zhida_knowledge_base_id 必须属于本次选择的知识库")
 
 def _trusted_langfuse_url(value) -> str | None:
     if not isinstance(value, str):
@@ -388,7 +397,10 @@ async def import_cases(knowledge_base_id: int = Form(...), file: UploadFile = Fi
     for value in cases:
         try: payload = CaseIn(knowledge_base_id=knowledge_base_id, question=value["question"], reference_answer=value.get("reference_answer") or value.get("expected_output") or value.get("Expected Output"), expected_document_ids=value.get("expected_document_ids", []), required_facts=value.get("required_facts", []))
         except Exception: raise HTTPException(status_code=422, detail="黄金集包含格式错误的题目")
-        await _validate_case(payload, db)
+        # 导入文件可能来自迁移前的知识库；expected_document_ids 仅作为评测标注保存，
+        # 不把旧文档 ID 当作当前库的外键强制校验。当前库归属仍由表单 knowledge_base_id 控制。
+        if any(not isinstance(value, (int, str)) or not str(value).strip() for value in payload.expected_document_ids):
+            raise HTTPException(status_code=422, detail="黄金集 expected_document_ids 必须为文档 ID 数组")
         db.add(EvaluationCase(knowledge_base_id=knowledge_base_id, question=payload.question.strip(), reference_answer=payload.reference_answer, expected_document_ids_json=json.dumps(payload.expected_document_ids), required_facts_json=json.dumps(payload.required_facts, ensure_ascii=False))); created += 1
     return {"created": created}
 
@@ -417,8 +429,11 @@ async def sync_langfuse_dataset(payload: LangfuseDatasetIn, db: AsyncSession = D
     name = (payload.dataset_name or _dataset_name(kb.id)).strip()
     if any(ord(char) < 32 for char in name):
         raise HTTPException(status_code=422, detail="数据集名称不合法")
+    # Langfuse Dataset Item ID 是全项目全局唯一，不能只使用本地 case_id；
+    # 否则同一黄金题同步到另一个 Dataset 会被 API 拒绝。
+    dataset_id_prefix = hashlib.sha256(name.encode("utf-8")).hexdigest()[:16]
     records = [{
-        "id": f"zhida-evaluation-case-{case.id}",
+        "id": f"zhida-{dataset_id_prefix}-case-{case.id}",
         "input": {"question": case.question},
         "expected_output": case.reference_answer or "",
         "metadata": {
@@ -441,8 +456,10 @@ async def sync_langfuse_dataset(payload: LangfuseDatasetIn, db: AsyncSession = D
         await asyncio.wait_for(asyncio.to_thread(sync), timeout=60)
     except HTTPException:
         raise
-    except Exception:
-        raise HTTPException(status_code=502, detail="同步到 Langfuse 失败，请检查网络、密钥与数据集名称")
+    except Exception as exc:
+        # 不输出密钥或请求正文，只记录异常类型与受控消息，便于生产排查 SDK/权限/网络问题。
+        logger.warning(f"Langfuse Dataset 同步失败: {type(exc).__name__}: {str(exc)[:300]}")
+        raise HTTPException(status_code=502, detail="同步到 Langfuse 失败，请查看后端日志中的同步原因") from None
     return {"dataset_name": name, "synced_count": len(records)}
 
 async def _run_langfuse_experiment(run_id: int, dataset_name: str) -> None:
@@ -463,30 +480,69 @@ async def _run_langfuse_experiment(run_id: int, dataset_name: str) -> None:
             run.status = "running"
             await db.commit()
 
+        logger.info("Langfuse 实验开始: run_id={}, dataset={}, agent_id={}", run_id, dataset_name, agent.id)
         dataset = await asyncio.to_thread(lambda: _langfuse_client().get_dataset(dataset_name))
         items = list(dataset.items)
         _validate_remote_dataset_items(items, kb_ids)
+        logger.info("Langfuse Dataset 已读取: run_id={}, items={}, knowledge_bases={}", run_id, len(items), kb_ids)
         main_loop = asyncio.get_running_loop()
 
         async def persist_item(item, answer_result) -> dict[str, float | None]:
             """每题完成即回写，避免等待整个 SDK Experiment 结束才显示进度。"""
             metadata = _dataset_metadata(item)
-            expected_document_ids = metadata.get("expected_document_ids", [])
-            expected_document_ids = expected_document_ids if isinstance(expected_document_ids, list) else []
-            required_facts = metadata.get("required_facts", [])
-            required_facts = [str(value) for value in required_facts] if isinstance(required_facts, list) else []
+            expected_document_ids = _metadata_list(metadata, "expected_document_ids", "expected_documents", "document_ids")
+            required_facts = [str(value) for value in _metadata_list(metadata, "required_facts", "facts")]
             expected = {str(value) for value in expected_document_ids}
             found = {str((source.get("metadata") or {}).get("document_id", "")) for source in answer_result.sources}
             retrieval = 1.0 if not expected else float(bool(expected & found))
             fact = 1.0 if not required_facts else sum(value in answer_result.answer for value in required_facts) / len(required_facts)
-            ndcg_at_k, recall_at_k = _retrieval_at_k_scores(answer_result.retrieval_candidates, expected_document_ids, top_k)
+            candidates = answer_result.retrieval_candidates or [
+                {"document_id": (source.get("metadata") or {}).get("document_id")}
+                for source in answer_result.sources
+            ]
+            ndcg_at_k, recall_at_k = _retrieval_at_k_scores(candidates, expected_document_ids, top_k)
             reference_answer = _item_value(item, "expected_output")
             reference_answer = reference_answer if isinstance(reference_answer, str) else None
-            faithfulness, relevancy, correctness = await _llm_judge_scores(_dataset_question(item), answer_result.answer, answer_result.sources, reference_answer, required_facts)
             async with async_session_factory() as db:
-                case_id = metadata.get("zhida_evaluation_case_id")
-                db.add(EvaluationResult(run_id=run_id, case_id=case_id if isinstance(case_id, int) else None, question=_dataset_question(item), answer=answer_result.answer, sources_json=json.dumps(answer_result.sources, ensure_ascii=False), retrieval_score=retrieval, fact_score=fact, faithfulness_score=faithfulness, answer_relevancy_score=relevancy, answer_correctness_score=correctness, ndcg_at_k_score=ndcg_at_k, recall_at_k_score=recall_at_k, input_tokens=answer_result.input_tokens, cached_input_tokens=answer_result.cached_input_tokens, output_tokens=answer_result.output_tokens))
-                await db.flush()
+                # Langfuse Dataset 可独立于本地黄金集；仅当元数据中的 ID
+                # 仍存在于本地时建立关联，否则必须写 NULL，避免外键失败。
+                raw_case_id = metadata.get("zhida_evaluation_case_id")
+                case_id = None
+                if isinstance(raw_case_id, int):
+                    case_id = (await db.execute(
+                        select(EvaluationCase.id).where(EvaluationCase.id == raw_case_id)
+                    )).scalar_one_or_none()
+                row_kwargs = dict(
+                    run_id=run_id,
+                    case_id=case_id if isinstance(case_id, int) else None,
+                    question=_dataset_question(item),
+                    answer=answer_result.answer,
+                    sources_json=json.dumps(answer_result.sources, ensure_ascii=False),
+                    retrieval_score=retrieval,
+                    fact_score=fact,
+                    ndcg_at_k_score=ndcg_at_k,
+                    recall_at_k_score=recall_at_k,
+                    input_tokens=answer_result.input_tokens,
+                    cached_input_tokens=answer_result.cached_input_tokens,
+                    output_tokens=answer_result.output_tokens,
+                )
+                row = EvaluationResult(**row_kwargs)
+                db.add(row)
+                try:
+                    await db.flush()
+                except IntegrityError:
+                    await db.rollback()
+                    # 远端 Dataset 可能保留已删除的本地黄金题 ID；评测与本地黄金集解耦，
+                    # 失效关联应安全降级为 NULL，而不是让整题写入失败。
+                    run_exists = (await db.execute(select(EvaluationRun.id).where(EvaluationRun.id == run_id))).scalar_one_or_none()
+                    if run_exists is None:
+                        logger.warning("Langfuse 结果跳过：本地实验已不存在, run_id={}", run_id)
+                        return {"faithfulness": None, "answer_relevancy": None, "answer_correctness": None, "ndcg_at_k": ndcg_at_k, "recall_at_k": recall_at_k}
+                    row_kwargs["case_id"] = None
+                    row = EvaluationResult(**row_kwargs)
+                    db.add(row)
+                    await db.flush()
+                    logger.warning("Langfuse Dataset 的本地黄金题关联已失效，已降级为 NULL: run_id={}, raw_case_id={}", run_id, metadata.get("zhida_evaluation_case_id"))
                 rows = (await db.execute(select(EvaluationResult).where(EvaluationResult.run_id == run_id))).scalars().all()
                 current = await db.get(EvaluationRun, run_id)
                 current.completed_count = len(rows)
@@ -501,6 +557,25 @@ async def _run_langfuse_experiment(run_id: int, dataset_name: str) -> None:
                 current.cached_input_tokens = sum(row.cached_input_tokens or 0 for row in rows)
                 current.output_tokens = sum(row.output_tokens or 0 for row in rows)
                 await db.commit()
+                result_id = row.id
+                logger.info("Langfuse 题目已写入本地: run_id={}, result_id={}, completed={}/{}", run_id, result_id, current.completed_count, current.case_count)
+
+            # 基础答案/检索结果已持久化，前端此时即可显示进度、Recall/NDCG 和 Token；
+            # LLM-Judge 属于较慢的后处理，完成后再补写五项生成侧评分。
+            faithfulness, relevancy, correctness = await _llm_judge_scores(_dataset_question(item), answer_result.answer, answer_result.sources, reference_answer, required_facts)
+            async with async_session_factory() as db:
+                row = await db.get(EvaluationResult, result_id)
+                if row is not None:
+                    row.faithfulness_score = faithfulness
+                    row.answer_relevancy_score = relevancy
+                    row.answer_correctness_score = correctness
+                    rows = (await db.execute(select(EvaluationResult).where(EvaluationResult.run_id == run_id))).scalars().all()
+                    current = await db.get(EvaluationRun, run_id)
+                    current.faithfulness_score = _average([item.faithfulness_score for item in rows])
+                    current.answer_relevancy_score = _average([item.answer_relevancy_score for item in rows])
+                    current.answer_correctness_score = _average([item.answer_correctness_score for item in rows])
+                    await db.commit()
+            logger.info("Langfuse 题目 Judge 完成: run_id={}, result_id={}, scored={}", run_id, result_id, faithfulness is not None)
             return {
                 "faithfulness": faithfulness,
                 "answer_relevancy": relevancy,
@@ -518,23 +593,56 @@ async def _run_langfuse_experiment(run_id: int, dataset_name: str) -> None:
                 # SDK 会继续遍历剩余项目，但不再发起 RAG/LLM 调用。
                 return {"answer": "", "sources": [], "_zhida_scores": {}}
             question = _dataset_question(item)
+            logger.info("Langfuse Agent 调用开始: run_id={}, item_id={}, question_length={}", run_id, getattr(item, "id", None), len(question))
             result = await answer_generator.generate(
                 knowledge_base_ids=[str(value) for value in kb_ids], question=question,
                 user_id=f"evaluation:{run_id}", agent_id=agent.id, enable_memory=False,
                 allow_web_search=False, reply_mode=agent.reply_mode,
                 persona_preset=agent.persona_preset,
                 persona_custom_instruction=agent.persona_custom_instruction or "",
-                response_detail="concise", top_k=top_k, enable_observability=False,
+                response_detail="concise", top_k=top_k, enable_observability=True,
+                bypass_cache=True,
             )
             future = asyncio.run_coroutine_threadsafe(persist_item(item, result), main_loop)
             scores = await asyncio.wrap_future(future)
+            logger.info("Langfuse Agent 调用完成: run_id={}, item_id={}, answer_length={}, sources={}", run_id, getattr(item, "id", None), len(result.answer or ""), len(result.sources or []))
             return {"answer": result.answer, "sources": result.sources, "_zhida_scores": scores}
+
+        def sync_task(*, item, **kwargs):
+            """把同步 SDK 回调安全桥接到 FastAPI 主事件循环。
+
+            run_experiment 在 ``asyncio.to_thread`` 的工作线程中执行；不能在该
+            线程新建事件循环，因为 SQLAlchemy 异步会话、RAG 单例和进度回写都
+            绑定主循环。通过主循环提交协程并同步等待，确保每题真正调用 Agent。
+            """
+            future = asyncio.run_coroutine_threadsafe(task(item=item, **kwargs), main_loop)
+            try:
+                return future.result()
+            except Exception:
+                logger.exception("Langfuse Dataset 单题任务失败: run_id={}, item_id={}", run_id, getattr(item, "id", None))
+                raise
 
         def rag_metric_evaluator(*, output, **_kwargs):
             values = (output or {}).get("_zhida_scores", {})
             if not isinstance(values, dict):
                 return []
-            return [{"name": name, "value": value} for name, value in values.items() if isinstance(value, (int, float))]
+            # 固定指标白名单与 Langfuse 评分名称，避免 SDK/前端字段变化导致指标不显示。
+            metric_names = (
+                "faithfulness", "answer_relevancy", "answer_correctness",
+                "recall_at_k", "ndcg_at_k", "input_tokens",
+                "cached_input_tokens", "output_tokens", "cache_hit_rate",
+            )
+            # Langfuse UI 只展示实际创建过的 score；所有字段固定上传，
+            # 无法计算时使用 0，并附带原因，避免不同题目出现字段集合不一致。
+            scores = []
+            for name in metric_names:
+                raw = values.get(name)
+                if isinstance(raw, (int, float)):
+                    scores.append({"name": name, "value": raw})
+                else:
+                    scores.append({"name": name, "value": 0.0, "comment": "该题未产生可用评分，按 0 计"})
+            logger.info("Langfuse 评分上传: run_id={}, metrics={}", run_id, [item["name"] for item in scores])
+            return scores
 
         experiment_name = f"智答引擎 Agent {agent.id} 评测"
         result = await asyncio.to_thread(
@@ -542,7 +650,7 @@ async def _run_langfuse_experiment(run_id: int, dataset_name: str) -> None:
             name=experiment_name,
             run_name=run.langfuse_run_name,
             description="真实 Agent/RAG 评测；已关闭记忆和联网搜索。",
-            task=task,
+            task=sync_task,
             evaluators=[rag_metric_evaluator],
             max_concurrency=1,
             metadata={"zhida_evaluation_run_id": str(run_id), "zhida_agent_id": str(agent.id)},
@@ -551,7 +659,10 @@ async def _run_langfuse_experiment(run_id: int, dataset_name: str) -> None:
             rows = (await db.execute(select(EvaluationResult).where(EvaluationResult.run_id == run_id))).scalars().all()
             current = await db.get(EvaluationRun, run_id)
             current.completed_count = len(rows)
-            current.status = "cancelled" if current.cancel_requested else "completed"
+            completed = len(rows)
+            current.status = "cancelled" if current.cancel_requested else ("completed" if completed == current.case_count else "failed")
+            if current.status == "failed":
+                current.error_message = f"Langfuse 实验仅完成 {completed}/{current.case_count} 题，存在题目调用失败"
             current.retrieval_score = _average([row.retrieval_score for row in rows])
             current.fact_score = _average([row.fact_score for row in rows])
             current.faithfulness_score = _average([row.faithfulness_score for row in rows])
@@ -562,6 +673,18 @@ async def _run_langfuse_experiment(run_id: int, dataset_name: str) -> None:
             current.langfuse_dataset_run_url = _trusted_langfuse_url(getattr(result, "dataset_run_url", None))
             current.completed_at = datetime.utcnow()
             await db.commit()
+            logger.info("Langfuse 实验结束: run_id={}, status={}, completed={}/{}", run_id, current.status, completed, current.case_count)
+    except asyncio.CancelledError:
+        # 取消接口会主动终止主协程；SDK 的同步线程可能仍在收尾，但不再阻塞本地状态。
+        async with async_session_factory() as db:
+            current = await db.get(EvaluationRun, run_id)
+            if current is not None:
+                current.status = "cancelled"
+                current.cancel_requested = True
+                current.completed_at = datetime.utcnow()
+                current.error_message = "评测已取消"
+                await db.commit()
+        raise
     except Exception as exc:
         logger.exception("Langfuse 数据集实验失败：{}", type(exc).__name__)
         async with async_session_factory() as db:
@@ -632,13 +755,14 @@ async def create_run(payload: RunIn, db: AsyncSession = Depends(get_db)):
 
 @router.post("/langfuse/runs")
 async def create_langfuse_run(payload: LangfuseExperimentIn, db: AsyncSession = Depends(get_db)):
-    """从远端 Dataset 创建实验，但只允许评测已挂载的知识库。"""
+    """从远端 Dataset 创建实验；知识库范围自动使用 Agent 当前已挂载知识库。"""
     agent = await db.get(Agent, payload.agent_id)
     if not agent or not agent.is_active:
         raise HTTPException(status_code=404, detail="可用 Agent 不存在")
     mounted = list((await db.execute(select(AgentKnowledgeBase.knowledge_base_id).join(KnowledgeBase, KnowledgeBase.id == AgentKnowledgeBase.knowledge_base_id).where(AgentKnowledgeBase.agent_id == agent.id, KnowledgeBase.is_active.is_(True)))).scalars())
-    kb_ids = [value for value in mounted if value in payload.knowledge_base_ids]
-    if len(kb_ids) != len(set(payload.knowledge_base_ids)):
+    requested_kb_ids = list(dict.fromkeys(payload.knowledge_base_ids))
+    kb_ids = [value for value in mounted if value in requested_kb_ids]
+    if len(kb_ids) != len(requested_kb_ids):
         raise HTTPException(status_code=422, detail="所选知识库必须全部已挂载到该 Agent")
     try:
         dataset = await asyncio.wait_for(asyncio.to_thread(lambda: _langfuse_client().get_dataset(payload.dataset_name)), timeout=30)
@@ -694,15 +818,20 @@ def _ensure_run_deletable(run: EvaluationRun) -> None:
 
 @router.post("/runs/{run_id}/cancel")
 async def cancel_run(run_id: int, db: AsyncSession = Depends(get_db)):
-    """协作式取消：不强杀正在使用 SDK/模型的线程，避免遗留后台调用。"""
+    """立即取消本地评测协程；正在执行的 SDK/模型线程由其自身收尾。"""
     run = await db.get(EvaluationRun, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="评测运行不存在")
     if run.status in {"completed", "failed", "cancelled"}:
         raise HTTPException(status_code=409, detail="该评测已结束，无需取消")
     run.cancel_requested = True
-    run.status = "cancelling"
+    run.status = "cancelled"
+    run.completed_at = datetime.utcnow()
+    run.error_message = "评测已取消"
     await db.flush()
+    task = _run_tasks.get(run.id)
+    if task is not None and not task.done():
+        task.cancel()
     return {"id": run.id, "status": run.status, "cancel_requested": True}
 
 

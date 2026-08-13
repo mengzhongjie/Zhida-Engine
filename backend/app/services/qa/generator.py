@@ -482,6 +482,7 @@ class AnswerGenerator:
         allow_web_search: bool = True,
         enable_observability: bool = True,
         rewrite_count: int = 3,
+        bypass_cache: bool = False,
     ) -> AnswerResult:
         """合并同一用户同一上下文下并发到达的问答，避免重复检索和模型调用。"""
         key = qa_request_coalescer.make_key(
@@ -497,6 +498,7 @@ class AnswerGenerator:
             persona_preset=persona_preset, persona_custom_instruction=persona_custom_instruction, response_detail=response_detail, max_tokens=max_tokens,
             context_pressure=context_pressure, allow_web_search=allow_web_search,
             enable_observability=enable_observability, rewrite_count=rewrite_count,
+            bypass_cache=bypass_cache,
         ))
 
     async def _generate(
@@ -520,6 +522,7 @@ class AnswerGenerator:
         allow_web_search: bool = True,
         enable_observability: bool = True,
         rewrite_count: int = 3,
+        bypass_cache: bool = False,
     ) -> AnswerResult:
         """
         生成回答 —— 端到端流程
@@ -543,7 +546,7 @@ class AnswerGenerator:
             f"pipeline:web-intent-v5:agent:{agent_id if agent_id is not None else 'global'}:"
             f"user:{user_id or 'shared'}:history:{history_key}:{question}"
         )
-        if cached := await query_cache.get(cache_query):
+        if not bypass_cache and (cached := await query_cache.get(cache_query)):
             return AnswerResult(
                 answer=cached,
                 is_cache_hit=True,
