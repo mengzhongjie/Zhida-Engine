@@ -1,6 +1,10 @@
 services:
   zhida-engine:
-    build: .
+    build:
+      context: .
+      args:
+        # 可在服务器 .env 中覆盖：PIP_INDEX_URL=https://pypi.org/simple
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}
     restart: unless-stopped
     ports:
       - "127.0.0.1:18900:18900"
