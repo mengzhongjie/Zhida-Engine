@@ -41,7 +41,31 @@ export default function KnowledgeList() {
       load(); onSuccess?.({}, file)
     } catch (error: any) { message.error(error?.response?.data?.detail || '导入失败'); onError?.(error) } finally { setImporting(false) }
   }
-  const exportSelected = async () => { for (const id of selectedIds) { try { const item = items.find(value => value.id === id); const response = await fetch(`/api/v1/knowledge/bases/${id}/export`, { credentials: 'include' }); if (!response.ok) throw new Error(); const url = URL.createObjectURL(await response.blob()); const link = document.createElement('a'); link.href = url; link.download = `${item?.name || '知识库'}.zip`; link.click(); URL.revokeObjectURL(url) } catch { message.error(`知识库 ${id} 导出失败`); return } } message.success(`已开始导出 ${selectedIds.length} 个知识库`) }
+  const exportSelected = async () => {
+    for (const id of selectedIds) {
+      try {
+        const item = items.find(value => value.id === id)
+        const response = await fetch(`/api/v1/knowledge/bases/${id}/export`, { credentials: 'include' })
+        if (!response.ok) {
+          const detail = await response.json().catch(() => null) as { detail?: string } | null
+          throw new Error(detail?.detail || `服务器返回 ${response.status}`)
+        }
+        const url = URL.createObjectURL(await response.blob())
+        const link = document.createElement('a')
+        link.href = url
+        link.download = `${item?.name || '知识库'}.zip`
+        link.style.display = 'none'
+        document.body.appendChild(link)
+        link.click()
+        // 大文件下载可能不会在 click 后立即开始，延迟释放 Blob URL。
+        window.setTimeout(() => { URL.revokeObjectURL(url); link.remove() }, 60_000)
+      } catch (error: any) {
+        message.error(`知识库 ${id} 导出失败：${error?.message || '未知错误'}`)
+        return
+      }
+    }
+    message.success(`已开始导出 ${selectedIds.length} 个知识库`)
+  }
   const columns = [
     { title: '知识库', dataIndex: 'name', render: (name: string, item: KnowledgeBase) => <Space><DatabaseOutlined style={{ color: '#3aa7ff' }} /><div><Text strong>{name}</Text><br /><Text type="secondary">{item.description || '暂无描述'}</Text></div></Space> },
     { title: '文档', dataIndex: 'document_count', width: 100, render: (value: number) => <Tag color="blue">{value} 份</Tag> },
