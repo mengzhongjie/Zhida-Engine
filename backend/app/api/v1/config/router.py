@@ -61,6 +61,17 @@ def _mask_api_key(api_key: str) -> str:
     return api_key[:4] + "*" * (len(api_key) - 8) + api_key[-4:]
 
 
+def _initial_is_active(request: LLMConfigCreate) -> bool:
+    """决定新建模型的初始启用状态。
+
+    独立模型仅作为备用配置保存，必须由用户在配置列表中显式启用。
+    运行链路模型保留调用方的显式选择（前端默认传入启用）。
+    """
+    if not (request.is_primary or request.is_fallback or request.is_context_model):
+        return False
+    return request.is_active
+
+
 def _config_to_out(config: LLMConfig) -> LLMConfigOut:
     """将数据库模型转为输出 Schema"""
     return LLMConfigOut(
@@ -198,7 +209,8 @@ async def create_config(
         is_primary=request.is_primary,
         is_fallback=request.is_fallback and not request.is_primary,
         is_context_model=request.is_context_model,
-        is_active=request.is_active,
+        # 独立模型不应在创建时进入可调用集合；后续由启用操作显式打开。
+        is_active=_initial_is_active(request),
         context_rewrite_timeout_seconds=request.context_rewrite_timeout_seconds,
         context_compaction_timeout_seconds=request.context_compaction_timeout_seconds,
         extra_config=request.extra_config,

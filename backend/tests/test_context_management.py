@@ -5,7 +5,7 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 from types import SimpleNamespace
 
-from app.api.v1.config.router import create_config
+from app.api.v1.config.router import _initial_is_active, create_config
 from app.api.v1.user.router import _context_policy, _context_usage_ratio, _trim_records_to_budget
 from app.models.auth import Conversation
 from app.models.qa import QAHistory
@@ -124,6 +124,18 @@ async def test_generate_forwards_rewrite_count_to_internal_pipeline(monkeypatch)
 def test_llm_config_schema_rejects_removed_agent_scope():
     with pytest.raises(ValidationError):
         LLMConfigCreate(provider_id="custom", model_name="test", agent_id=2)
+
+
+def test_new_standalone_llm_config_is_disabled_until_explicitly_enabled():
+    assert _initial_is_active(LLMConfigCreate(
+        provider_id="custom", model_name="standalone", is_primary=False,
+    )) is False
+    assert _initial_is_active(LLMConfigCreate(
+        provider_id="custom", model_name="primary", is_primary=True,
+    )) is True
+    assert _initial_is_active(LLMConfigCreate(
+        provider_id="custom", model_name="disabled-primary", is_active=False,
+    )) is False
 
 
 @pytest.mark.asyncio

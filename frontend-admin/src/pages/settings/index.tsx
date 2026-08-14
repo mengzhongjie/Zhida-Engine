@@ -403,6 +403,8 @@ export default function SettingsPage() {
       is_fallback: values.role === 'fallback',
       is_context_model: values.role === 'context',
     }
+    // 独立模型只保存配置，不在创建时进入任何调用链路；需要时再从列表显式启用。
+    if (!editingId && values.role === 'standalone') payload.is_active = false
     delete payload.role
     try {
       if (editingId) {
@@ -472,7 +474,7 @@ export default function SettingsPage() {
     {
       key: 'llm',
       label: 'LLM 配置',
-      children: <div className="web-search-settings"><Alert message="主模型与降级链路" description="主模型调用失败后，会按已启用的降级配置继续尝试。独立评测模型可以保持启用，但无需加入主/降级链路。" type="info" showIcon />
+      children: <div className="web-search-settings"><Alert message="主模型与降级链路" description="主模型调用失败后，会按已启用的降级配置继续尝试。独立模型创建后默认停用；如需用于评测等独立用途，请在保存后手动启用。" type="info" showIcon />
         <div className="web-search-provider-list">{configs.map(config => <Card key={config.id} size="small" loading={loading} className={`web-search-provider-card ${config.is_active ? 'is-active' : ''}`}><div className="web-search-provider-main"><div><Space><Text strong>{config.provider_name}</Text>{config.is_primary && <Tag color="blue">主模型</Tag>}{config.is_fallback && <Tag color="orange">降级</Tag>}{config.is_context_model && <Tag color="purple">重写 / 压缩</Tag>}</Space><Text type="secondary">{config.model_name}</Text></div><div className="web-search-provider-status"><Tag className={config.is_active ? 'search-chain-active' : undefined} color={config.is_active ? 'success' : 'default'}>{config.is_active ? '已启用' : '已停用'}</Tag><Text type={config.last_test_success === false ? 'danger' : 'secondary'}>{config.last_test_success === true ? '可用' : config.last_test_success === false ? '不可用' : '待检测'}</Text></div></div><Space wrap className="web-search-provider-actions"><Button onClick={() => handleTestConfig(config)} loading={configTestingId === config.id}>测试连接</Button><Button icon={<EditOutlined />} onClick={() => handleEdit(config)}>配置</Button><Button type={config.is_active ? 'default' : 'primary'} onClick={() => toggleLLMConfig(config)}>{config.is_active ? '停用' : '启用'}</Button><Button danger icon={<DeleteOutlined />} disabled={config.is_primary} onClick={() => handleDelete(config.id)}>删除</Button></Space></Card>)}</div>
       </div>,
     },
@@ -704,11 +706,13 @@ export default function SettingsPage() {
           <Divider />
 
           <Form.Item name="role" label="调用角色" rules={[{ required: true, message: '请选择调用角色' }]}>
-            <Select options={[
+            <Select onChange={(role) => {
+              if (!editingId) form.setFieldValue('is_active', role !== 'standalone')
+            }} options={[
               { value: 'primary', label: '主模型（优先调用）' },
               { value: 'fallback', label: '降级模型（主模型失败后调用）' },
               { value: 'context', label: '重写 / 压缩模型（上下文处理）' },
-              { value: 'standalone', label: '独立模型（不加入问答链路）' },
+              { value: 'standalone', label: '独立模型（创建后默认停用）' },
             ]} />
           </Form.Item>
 
