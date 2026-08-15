@@ -24,6 +24,7 @@
 - **🔍 RAG 问答** — 基于混合检索（向量 + 关键词）的智能问答，支持来源引用
 - **🤖 Agent 管理** — 创建 AI 助手，绑定知识库和 LLM 配置
 - **💬 管理台对话** — 选择已启用 Agent，直接使用其知识库进行对话
+- **🤖 机器人渠道** — 统一机器人设置；已支持 QQ 官方机器人在已绑定群内通过 @机器人 调用指定 Agent
 - **🔐 网页访问控制** — 管理员使用账号、密码和图形验证码登录；用户使用受 Agent 授权的一次性激活码登录
 - **🧠 上下文感知会话** — Agent 独立上下文窗口（32-256K），自动问题改写、会话压缩与历史裁剪
 - **🧠 长期记忆** — 基于 Mem0 的跨会话个性化记忆
@@ -333,6 +334,8 @@ ZHIDA_WEB_SEARCH_MAX_RESULTS=3
 | `/api/v1/admin/settings` | GET/PUT | 系统设置（含维护模式） |
 | `/api/v1/admin/observability` | GET/PUT | Langfuse 可观测性配置 |
 | `/api/v1/admin/observability/test` | POST | 测试已保存的 Langfuse 连接 |
+| `/api/v1/qq-bot/config` | GET/PUT | QQ 官方机器人凭据与启停 |
+| `/api/v1/qq-bot/bindings` | GET/POST | QQ 群 OpenID 与 Agent 绑定 |
 
 ---
 
@@ -482,6 +485,12 @@ curl -b ./zhida-admin.cookie -X POST http://127.0.0.1:18900/api/v1/knowledge/bas
 ```
 
 检索排序由 RRF 融合（向量 0.45 / 关键词 0.55）+ 身份文件名加分完成。
+
+### QQ 官方机器人
+
+在管理台「设置 → 机器人」中配置 QQ 开放平台的 AppID 与 AppSecret，并将目标群的 `group_openid` 绑定到一个已启用 Agent。后端主动连接 QQ Gateway；群内成员 `@机器人` 后，消息会进入该 Agent 的真实 RAG 链路并以纯文本回复。因此不需要公网 Webhook、端口穿透，也不支持读取普通未 @ 的群消息。
+
+首次绑定可使用「获取群 OpenID」：管理员主动开启 5 分钟窗口后，在目标群 @ 机器人发送任意消息，管理端即可读取 OpenID。窗口内仅采集标识，不回复、不调用模型。未绑定群一律不调用 Agent。
 
 ### 上下文管理
 

@@ -1,6 +1,6 @@
 # 智答引擎（ZhiDa Engine）API 文档
 
-> 本文档描述当前部署版本的真实 API。渠道（QQ/微信）、群聊自动学习相关接口为历史设计，当前版本未注册任何渠道路由。
+> 本文档描述当前部署版本的真实 API。已支持 QQ 官方机器人渠道；个人微信、Wechaty、NapCat 与群聊自动学习不属于当前交付范围。
 
 Base URL: `/api/v1`
 
@@ -32,8 +32,9 @@ Cookie 属性：`HttpOnly + SameSite=Strict`，无 `domain`（host-only）。管
 7. [Agent 管理 agent](#7-agent-管理-agent)
 8. [问答服务 qa](#8-问答服务-qa)
 9. [系统管理 admin](#9-系统管理-admin)
-10. [附录 A：配置项参考](#附录-a配置项参考)
-11. [附录 B：错误码](#附录-b错误码)
+10. [机器人渠道 qq-bot](#10-机器人渠道-qq-bot)
+11. [附录 A：配置项参考](#附录-a配置项参考)
+12. [附录 B：错误码](#附录-b错误码)
 
 ---
 
@@ -1099,6 +1100,22 @@ PUT /admin/persona-presets/{preset_key}
 人格预设列表与更新（`preset_key` ∈ `professional` / `tutor` / `friendly` / `direct`）。
 
 ---
+
+## 10. 机器人渠道 qq-bot
+
+所有 QQ 机器人接口均需要管理员会话。机器人通过 QQ 官方 Gateway 主动建立 WebSocket 连接，不需要公网 Webhook；只处理群内 `@机器人` 事件。
+
+| 端点 | 方法 | 说明 |
+|---|---|---|
+| `/qq-bot/config` | GET | 获取 QQ 机器人配置，AppSecret 脱敏返回 |
+| `/qq-bot/config` | PUT | 保存 AppID、AppSecret 并启用或停用机器人 |
+| `/qq-bot/config/test` | POST | 使用已保存凭据获取 access token，测试官方连接 |
+| `/qq-bot/bindings` | GET/POST | 查询 / 创建 `group_openid → agent_id` 绑定 |
+| `/qq-bot/bindings/{id}` | DELETE | 删除群绑定 |
+| `/qq-bot/group-openid-capture/start` | POST | 开启 5 分钟群 OpenID 获取窗口 |
+| `/qq-bot/group-openid-capture` | GET | 读取窗口内收到的群 OpenID |
+
+`group_openid` 不是普通 QQ 群号。管理员开启获取窗口后，在目标群 @机器人发送任意消息即可取得；该模式仅记录标识，不回复、不调用 Agent。正常运行时，未绑定群不会触发 RAG；已绑定群的 @消息使用对应 Agent 的知识库和模型回答，并在发送前转为 QQ 可读纯文本。
 
 ## 附录 A：配置项参考
 
