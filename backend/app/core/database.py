@@ -114,6 +114,7 @@ async def init_db():
         import app.models.web_search_config # noqa: F401
         import app.models.observability_config  # noqa: F401
         import app.models.feishu_config   # noqa: F401
+        import app.models.qq_bot          # noqa: F401
         import app.models.import_job      # noqa: F401
         import app.models.vision_config   # noqa: F401
         import app.models.agent_knowledge_base  # noqa: F401
@@ -212,6 +213,7 @@ async def _run_compatible_migrations(conn):
         "ALTER TABLE evaluation_runs ADD COLUMN cancel_requested BOOLEAN NOT NULL DEFAULT 0",
         "ALTER TABLE evaluation_runs ADD COLUMN experiment_name VARCHAR(120)",
         "ALTER TABLE evaluation_runs ADD COLUMN retrieval_top_k INTEGER NOT NULL DEFAULT 4",
+        "ALTER TABLE evaluation_runs ADD COLUMN embedding_model_name VARCHAR(200)",
         "ALTER TABLE evaluation_runs ADD COLUMN input_tokens INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE evaluation_runs ADD COLUMN cached_input_tokens INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE evaluation_runs ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0",
