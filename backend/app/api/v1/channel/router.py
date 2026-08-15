@@ -61,6 +61,17 @@ async def test_config(db: AsyncSession = Depends(get_db)):
     item.last_test_success, item.last_error = ok, None if ok else detail
     await db.commit(); return {"success": ok, "message": "QQ 官方机器人凭据可用" if ok else detail}
 
+@router.post("/group-openid-capture/start")
+async def start_group_openid_capture(db: AsyncSession = Depends(get_db)):
+    if not (await _config(db)).enabled: raise HTTPException(422, "请先启用 QQ 机器人并确认其已在线")
+    from app.services.channel.qq_bot import qq_bot_service
+    return {"remaining_seconds": qq_bot_service.start_group_openid_capture()}
+
+@router.get("/group-openid-capture")
+async def group_openid_capture_status():
+    from app.services.channel.qq_bot import qq_bot_service
+    return qq_bot_service.group_openid_capture_status()
+
 @router.get("/bindings")
 async def bindings(db: AsyncSession = Depends(get_db)):
     rows = (await db.execute(select(QQBotGroupBinding, Agent.name).join(Agent, Agent.id == QQBotGroupBinding.agent_id).order_by(QQBotGroupBinding.id.desc()))).all()

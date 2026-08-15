@@ -34,7 +34,12 @@ def _qq_plain_text(value: str, limit: int = 1900) -> str:
     return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
 
 class QQBotService:
-    def __init__(self): self._task=None; self._seen={}; self._send_lock=asyncio.Semaphore(4)
+    def __init__(self): self._task=None; self._seen={}; self._send_lock=asyncio.Semaphore(4); self._capture_until=0.0; self._captured_groups=[]
+    def start_group_openid_capture(self):
+        self._captured_groups=[]; self._capture_until=time.monotonic()+300
+        return 300
+    def group_openid_capture_status(self):
+        return {"active":time.monotonic()<self._capture_until,"remaining_seconds":max(0,int(self._capture_until-time.monotonic())),"group_openids":self._captured_groups.copy()}
     async def start(self):
         if self._task is None or self._task.done(): self._task=asyncio.create_task(self._run(), name="qq-bot-gateway")
     async def stop(self):
@@ -88,6 +93,9 @@ class QQBotService:
         self._seen[event_id]=time.monotonic(); self._seen={k:v for k,v in self._seen.items() if time.monotonic()-v<3600}
         question=re.sub(r"<@!?.+?>","",str(event.get("content") or "")).strip()
         if not question or len(question)>4000: return
+        if time.monotonic() < self._capture_until and group not in self._captured_groups:
+            self._captured_groups.append(group)
+            logger.info("QQ 群 OpenID 获取成功: group_openid={}", group)
         async with async_session_factory() as db:
             binding=(await db.execute(select(QQBotGroupBinding).where(QQBotGroupBinding.group_openid==group,QQBotGroupBinding.is_active.is_(True)))).scalar_one_or_none()
             agent=await db.get(Agent,binding.agent_id) if binding else None
