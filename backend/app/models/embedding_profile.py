@@ -14,7 +14,7 @@ class EmbeddingProfile(Base):
     local_device = Column(String(20), default="cpu")
     cloud_base_url = Column(String(500), default="")
     cloud_api_key = Column(Text, default="")
-    cloud_model = Column(String(200), default="text-embedding-3-small")
+    cloud_model = Column(String(200), default="")
     cloud_dimension = Column(Integer, default=1536)
     is_primary = Column(Boolean, default=False, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)

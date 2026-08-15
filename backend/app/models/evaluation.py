@@ -25,6 +25,8 @@ class EvaluationRun(Base):
     experiment_name = Column(String(120), nullable=True)
     # 本次检索评测与 RAG 调用共同使用的 K，保证 NDCG/Recall 与实际候选集一致。
     retrieval_top_k = Column(Integer, nullable=False, default=4)
+    # 运行创建时固定记录实际生效的向量化模型，便于复现实验并参与活动运行去重。
+    embedding_model_name = Column(String(200), nullable=True)
     status = Column(String(20), nullable=False, default="pending")
     case_count = Column(Integer, nullable=False, default=0)
     completed_count = Column(Integer, nullable=False, default=0)

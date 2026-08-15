@@ -21,6 +21,7 @@ from app.models.agent import Agent
 from app.models.agent_knowledge_base import AgentKnowledgeBase
 from app.models.evaluation import EvaluationCase, EvaluationResult, EvaluationRun
 from app.models.knowledge import Document, KnowledgeBase
+from app.services.knowledge.embedder import embedding_service
 from app.services.qa.generator import answer_generator
 from app.services.llm.gateway import llm_gateway
 
@@ -196,6 +197,19 @@ async def _ensure_run_not_active(db: AsyncSession, agent_id: int, run_key: str) 
     ))).scalar_one_or_none()
     if active is not None:
         raise HTTPException(status_code=409, detail=f"该 Agent 的相同数据集评测正在运行（运行 #{active}）")
+
+def _active_embedding_model_name() -> str:
+    """读取创建实验时真实生效的向量模型，而不是厂商模板默认值。"""
+    model_name = embedding_service.model_name.strip()
+    if not model_name or model_name == "未配置":
+        raise HTTPException(status_code=422, detail="当前未配置可用的向量化模型，无法运行检索评测")
+    return model_name
+
+def _run_key(mode: str, knowledge_base_ids: list[int], retrieval_top_k: int, embedding_model_name: str, dataset_name: str | None = None) -> str:
+    """同一活动实验必须同时拥有相同范围、K 值和向量模型。"""
+    kb_key = ",".join(map(str, sorted(knowledge_base_ids)))
+    dataset_key = f":dataset:{dataset_name}" if dataset_name else ""
+    return f"{mode}{dataset_key}:kb:{kb_key}:k:{retrieval_top_k}:embedding:{embedding_model_name}"
 
 async def _is_cancel_requested(run_id: int) -> bool:
     async with async_session_factory() as db:
@@ -653,7 +667,12 @@ async def _run_langfuse_experiment(run_id: int, dataset_name: str) -> None:
             task=sync_task,
             evaluators=[rag_metric_evaluator],
             max_concurrency=1,
-            metadata={"zhida_evaluation_run_id": str(run_id), "zhida_agent_id": str(agent.id)},
+            metadata={
+                "zhida_evaluation_run_id": str(run_id),
+                "zhida_agent_id": str(agent.id),
+                "zhida_embedding_model": run.embedding_model_name or "",
+                "zhida_retrieval_top_k": run.retrieval_top_k,
+            },
         )
         async with async_session_factory() as db:
             rows = (await db.execute(select(EvaluationResult).where(EvaluationResult.run_id == run_id))).scalars().all()
@@ -741,9 +760,10 @@ async def create_run(payload: RunIn, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=422, detail="所选黄金集必须全部属于该 Agent 已挂载的知识库")
     case_count = len((await db.execute(select(EvaluationCase.id).where(EvaluationCase.knowledge_base_id.in_(kb_ids), EvaluationCase.is_enabled.is_(True)))).scalars().all()) if kb_ids else 0
     if not case_count: raise HTTPException(status_code=422, detail="所选 Agent 挂载的知识库没有启用的黄金集")
-    run_key = f"local:{','.join(map(str, sorted(kb_ids)))}"
+    embedding_model_name = _active_embedding_model_name()
+    run_key = _run_key("local", kb_ids, payload.retrieval_top_k, embedding_model_name)
     await _ensure_run_not_active(db, agent.id, run_key)
-    run=EvaluationRun(agent_id=agent.id, experiment_name=payload.experiment_name, retrieval_top_k=payload.retrieval_top_k, case_count=case_count, snapshot_json=json.dumps({"knowledge_base_ids":kb_ids, "agent_name":agent.name}, ensure_ascii=False), langfuse_run_name=f"agent-evaluation-{agent.id}-{datetime.utcnow():%Y%m%d%H%M%S}", run_key=run_key)
+    run=EvaluationRun(agent_id=agent.id, experiment_name=payload.experiment_name, retrieval_top_k=payload.retrieval_top_k, embedding_model_name=embedding_model_name, case_count=case_count, snapshot_json=json.dumps({"knowledge_base_ids":kb_ids, "agent_name":agent.name, "embedding_model_name":embedding_model_name, "retrieval_top_k":payload.retrieval_top_k}, ensure_ascii=False), langfuse_run_name=f"agent-evaluation-{agent.id}-{datetime.utcnow():%Y%m%d%H%M%S}", run_key=run_key)
     db.add(run)
     try:
         await db.flush()
@@ -776,9 +796,10 @@ async def create_langfuse_run(payload: LangfuseExperimentIn, db: AsyncSession = 
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     run_name = f"agent-evaluation-{agent.id}-{datetime.utcnow():%Y%m%d%H%M%S}"
-    run_key = f"langfuse:{payload.dataset_name}"
+    embedding_model_name = _active_embedding_model_name()
+    run_key = _run_key("langfuse", kb_ids, payload.retrieval_top_k, embedding_model_name, payload.dataset_name)
     await _ensure_run_not_active(db, agent.id, run_key)
-    run = EvaluationRun(agent_id=agent.id, experiment_name=payload.experiment_name, retrieval_top_k=payload.retrieval_top_k, case_count=len(items), snapshot_json=json.dumps({"knowledge_base_ids": kb_ids, "agent_name": agent.name}, ensure_ascii=False), langfuse_run_name=run_name, langfuse_dataset_name=payload.dataset_name, run_key=run_key)
+    run = EvaluationRun(agent_id=agent.id, experiment_name=payload.experiment_name, retrieval_top_k=payload.retrieval_top_k, embedding_model_name=embedding_model_name, case_count=len(items), snapshot_json=json.dumps({"knowledge_base_ids": kb_ids, "agent_name": agent.name, "embedding_model_name": embedding_model_name, "retrieval_top_k": payload.retrieval_top_k}, ensure_ascii=False), langfuse_run_name=run_name, langfuse_dataset_name=payload.dataset_name, run_key=run_key)
     db.add(run)
     try:
         await db.flush()
@@ -793,7 +814,7 @@ async def list_runs(agent_id: int | None = None, db: AsyncSession = Depends(get_
     query=select(EvaluationRun).order_by(EvaluationRun.created_at.desc()).limit(50)
     if agent_id: query=query.where(EvaluationRun.agent_id == agent_id)
     rows=(await db.execute(query)).scalars().all()
-    return [{"id":row.id,"agent_id":row.agent_id,"experiment_name":row.experiment_name,"retrieval_top_k":row.retrieval_top_k,"status":row.status,"case_count":row.case_count,"completed_count":row.completed_count,"retrieval_score":row.retrieval_score,"fact_score":row.fact_score,"faithfulness_score":row.faithfulness_score,"answer_relevancy_score":row.answer_relevancy_score,"answer_correctness_score":row.answer_correctness_score,"ndcg_at_k_score":row.ndcg_at_k_score,"recall_at_k_score":row.recall_at_k_score,"input_tokens":row.input_tokens,"cached_input_tokens":row.cached_input_tokens,"output_tokens":row.output_tokens,"langfuse_run_name":row.langfuse_run_name,"langfuse_dataset_name":row.langfuse_dataset_name,"langfuse_dataset_run_url":row.langfuse_dataset_run_url,"run_key":row.run_key,"cancel_requested":row.cancel_requested,"created_at":row.created_at,"error_message":row.error_message} for row in rows]
+    return [{"id":row.id,"agent_id":row.agent_id,"experiment_name":row.experiment_name,"retrieval_top_k":row.retrieval_top_k,"embedding_model_name":row.embedding_model_name,"status":row.status,"case_count":row.case_count,"completed_count":row.completed_count,"retrieval_score":row.retrieval_score,"fact_score":row.fact_score,"faithfulness_score":row.faithfulness_score,"answer_relevancy_score":row.answer_relevancy_score,"answer_correctness_score":row.answer_correctness_score,"ndcg_at_k_score":row.ndcg_at_k_score,"recall_at_k_score":row.recall_at_k_score,"input_tokens":row.input_tokens,"cached_input_tokens":row.cached_input_tokens,"output_tokens":row.output_tokens,"langfuse_run_name":row.langfuse_run_name,"langfuse_dataset_name":row.langfuse_dataset_name,"langfuse_dataset_run_url":row.langfuse_dataset_run_url,"run_key":row.run_key,"cancel_requested":row.cancel_requested,"created_at":row.created_at,"error_message":row.error_message} for row in rows]
 
 
 @router.patch("/runs/{run_id}/name")

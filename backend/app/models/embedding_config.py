@@ -40,7 +40,7 @@ class EmbeddingConfig(Base):
     # 云端 API 配置
     cloud_base_url = Column(String(500), default="", comment="云端 API 基础地址")
     cloud_api_key = Column(Text, default="", comment="云端 API Key（加密存储）")
-    cloud_model = Column(String(200), default="text-embedding-3-small", comment="云端模型名称")
+    cloud_model = Column(String(200), default="", comment="云端模型名称")
     cloud_dimension = Column(Integer, default=1536, comment="云端向量维度")
 
     # 时间戳

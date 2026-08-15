@@ -44,8 +44,8 @@ class EmbeddingProfileRequest(BaseModel):
     mode: Literal["cloud"] = "cloud"
     cloud_base_url: str = ""
     cloud_api_key: str | None = None
-    cloud_model: str = "text-embedding-3-small"
-    cloud_dimension: int = 1536
+    cloud_model: str = ""
+    cloud_dimension: int = 0
     is_active: bool = True
 
 
@@ -395,7 +395,8 @@ async def autofill_embedding_provider(request: dict):
     """
     根据厂商 ID 自动填充配置
 
-    选择厂商后调用此接口，自动填充 base_url、默认模型、维度等信息。
+    选择厂商后调用此接口，仅自动填充厂商和 API 地址。
+    模型名称和维度必须由用户按实际可用模型填写，避免模板默认值被误当作配置。
     """
     provider_id = request.get("provider_id", "")
     provider = get_embedding_provider_by_id(provider_id)
