@@ -17,9 +17,17 @@ class ConfigIn(BaseModel):
     app_id: str = Field(default="", max_length=100)
     app_secret: str | None = Field(default=None, max_length=500)
     response_detail: str | None = Field(default=None, pattern="^(concise|detailed)$")
+    p2p_agent_id: int | None = Field(default=None, gt=0)
 
 class DetailIn(BaseModel):
     response_detail: str = Field(..., pattern="^(concise|detailed)$")
+
+
+class P2pIn(BaseModel):
+    p2p_enabled: bool | None = Field(default=None)
+    p2p_access_mode: str | None = Field(default=None, pattern="^(all|allowlist|blocklist)$")
+    p2p_agent_id: int | None = Field(default=None, gt=0)
+    p2p_allow_openids: str | None = Field(default=None, max_length=2000)
 
 class BindingIn(BaseModel):
     group_openid: str = Field(min_length=1, max_length=128)
@@ -39,7 +47,7 @@ async def _config(db):
     return item
 
 def _out(item):
-    return {"enabled": item.enabled, "app_id": item.app_id, "app_secret": mask_api_key(decrypt_api_key(item.app_secret)), "last_test_success": item.last_test_success, "last_error": item.last_error, "response_detail": item.response_detail}
+    return {"enabled": item.enabled, "app_id": item.app_id, "app_secret": mask_api_key(decrypt_api_key(item.app_secret)), "last_test_success": item.last_test_success, "last_error": item.last_error, "response_detail": item.response_detail, "p2p_enabled": item.p2p_enabled, "p2p_access_mode": item.p2p_access_mode, "p2p_agent_id": item.p2p_agent_id, "p2p_allow_openids": item.p2p_allow_openids}
 
 @router.get("/config")
 async def get_config(db: AsyncSession = Depends(get_db)): return _out(await _config(db))
@@ -52,6 +60,8 @@ async def save_config(payload: ConfigIn, db: AsyncSession = Depends(get_db)):
     item.enabled, item.app_id = payload.enabled, payload.app_id.strip()
     if payload.response_detail:
         item.response_detail = payload.response_detail
+    if payload.p2p_agent_id is not None:
+        item.p2p_agent_id = payload.p2p_agent_id
     if payload.app_secret: item.app_secret = encrypt_api_key(payload.app_secret.strip())
     await db.commit()
     from app.services.channel.qq_bot import qq_bot_service
@@ -64,6 +74,23 @@ async def update_detail(payload: DetailIn, db: AsyncSession = Depends(get_db)):
     item.response_detail = payload.response_detail
     await db.commit()
     return {"response_detail": item.response_detail}
+
+
+@router.put("/config/p2p")
+async def update_p2p(payload: P2pIn, db: AsyncSession = Depends(get_db)):
+    item = await _config(db)
+    # 只更新显式传入的字段（exclude_unset），支持把 p2p_agent_id 清空为 None。
+    for key, value in payload.model_dump(exclude_unset=True).items():
+        if key == "p2p_enabled":
+            item.p2p_enabled = bool(value)
+        elif key == "p2p_access_mode":
+            item.p2p_access_mode = value
+        elif key == "p2p_agent_id":
+            item.p2p_agent_id = value
+        elif key == "p2p_allow_openids":
+            item.p2p_allow_openids = (value or "").strip()
+    await db.commit()
+    return {"p2p_enabled": item.p2p_enabled, "p2p_access_mode": item.p2p_access_mode, "p2p_agent_id": item.p2p_agent_id, "p2p_allow_openids": item.p2p_allow_openids}
 
 @router.post("/config/test")
 async def test_config(db: AsyncSession = Depends(get_db)):

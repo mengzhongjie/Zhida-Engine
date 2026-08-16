@@ -21,6 +21,8 @@ from app.models.agent import Agent
 from app.models.agent_knowledge_base import AgentKnowledgeBase
 from app.models.feishu_bot import FeishuBotConfig, FeishuChatBinding
 from app.models.knowledge import KnowledgeBase
+from app.models.qa import QAHistory
+from app.services.cache.rate_limiter import rate_limiter, RateLimitResult
 from app.services.channel.utils import plain_text
 from app.services.qa.generator import answer_generator
 
@@ -51,6 +53,7 @@ class FeishuBotService:
         self._seen: dict[str, float] = {}
         self._token_cache: dict[str, tuple[str, float]] = {}
         self._send_lock = asyncio.Semaphore(4)
+        self._handle_sem = asyncio.Semaphore(8)
 
     # ---------------------------------------------------------------- 凭据
     async def _credentials(self):
@@ -225,16 +228,23 @@ class FeishuBotService:
                 return
             if (getattr(message, "message_type", "") or "") != "text":
                 return
-            if (getattr(message, "chat_type", "") or "") != "group":
-                return  # 第一版仅支持群聊
+            chat_type = getattr(message, "chat_type", "") or ""
+            if chat_type not in ("group", "p2p"):
+                return  # 支持群聊与单聊（私聊）
             import lark_oapi.ws.client as wsc
-            wsc.loop.create_task(self._handle_message_async(event, message))
+            wsc.loop.create_task(self._dispatch(event, message))
         except Exception:
             logger.exception("飞书消息调度失败")
+
+    async def _dispatch(self, event, message):
+        """限制同时处理的消息数（P4：避免高峰创建无限 task）。"""
+        async with self._handle_sem:
+            await self._handle_message_async(event, message)
 
     async def _handle_message_async(self, event, message):
         message_id = getattr(message, "message_id", "") or ""
         chat_id = getattr(message, "chat_id", "") or ""
+        chat_type = getattr(message, "chat_type", "") or ""
         if not message_id or not chat_id:
             return
         now = time.monotonic()
@@ -244,8 +254,8 @@ class FeishuBotService:
         if len(self._seen) > 2000:
             self._seen = {k: v for k, v in self._seen.items() if now - v < 3600}
 
-        # 群消息必须 @ 机器人（宽松模式：拿不到机器人 open_id 时放行）
-        if self._bot_open_id:
+        # 群消息必须 @ 机器人（宽松模式：拿不到机器人 open_id 时放行）；单聊无需 @。
+        if chat_type == "group" and self._bot_open_id:
             mentions = getattr(message, "mentions", None) or []
             mentioned = any(
                 (getattr(m, "id", None) is not None and getattr(m.id, "open_id", None) == self._bot_open_id)
@@ -264,33 +274,72 @@ class FeishuBotService:
         if sender_id is not None:
             sender_open_id = getattr(sender_id, "open_id", "") or ""
 
+        # P1 限流：按"群+成员"令牌桶/滑动窗口控制，防刷消息导致 LLM 调用风暴。
+        if rate_limiter.check(f"feishu:{chat_id}:{sender_open_id or 'unknown'}", "", is_private=True) != RateLimitResult.ALLOW:
+            logger.info("飞书消息已限流忽略: chat={} member={}", chat_id, sender_open_id or 'unknown')
+            return
+
         async with self._send_lock:
             try:
-                result = await self._resolve_and_answer(chat_id, question, sender_open_id)
+                result = await self._resolve_and_answer(chat_type, chat_id, question, sender_open_id)
                 if result:
-                    await self._reply(message_id, result)
+                    # 写入本地问答历史，进入管理台观测/评测链路（失败不影响回复）
+                    try:
+                        async with async_session_factory() as db:
+                            db.add(QAHistory(
+                                agent_id=result.agent_id, question=question, answer=result.answer,
+                                sources=json.dumps(result.sources, ensure_ascii=False),
+                                total_time_ms=result.retrieval_time_ms + result.generation_time_ms,
+                                channel="feishu", chat_id=chat_id,
+                                user_id=f"feishu:{chat_id}:{sender_open_id or 'unknown'}",
+                                input_tokens=result.input_tokens, cached_input_tokens=result.cached_input_tokens,
+                                output_tokens=result.output_tokens, is_degraded=result.degraded,
+                                web_search_count=result.web_search_count,
+                            ))
+                            await db.commit()
+                    except Exception:
+                        logger.exception("飞书问答历史写入失败: chat={}", chat_id)
+                    await self._reply(message_id, result.answer)
             except Exception:
                 logger.exception("飞书消息处理失败: chat={} msg={}", chat_id, message_id)
 
-    async def _resolve_and_answer(self, chat_id: str, question: str, sender_open_id: str) -> str | None:
+    async def _resolve_and_answer(self, chat_type: str, chat_id: str, question: str, sender_open_id: str):
         async with async_session_factory() as db:
-            binding = (
-                await db.execute(
-                    select(FeishuChatBinding).where(
-                        FeishuChatBinding.chat_id == chat_id,
-                        FeishuChatBinding.is_active.is_(True),
-                    )
-                )
-            ).scalar_one_or_none()
-            if binding is None:
-                logger.info("飞书群消息已忽略：该群尚未绑定 Agent，chat_id={}", chat_id)
-                return None
-            agent = await db.get(Agent, binding.agent_id)
-            if not agent or not agent.is_active:
-                logger.warning("飞书群消息已忽略：绑定的 Agent 不可用，chat_id={}, agent_id={}", chat_id, binding.agent_id)
-                return None
             config = await db.get(FeishuBotConfig, 1)
             response_detail = (config.response_detail if config else "") or "concise"
+            if chat_type == "p2p":
+                # 单聊：由配置的私聊默认 Agent 回答（开关 + 权限模式安全边界）
+                if config is None or not config.p2p_enabled:
+                    logger.info("飞书私聊消息已忽略：私聊未启用，user={}", sender_open_id)
+                    return None
+                mode = config.p2p_access_mode or "all"
+                openids = [x.strip() for x in (config.p2p_allow_openids or "").split(",") if x.strip()]
+                if mode == "allowlist" and (not openids or sender_open_id not in openids):
+                    logger.info("飞书私聊消息已忽略：用户不在私聊白名单，user={}", sender_open_id)
+                    return None
+                if mode == "blocklist" and sender_open_id in openids:
+                    logger.info("飞书私聊消息已忽略：用户在私聊黑名单，user={}", sender_open_id)
+                    return None
+                agent = await db.get(Agent, config.p2p_agent_id) if config.p2p_agent_id else None
+                if agent is None or not agent.is_active:
+                    logger.info("飞书私聊消息已忽略：未配置私聊默认 Agent，user={}", sender_open_id)
+                    return None
+            else:
+                binding = (
+                    await db.execute(
+                        select(FeishuChatBinding).where(
+                            FeishuChatBinding.chat_id == chat_id,
+                            FeishuChatBinding.is_active.is_(True),
+                        )
+                    )
+                ).scalar_one_or_none()
+                if binding is None:
+                    logger.info("飞书群消息已忽略：该群尚未绑定 Agent，chat_id={}", chat_id)
+                    return None
+                agent = await db.get(Agent, binding.agent_id)
+                if not agent or not agent.is_active:
+                    logger.warning("飞书群消息已忽略：绑定的 Agent 不可用，chat_id={}, agent_id={}", chat_id, binding.agent_id)
+                    return None
             ids = [
                 str(x)
                 for x in (
@@ -316,20 +365,25 @@ class FeishuBotService:
             persona_custom_instruction=agent.persona_custom_instruction or "",
             response_detail=response_detail,
         )
-        return result.answer
+        result.agent_id = agent.id
+        return result
 
     async def _reply(self, message_id: str, content: str):
         """引用回复原消息；复用 QQ 渠道的 Markdown 降级清洗后以纯文本发送。"""
         text = plain_text(content or "暂时无法生成回答，请稍后再试。")
         token = await self._tenant_token(self._app_id, self._app_secret)
         payload = {"content": json.dumps({"text": text}, ensure_ascii=False), "msg_type": "text"}
-        async with httpx.AsyncClient(timeout=30) as c:
-            r = await c.post(
-                f"{_FEISHU_API}/im/v1/messages/{message_id}/reply",
-                headers={"Authorization": f"Bearer {token}"},
-                json=payload,
-            )
-            r.raise_for_status()
+        # P5：发送失败不抛出，避免把"已生成但发送失败"误判为整体失败。
+        try:
+            async with httpx.AsyncClient(timeout=30) as c:
+                r = await c.post(
+                    f"{_FEISHU_API}/im/v1/messages/{message_id}/reply",
+                    headers={"Authorization": f"Bearer {token}"},
+                    json=payload,
+                )
+                r.raise_for_status()
+        except Exception:
+            logger.warning("飞书消息发送失败: msg={}", message_id)
 
 
 feishu_bot_service = FeishuBotService()

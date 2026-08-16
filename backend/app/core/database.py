@@ -230,6 +230,14 @@ async def _run_compatible_migrations(conn):
         "ALTER TABLE evaluation_results ADD COLUMN context_recall_score FLOAT",
         "ALTER TABLE feishu_bot_configs ADD COLUMN response_detail VARCHAR(20) NOT NULL DEFAULT 'concise'",
         "ALTER TABLE qq_bot_configs ADD COLUMN response_detail VARCHAR(20) NOT NULL DEFAULT 'concise'",
+        "ALTER TABLE qq_bot_configs ADD COLUMN p2p_agent_id INTEGER",
+        "ALTER TABLE feishu_bot_configs ADD COLUMN p2p_agent_id INTEGER",
+        "ALTER TABLE qq_bot_configs ADD COLUMN p2p_enabled BOOLEAN NOT NULL DEFAULT 0",
+        "ALTER TABLE feishu_bot_configs ADD COLUMN p2p_enabled BOOLEAN NOT NULL DEFAULT 0",
+        "ALTER TABLE qq_bot_configs ADD COLUMN p2p_allow_openids TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE feishu_bot_configs ADD COLUMN p2p_allow_openids TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE qq_bot_configs ADD COLUMN p2p_access_mode VARCHAR(20) NOT NULL DEFAULT 'all'",
+        "ALTER TABLE feishu_bot_configs ADD COLUMN p2p_access_mode VARCHAR(20) NOT NULL DEFAULT 'all'",
     ]
     for sql in migrations:
         try:
