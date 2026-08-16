@@ -10,6 +10,7 @@ import { HashRouter } from 'react-router-dom'
 import { ConfigProvider } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
 import './index.css'
+import './App.css'
 
 const target = import.meta.env.VITE_APP_TARGET === 'user' ? 'user' : 'admin'
 const App = target === 'user'
