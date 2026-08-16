@@ -61,6 +61,11 @@ class QAHistoryOut(BaseModel):
     chat_id: Optional[str] = None
     chat_type: Optional[str] = None
     user_id: Optional[str] = None
+    channel: Optional[str] = None  # web/qq/feishu
+    input_tokens: int = 0
+    output_tokens: int = 0
+    is_degraded: bool = False
+    web_search_count: int = 0
     feedback: Optional[str] = None  # useful/useless/none
     created_at: datetime
 

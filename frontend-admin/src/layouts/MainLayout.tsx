@@ -11,10 +11,11 @@ import {
   ClusterOutlined,
   SettingOutlined,
   BookOutlined,
-  MessageOutlined,
   ExperimentOutlined,
+  RadarChartOutlined,
   MenuOutlined,
   KeyOutlined,
+  QuestionCircleOutlined,
   LogoutOutlined,
 } from '@ant-design/icons'
 import zhidaLogo from '../assets/zhida-logo.png'
@@ -31,14 +32,14 @@ const menuItems = [
     label: '仪表盘',
   },
   {
-    key: '/chat',
-    icon: <MessageOutlined />,
-    label: '对话',
-  },
-  {
     key: '/evaluations',
     icon: <ExperimentOutlined />,
     label: '评测',
+  },
+  {
+    key: '/observability',
+    icon: <RadarChartOutlined />,
+    label: '问答观测',
   },
   {
     key: '/agents',
@@ -59,6 +60,15 @@ const menuItems = [
     key: '/settings',
     icon: <SettingOutlined />,
     label: '设置',
+  },
+]
+
+// 侧边栏底部固定菜单
+const footerMenuItems = [
+  {
+    key: '/help',
+    icon: <QuestionCircleOutlined />,
+    label: '帮助',
   },
 ]
 
@@ -83,13 +93,16 @@ export default function MainLayout() {
 
   // 当前选中的菜单项
   const selectedKey = '/' + location.pathname.split('/')[1]
-  const navigation = (isCollapsed = false) => <>
-    <div className="app-brand">
-      <img src={zhidaLogo} alt="智答引擎" title="智答引擎" style={{ width: isCollapsed ? 32 : 38, height: isCollapsed ? 32 : 38, borderRadius: 10, objectFit: 'cover' }} />
-      {!isCollapsed && <Text strong className="app-brand-text">智答引擎</Text>}
+  const navigation = (isCollapsed = false) => (
+    <div className="app-nav">
+      <div className="app-brand">
+        <img src={zhidaLogo} alt="智答引擎" title="智答引擎" style={{ width: isCollapsed ? 32 : 38, height: isCollapsed ? 32 : 38, borderRadius: 10, objectFit: 'cover' }} />
+        {!isCollapsed && <Text strong className="app-brand-text">智答引擎</Text>}
+      </div>
+      <Menu mode="inline" selectedKeys={[selectedKey === '/' ? '/' : selectedKey]} items={menuItems} onClick={({ key }) => { navigate(key); setMobileOpen(false) }} className="app-menu" />
+      <Menu mode="inline" selectedKeys={selectedKey === '/help' ? ['/help'] : []} items={footerMenuItems} onClick={({ key }) => { navigate(key); setMobileOpen(false) }} className="app-menu-footer" />
     </div>
-    <Menu mode="inline" selectedKeys={[selectedKey === '/' ? '/' : selectedKey]} items={menuItems} onClick={({ key }) => { navigate(key); setMobileOpen(false) }} className="app-menu" />
-  </>
+  )
 
   return (
     <Layout className="app-shell">

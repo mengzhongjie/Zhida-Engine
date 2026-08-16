@@ -20,12 +20,15 @@ import EmbeddingSettings from './pages/settings/embedding'
 import QQBotSettings from './pages/settings/qq-bot'
 import FeishuBotSettings from './pages/settings/feishu-bot'
 import BotSettings from './pages/settings/bots'
+import HelpPage from './pages/help'
+import HelpDoc from './pages/help-doc'
 import Knowledge from './pages/knowledge'
-import Chat from './pages/chat'
 import LoginPage from './pages/login'
 import UserPage from './pages/user'
 import AccessCodes from './pages/access-codes'
 import Evaluations from './pages/evaluations'
+import ObservabilityPage from './pages/observability'
+import ChannelDetail from './pages/observability/[channel]'
 import { Spin } from 'antd'
 
 function RoleGate({ role }: { role: 'admin' | 'user' }) {
@@ -44,8 +47,9 @@ function App() {
       <Route element={<RoleGate role="user" />}><Route path="/user" element={<UserPage />} /></Route>
       <Route element={<RoleGate role="admin" />}><Route path="/" element={<MainLayout />}>
         <Route index element={<Dashboard />} />
-        <Route path="chat" element={<Chat />} />
         <Route path="evaluations" element={<Evaluations />} />
+        <Route path="observability" element={<ObservabilityPage />} />
+        <Route path="observability/:channel" element={<ChannelDetail />} />
         <Route path="agents" element={<AgentList />} />
         <Route path="agents/:id" element={<AgentDetail />} />
         <Route path="agents/new" element={<AgentNew />} />
@@ -64,6 +68,8 @@ function App() {
         <Route path="knowledge" element={<Knowledge />} />
         <Route path="knowledge/:id" element={<KnowledgeDetail />} />
         <Route path="access-codes" element={<AccessCodes />} />
+        <Route path="help" element={<HelpPage />} />
+        <Route path="help/doc" element={<HelpDoc />} />
       </Route></Route>
       <Route path="*" element={<Navigate to="/login" replace />} />
     </Routes>

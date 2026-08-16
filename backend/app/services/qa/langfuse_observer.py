@@ -34,8 +34,13 @@ async def observe_qa(**data) -> None:
             # 因此将完整评分材料放到根 Trace，标准 Context/Faithfulness 等评估器才能触发。
             trace_input["retrieval_context"] = retrieval_chunks
             trace_output = {"answer": data.get("answer", "")}
+        uid = str(data.get("user_id", ""))
         source = data.get("metadata", {}).get("source") or (
-            "evaluation" if str(data.get("user_id", "")).startswith("evaluation:") else "sync"
+            "evaluation" if uid.startswith("evaluation:")
+            else "qq-bot" if uid.startswith("qq:")
+            else "feishu-bot" if uid.startswith("feishu:")
+            else "user-web" if uid.startswith("user:")
+            else "sync"
         )
         trace = client.start_observation(
             name="rag-answer",

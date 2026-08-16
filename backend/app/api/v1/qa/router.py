@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 
 from app.core.config import settings
 from app.core.database import get_db
@@ -83,13 +83,18 @@ def _qa_to_out(qa: QAHistory) -> QAHistoryOut:
         question=qa.question,
         answer=qa.answer,
         sources=qa.sources,
-        confidence=qa.confidence or 0.0,
-        response_time_ms=qa.response_time_ms or 0.0,
-        model_used=qa.model_used or "",
-        from_cache=qa.from_cache or False,
+        confidence=0.0,
+        response_time_ms=qa.total_time_ms or 0.0,
+        model_used="",
+        from_cache=qa.is_cache_hit or False,
         chat_id=qa.chat_id,
-        chat_type=qa.chat_type,
+        chat_type=None,
         user_id=qa.user_id,
+        channel=qa.channel,
+        input_tokens=qa.input_tokens or 0,
+        output_tokens=qa.output_tokens or 0,
+        is_degraded=qa.is_degraded or False,
+        web_search_count=qa.web_search_count or 0,
         feedback=qa.feedback,
         created_at=as_beijing(qa.created_at),
     )
@@ -277,17 +282,51 @@ async def stream_question(
 # 问答历史
 # ============================================================
 
+@router.get("/history/stats")
+async def history_stats(db: AsyncSession = Depends(get_db)):
+    """按渠道聚合的观测统计：总数 / 今日 / 最近问答时间（供观测卡片首页使用）。"""
+    from datetime import datetime as _dt, timedelta as _td
+    today_start = _dt.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    rows = (await db.execute(
+        select(func.coalesce(QAHistory.channel, "unknown"), func.count(), func.max(QAHistory.created_at))
+        .group_by(func.coalesce(QAHistory.channel, "unknown"))
+    )).all()
+    today_rows = (await db.execute(
+        select(func.coalesce(QAHistory.channel, "unknown"), func.count())
+        .where(QAHistory.created_at >= today_start)
+        .group_by(func.coalesce(QAHistory.channel, "unknown"))
+    )).all()
+    today_map = {ch: cnt for ch, cnt in today_rows}
+    channels: dict[str, dict] = {}
+    total = 0
+    for ch, cnt, last_at in rows:
+        total += cnt
+        channels[ch] = {
+            "total": cnt,
+            "today": today_map.get(ch, 0),
+            "last_at": as_beijing(last_at) if last_at else None,
+        }
+    return {"total": total, "channels": channels}
+
+
 @router.get("/history", response_model=QAHistoryListOut)
 async def list_history(
     agent_id: Optional[int] = Query(None, description="Agent ID 过滤"),
+    channel: Optional[str] = Query(None, description="渠道过滤: web/qq/feishu"),
+    keyword: Optional[str] = Query(None, max_length=100, description="问题/回答关键词"),
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=100, description="每页数量"),
     db: AsyncSession = Depends(get_db),
 ):
-    """获取问答历史列表"""
+    """获取问答历史列表（支持渠道/关键词/Agent 过滤）"""
     query = select(QAHistory).order_by(QAHistory.created_at.desc())
     if agent_id is not None:
         query = query.where(QAHistory.agent_id == agent_id)
+    if channel:
+        query = query.where(QAHistory.channel == channel)
+    if keyword:
+        like = f"%{keyword.strip()}%"
+        query = query.where(or_(QAHistory.question.like(like), QAHistory.answer.like(like)))
 
     # 计算总数
     count_query = select(func.count()).select_from(query.subquery())
