@@ -83,3 +83,6 @@ temp/
 tools/MediaCrawler/
 backend/scripts/run_langfuse_dataset_experiment.py
 backend/reports/langfuse/
+
+# ---- 本地调研/笔记（不进入公开仓库） ----
+docs/调研-*.md
