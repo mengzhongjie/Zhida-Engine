@@ -18,6 +18,7 @@ import ReliabilitySettings from './pages/settings/reliability'
 import VisionSettings from './pages/settings/vision'
 import EmbeddingSettings from './pages/settings/embedding'
 import QQBotSettings from './pages/settings/qq-bot'
+import FeishuBotSettings from './pages/settings/feishu-bot'
 import BotSettings from './pages/settings/bots'
 import Knowledge from './pages/knowledge'
 import Chat from './pages/chat'
@@ -55,7 +56,9 @@ function App() {
         <Route path="settings/embedding" element={<EmbeddingSettings />} />
         <Route path="settings/bots" element={<BotSettings />} />
         <Route path="settings/bots/qq" element={<QQBotSettings />} />
+        <Route path="settings/bots/feishu" element={<FeishuBotSettings />} />
         <Route path="settings/qq-bot" element={<Navigate to="/settings/bots/qq" replace />} />
+        <Route path="settings/feishu-bot" element={<Navigate to="/settings/bots/feishu" replace />} />
         <Route path="settings/:section/:provider" element={<Settings />} />
         <Route path="settings/:section" element={<Settings />} />
         <Route path="knowledge" element={<Knowledge />} />

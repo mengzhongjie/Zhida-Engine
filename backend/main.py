@@ -95,6 +95,8 @@ def create_app():
         await resume_web_summary_jobs()
         from app.services.channel.qq_bot import qq_bot_service
         await qq_bot_service.start()
+        from app.services.channel.feishu_bot import feishu_bot_service
+        await feishu_bot_service.start()
 
         # 后台异步加载重模块（不阻塞启动）
         import asyncio
@@ -106,6 +108,8 @@ def create_app():
         from app.core.security import release_instance_lock
         from app.services.channel.qq_bot import qq_bot_service
         await qq_bot_service.stop()
+        from app.services.channel.feishu_bot import feishu_bot_service
+        await feishu_bot_service.stop()
         release_instance_lock()
         logger.info("应用关闭，资源已释放")
 
@@ -181,6 +185,9 @@ def create_app():
 
     from app.api.v1.channel.router import router as qq_bot_router
     app.include_router(qq_bot_router, prefix="/api/v1", dependencies=[Depends(require_admin)])
+
+    from app.api.v1.feishu_bot.router import router as feishu_bot_router
+    app.include_router(feishu_bot_router, prefix="/api/v1", dependencies=[Depends(require_admin)])
 
     # ================================================================
     # 前端静态文件服务（生产环境：前端构建产物嵌入 .exe）

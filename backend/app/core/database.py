@@ -115,6 +115,7 @@ async def init_db():
         import app.models.observability_config  # noqa: F401
         import app.models.feishu_config   # noqa: F401
         import app.models.qq_bot          # noqa: F401
+        import app.models.feishu_bot      # noqa: F401
         import app.models.import_job      # noqa: F401
         import app.models.vision_config   # noqa: F401
         import app.models.agent_knowledge_base  # noqa: F401
@@ -227,6 +228,8 @@ async def _run_compatible_migrations(conn):
         "ALTER TABLE evaluation_results ADD COLUMN answer_correctness_score FLOAT",
         "ALTER TABLE evaluation_results ADD COLUMN context_precision_score FLOAT",
         "ALTER TABLE evaluation_results ADD COLUMN context_recall_score FLOAT",
+        "ALTER TABLE feishu_bot_configs ADD COLUMN response_detail VARCHAR(20) NOT NULL DEFAULT 'concise'",
+        "ALTER TABLE qq_bot_configs ADD COLUMN response_detail VARCHAR(20) NOT NULL DEFAULT 'concise'",
     ]
     for sql in migrations:
         try:

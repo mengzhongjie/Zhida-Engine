@@ -9,29 +9,8 @@ from app.models.agent import Agent
 from app.models.agent_knowledge_base import AgentKnowledgeBase
 from app.models.knowledge import KnowledgeBase
 from app.models.qq_bot import QQBotConfig, QQBotGroupBinding
+from app.services.channel.utils import plain_text as _qq_plain_text
 from app.services.qa.generator import answer_generator
-
-def _qq_plain_text(value: str, limit: int = 1900) -> str:
-    """QQ 群消息不渲染 Markdown；保留语义并移除会原样显示的标记。"""
-    text = value.replace("\r\n", "\n").replace("\r", "\n")
-    text = re.sub(r"```(?:[A-Za-z0-9_+-]+)?\s*\n?", "", text)
-    text = text.replace("```", "")
-    text = re.sub(r"!\[([^\]]*)\]\([^)]*\)", r"\1", text)
-    text = re.sub(r"\[([^\]]+)\]\((https?://[^\s)]+)\)", r"\1（\2）", text)
-    text = re.sub(r"(^|\n)\s{0,3}#{1,6}\s+", r"\1", text)
-    text = re.sub(r"(^|\n)\s*>\s?", r"\1", text)
-    text = re.sub(r"(^|\n)\s*[-*+]\s+", r"\1• ", text)
-    text = re.sub(r"(^|\n)\s*\d+[.)]\s+", r"\1", text)
-    text = re.sub(r"(?<!\*)\*{1,3}([^*]+)\*{1,3}", r"\1", text)
-    text = re.sub(r"(?<!_)_{1,3}([^_]+)_{1,3}", r"\1", text)
-    text = re.sub(r"`([^`]+)`", r"\1", text)
-    text = re.sub(r"(?m)^\s*[-*_]{3,}\s*$", "", text)
-    # 简单表格降级为逐行文本，去掉分隔线与多余竖线。
-    text = re.sub(r"(?m)^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$", "", text)
-    text = re.sub(r"(?m)^\s*\|\s*", "", text)
-    text = re.sub(r"\s*\|\s*(?=\S)", " · ", text)
-    text = re.sub(r"\n{3,}", "\n\n", text).strip()
-    return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
 
 class QQBotService:
     def __init__(self): self._task=None; self._seen={}; self._send_lock=asyncio.Semaphore(4); self._capture_until=0.0; self._captured_groups=[]
@@ -107,9 +86,11 @@ class QQBotService:
                 logger.warning("QQ 群消息已忽略：绑定的 Agent 不可用，group_openid={}, agent_id={}", group, binding.agent_id)
                 return
             ids=[str(x) for x in (await db.execute(select(KnowledgeBase.id).join(AgentKnowledgeBase,AgentKnowledgeBase.knowledge_base_id==KnowledgeBase.id).where(AgentKnowledgeBase.agent_id==agent.id,KnowledgeBase.is_active.is_(True)))).scalars()]
+            config=await db.get(QQBotConfig,1)
+            response_detail=(config.response_detail if config else "") or "concise"
         async with self._send_lock:
             try:
-                result=await answer_generator.generate(knowledge_base_ids=ids,question=question,agent_id=agent.id,user_id=f"qq:{group}:{(event.get('author') or {}).get('member_openid','unknown')}",enable_memory=False,allow_web_search=False,reply_mode=agent.reply_mode,persona_preset=agent.persona_preset,persona_custom_instruction=agent.persona_custom_instruction or "",response_detail="concise")
+                result=await answer_generator.generate(knowledge_base_ids=ids,question=question,agent_id=agent.id,user_id=f"qq:{group}:{(event.get('author') or {}).get('member_openid','unknown')}",enable_memory=False,allow_web_search=False,reply_mode=agent.reply_mode,persona_preset=agent.persona_preset,persona_custom_instruction=agent.persona_custom_instruction or "",response_detail=response_detail)
                 await self._reply(group,event_id,_qq_plain_text(result.answer),token,app_id)
             except Exception: logger.exception("QQ 消息处理失败: group={}",group)
     async def _reply(self,group,event_id,content,token,app_id):

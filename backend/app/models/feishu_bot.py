@@ -1,10 +1,14 @@
-"""QQ 官方机器人配置与群绑定。密钥仅加密存储。"""
+"""飞书官方机器人配置与群绑定。密钥仅加密存储。"""
 from datetime import datetime
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text
 from app.core.database import Base
 
-class QQBotConfig(Base):
-    __tablename__ = "qq_bot_configs"
+
+class FeishuBotConfig(Base):
+    """飞书应用机器人凭据（独立于云文档导入的 FeishuConfig）。"""
+
+    __tablename__ = "feishu_bot_configs"
+
     id = Column(Integer, primary_key=True, default=1)
     enabled = Column(Boolean, nullable=False, default=False)
     app_id = Column(String(100), nullable=False, default="")
@@ -14,10 +18,15 @@ class QQBotConfig(Base):
     last_error = Column(Text, nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
-class QQBotGroupBinding(Base):
-    __tablename__ = "qq_bot_group_bindings"
+
+class FeishuChatBinding(Base):
+    """飞书群（chat_id, oc_xxx）与 Agent 的绑定关系。"""
+
+    __tablename__ = "feishu_chat_bindings"
+
     id = Column(Integer, primary_key=True, autoincrement=True)
-    group_openid = Column(String(128), nullable=False, unique=True, index=True)
+    chat_id = Column(String(128), nullable=False, unique=True, index=True)
+    chat_name = Column(String(255), nullable=False, default="")
     agent_id = Column(Integer, ForeignKey("agents.id", ondelete="CASCADE"), nullable=False, index=True)
     is_active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

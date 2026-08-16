@@ -16,6 +16,10 @@ class ConfigIn(BaseModel):
     enabled: bool = False
     app_id: str = Field(default="", max_length=100)
     app_secret: str | None = Field(default=None, max_length=500)
+    response_detail: str | None = Field(default=None, pattern="^(concise|detailed)$")
+
+class DetailIn(BaseModel):
+    response_detail: str = Field(..., pattern="^(concise|detailed)$")
 
 class BindingIn(BaseModel):
     group_openid: str = Field(min_length=1, max_length=128)
@@ -35,7 +39,7 @@ async def _config(db):
     return item
 
 def _out(item):
-    return {"enabled": item.enabled, "app_id": item.app_id, "app_secret": mask_api_key(decrypt_api_key(item.app_secret)), "last_test_success": item.last_test_success, "last_error": item.last_error}
+    return {"enabled": item.enabled, "app_id": item.app_id, "app_secret": mask_api_key(decrypt_api_key(item.app_secret)), "last_test_success": item.last_test_success, "last_error": item.last_error, "response_detail": item.response_detail}
 
 @router.get("/config")
 async def get_config(db: AsyncSession = Depends(get_db)): return _out(await _config(db))
@@ -46,11 +50,20 @@ async def save_config(payload: ConfigIn, db: AsyncSession = Depends(get_db)):
     if payload.enabled and (not payload.app_id.strip() or not (payload.app_secret or item.app_secret)):
         raise HTTPException(422, "启用前请填写 AppID 与 AppSecret")
     item.enabled, item.app_id = payload.enabled, payload.app_id.strip()
+    if payload.response_detail:
+        item.response_detail = payload.response_detail
     if payload.app_secret: item.app_secret = encrypt_api_key(payload.app_secret.strip())
     await db.commit()
     from app.services.channel.qq_bot import qq_bot_service
     await qq_bot_service.reload()
     return _out(item)
+
+@router.put("/config/detail")
+async def update_detail(payload: DetailIn, db: AsyncSession = Depends(get_db)):
+    item = await _config(db)
+    item.response_detail = payload.response_detail
+    await db.commit()
+    return {"response_detail": item.response_detail}
 
 @router.post("/config/test")
 async def test_config(db: AsyncSession = Depends(get_db)):
