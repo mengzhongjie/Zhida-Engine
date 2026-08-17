@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 
 class VisionConfigOut(BaseModel):
+    model_config = {"protected_namespaces": ()}
     id: Optional[int] = None
     name: str = "视觉模型"
     is_primary: bool = False
@@ -19,6 +20,7 @@ class VisionConfigOut(BaseModel):
 
 
 class VisionConfigUpdate(BaseModel):
+    model_config = {"protected_namespaces": ()}
     name: str = Field("视觉模型", min_length=1, max_length=100)
     is_primary: bool = False
     is_fallback: bool = False
