@@ -23,7 +23,17 @@ LANGFUSE_CLOUD_HOST = "https://cloud.langfuse.com"
 # macOS:   ~/Library/Application Support/ZhidaEngine/
 # Linux:   ~/.local/share/ZhidaEngine/
 def get_app_data_dir() -> Path:
-    """获取应用数据目录，确保目录存在"""
+    """获取应用数据目录，确保目录存在。
+
+    优先使用环境变量 ZHIDA_DATA_DIR（Docker 挂载持久卷时设置，如 /data）；
+    否则回退到平台默认位置（macOS Application Support / Windows LocalAppData / Linux ~/.local/share）。
+    """
+    override = os.environ.get("ZHIDA_DATA_DIR", "").strip()
+    if override:
+        data_dir = Path(override)
+        data_dir.mkdir(parents=True, exist_ok=True)
+        return data_dir
+
     if sys.platform == "win32":
         base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
     elif sys.platform == "darwin":

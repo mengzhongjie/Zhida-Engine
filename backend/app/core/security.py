@@ -134,8 +134,24 @@ def _get_or_create_encryption_salt() -> bytes:
         return b""
 
 
+def _get_env_anchor_fingerprint() -> bytes:
+    """环境变量锚定密钥：为 Docker 等机器指纹易变的部署提供固定加密密钥。
+
+    设置 ZHIDA_ENC_KEY 后，加密/解密全部使用该固定值派生的密钥，
+    容器重建/换机不再改变密钥，已存 API Key 可继续解密。
+    未设置时返回空（回退到机器指纹），不影响桌面单机默认行为。
+    """
+    anchor = os.environ.get("ZHIDA_ENC_KEY", "").strip()
+    if not anchor:
+        return b""
+    return hashlib.sha256(f"{anchor}:ZhidaEngine".encode()).digest()
+
+
 def _get_machine_fingerprint() -> bytes:
-    """新格式密钥：稳定硬件标识 + 持久随机盐，不依赖可变主机名。"""
+    """新格式密钥：优先环境锚定；否则稳定硬件标识 + 持久随机盐，不依赖可变主机名。"""
+    anchor = _get_env_anchor_fingerprint()
+    if anchor:
+        return anchor
     raw = _get_machine_id().encode() + b":" + _get_or_create_encryption_salt() + b":ZhidaEngine"
     return hashlib.sha256(raw).digest()
 
@@ -195,8 +211,13 @@ def decrypt_api_key(encrypted: str) -> str:
         nonce = combined[:12]
         ciphertext = combined[12:]
 
-        # 先使用稳定新格式；若失败，再尝试当前环境的旧格式以兼容历史配置。
-        for key in (_get_machine_fingerprint(), _get_legacy_machine_fingerprint()):
+        # 解密候选：优先环境锚定密钥（若有），再尝试稳定新格式与旧格式，兼容迁移期数据。
+        keys = []
+        anchor = _get_env_anchor_fingerprint()
+        if anchor:
+            keys.append(anchor)
+        keys.extend([_get_machine_fingerprint(), _get_legacy_machine_fingerprint()])
+        for key in keys:
             try:
                 return AESGCM(key).decrypt(nonce, ciphertext, None).decode()
             except Exception:
