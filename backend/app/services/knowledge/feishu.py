@@ -6,7 +6,6 @@
 
 import asyncio
 import base64
-import mimetypes
 import time
 from dataclasses import dataclass
 from urllib.parse import urlparse
@@ -165,8 +164,14 @@ class FeishuClient:
         if not payload:
             logger.warning("飞书图片为空，已跳过视觉识别")
             return None
-        if not media_type.startswith("image/"):
-            media_type = mimetypes.guess_type(f"x.{image_token}")[0] or "image/jpeg"
+        valid_magic = (
+            payload.startswith(b"\x89PNG\r\n\x1a\n")
+            or payload.startswith(b"\xff\xd8\xff")
+            or (payload.startswith(b"RIFF") and len(payload) >= 12 and payload[8:12] == b"WEBP")
+        )
+        if media_type not in {"image/png", "image/jpeg", "image/webp"} or not valid_magic:
+            logger.warning("飞书媒体响应不是支持的图片，已跳过视觉识别")
+            return None
         return f"data:{media_type};base64,{base64.b64encode(payload).decode('ascii')}"
 
     async def _append_image_descriptions(

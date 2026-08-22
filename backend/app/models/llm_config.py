@@ -55,6 +55,7 @@ class LLMConfig(Base):
     base_url = Column(String(500), nullable=False, default="", comment="API 基础地址")
     model_name = Column(String(100), nullable=False, default="", comment="模型名称")
     api_key = Column(Text, nullable=False, default="", comment="API Key（加密存储）")
+    supports_vision = Column(Boolean, default=False, nullable=False, comment="是否支持多模态图片输入")
 
     # 额外配置（JSON 格式，用于存储 temperature、max_tokens 等参数）
     extra_config = Column(Text, nullable=True, comment="额外配置（JSON 格式）")

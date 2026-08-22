@@ -12,6 +12,7 @@ from app.core.database import get_db
 from app.core.security import decrypt_api_key, encrypt_api_key, mask_api_key
 from app.models.vision_config import VisionConfig
 from app.schemas.vision import VisionConfigOut, VisionConfigUpdate
+from app.services.knowledge.web_importer import _validate_public_url
 
 router = APIRouter(prefix="/vision", tags=["视觉模型配置"])
 
@@ -52,8 +53,14 @@ async def list_configs(db: AsyncSession = Depends(get_db)):
 async def create_config(request: VisionConfigUpdate, db: AsyncSession = Depends(get_db)):
     if request.enabled and (not request.base_url.strip() or not request.model_name.strip() or not request.api_key):
         raise HTTPException(status_code=422, detail="启用视觉模型前，请填写 API 地址、模型名称和 API Key")
+    base_url = request.base_url.strip().rstrip("/")
+    if base_url:
+        try:
+            base_url = (await _validate_public_url(base_url)).rstrip("/")
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=f"视觉 API 地址不安全：{exc}") from None
     config = VisionConfig(name=request.name.strip(), enabled=request.enabled,
-                          base_url=request.base_url.strip().rstrip("/"), model_name=request.model_name.strip(),
+                          base_url=base_url, model_name=request.model_name.strip(),
                           api_key=encrypt_api_key(request.api_key.strip()) if request.api_key else "")
     db.add(config)
     await db.flush()
@@ -67,7 +74,13 @@ async def update_config(config_id: int, request: VisionConfigUpdate, db: AsyncSe
     if config is None:
         raise HTTPException(status_code=404, detail="视觉模型配置不存在")
     config.name, config.enabled = request.name.strip(), request.enabled
-    config.base_url, config.model_name = request.base_url.strip().rstrip("/"), request.model_name.strip()
+    base_url = request.base_url.strip().rstrip("/")
+    if base_url:
+        try:
+            base_url = (await _validate_public_url(base_url)).rstrip("/")
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=f"视觉 API 地址不安全：{exc}") from None
+    config.base_url, config.model_name = base_url, request.model_name.strip()
     if request.api_key:
         config.api_key = encrypt_api_key(request.api_key.strip())
     if config.enabled and (not config.base_url or not config.model_name or not config.api_key):

@@ -483,11 +483,12 @@ class AnswerGenerator:
         enable_observability: bool = True,
         rewrite_count: int = 3,
         bypass_cache: bool = False,
+        image_data_uris: Optional[list[str]] = None,
     ) -> AnswerResult:
         """合并同一用户同一上下文下并发到达的问答，避免重复检索和模型调用。"""
         key = qa_request_coalescer.make_key(
             agent_id=agent_id, user_id=user_id, knowledge_base_ids=sorted(knowledge_base_ids),
-            question=" ".join(question.split()), reply_mode=reply_mode,
+            question=" ".join(question.split()) + (":" + hashlib.sha256("".join(image_data_uris or []).encode()).hexdigest()[:16] if image_data_uris else ""), reply_mode=reply_mode,
             conversation_history=conversation_history or [], system_prompt=f"{system_prompt or ''}:{persona_preset}:{persona_custom_instruction}:{response_detail}:{max_tokens}:{context_pressure:.2f}:web={allow_web_search}:rewrite={rewrite_count}",
         )
         return await qa_request_coalescer.run(key, lambda: self._generate(
@@ -498,7 +499,7 @@ class AnswerGenerator:
             persona_preset=persona_preset, persona_custom_instruction=persona_custom_instruction, response_detail=response_detail, max_tokens=max_tokens,
             context_pressure=context_pressure, allow_web_search=allow_web_search,
             enable_observability=enable_observability, rewrite_count=rewrite_count,
-            bypass_cache=bypass_cache,
+            bypass_cache=bypass_cache or bool(image_data_uris), image_data_uris=image_data_uris,
         ))
 
     async def _generate(
@@ -523,6 +524,7 @@ class AnswerGenerator:
         enable_observability: bool = True,
         rewrite_count: int = 3,
         bypass_cache: bool = False,
+        image_data_uris: Optional[list[str]] = None,
     ) -> AnswerResult:
         """
         生成回答 —— 端到端流程
@@ -665,12 +667,16 @@ class AnswerGenerator:
         try:
             async with self._llm_lock:
                 await llm_gateway.initialize()
-                chat_result = await llm_gateway.chat(
-                    prompt=prompt,
-                    system_prompt=stable_system_prompt,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                )
+                if image_data_uris:
+                    chat_result = await llm_gateway.chat_multimodal(
+                        prompt=prompt, image_data_uris=image_data_uris,
+                        system_prompt=stable_system_prompt, temperature=temperature, max_tokens=max_tokens,
+                    )
+                else:
+                    chat_result = await llm_gateway.chat(
+                        prompt=prompt, system_prompt=stable_system_prompt,
+                        temperature=temperature, max_tokens=max_tokens,
+                    )
                 answer_text = chat_result.text
                 model_used = chat_result.model_used or llm_gateway.primary_model_name or "unknown"
                 input_tokens = chat_result.input_tokens
@@ -759,6 +765,7 @@ class AnswerGenerator:
         max_tokens: int = 2048,
         context_pressure: float = 0.0,
         rewrite_count: int = 3,
+        image_data_uris: Optional[list[str]] = None,
     ) -> AsyncIterator[str]:
         """
         流式生成回答 —— 逐 token 返回
@@ -784,6 +791,7 @@ class AnswerGenerator:
                 response_detail=response_detail,
                 max_tokens=max_tokens,
                 context_pressure=context_pressure,
+                image_data_uris=image_data_uris,
             )
             yield result.answer
             if on_complete:
@@ -859,11 +867,10 @@ class AnswerGenerator:
                     nonlocal input_tokens, cached_input_tokens, output_tokens
                     input_tokens, cached_input_tokens, output_tokens = input_value, cached_value, output_value
                 async for chunk in self._chat_stream_with_length_retry(
-                    prompt=prompt,
-                    system_prompt=stable_system_prompt,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    on_usage=capture_usage,
+                    prompt=prompt, system_prompt=stable_system_prompt,
+                    temperature=temperature, max_tokens=max_tokens, on_usage=capture_usage,
+                ) if not image_data_uris else self._multimodal_stream_chunks(
+                    prompt, stable_system_prompt, image_data_uris, temperature, max_tokens, capture_usage,
                 ):
                     answer_parts.append(chunk)
                     yield chunk
@@ -916,6 +923,15 @@ class AnswerGenerator:
                     ))
                 except Exception as callback_error:
                     logger.warning(f"流式回答完成回调失败: {callback_error}")
+
+    async def _multimodal_stream_chunks(self, prompt, system_prompt, image_data_uris, temperature, max_tokens, on_usage):
+        """私信/网页图片暂以完整正文一次性发出，外层仍保持 SSE 协议兼容。"""
+        result = await llm_gateway.chat_multimodal(
+            prompt=prompt, image_data_uris=image_data_uris,
+            system_prompt=system_prompt, temperature=temperature, max_tokens=max_tokens,
+        )
+        on_usage(result.input_tokens, result.cached_input_tokens, result.output_tokens)
+        yield result.text
 
 
 # 全局回答生成器实例

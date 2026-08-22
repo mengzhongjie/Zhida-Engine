@@ -80,6 +80,7 @@ def _config_to_out(config: LLMConfig) -> LLMConfigOut:
         provider_name=config.provider_name,
         base_url=config.base_url,
         model_name=config.model_name,
+        supports_vision=bool(getattr(config, "supports_vision", False)),
         api_key=_mask_api_key(config.api_key),  # 脱敏
         is_primary=config.is_primary,
         is_fallback=config.is_fallback,
@@ -205,6 +206,7 @@ async def create_config(
         provider_name=provider_name,
         base_url=base_url,
         model_name=request.model_name,
+        supports_vision=request.supports_vision,
         api_key=encrypt_api_key(request.api_key or ""),  # 加密存储
         is_primary=request.is_primary,
         is_fallback=request.is_fallback and not request.is_primary,

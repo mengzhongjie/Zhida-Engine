@@ -1,7 +1,9 @@
 """普通用户端：获授权 Agent、历史会话和流式问答。"""
 
 import asyncio
+import base64
 import json
+import re
 import time
 import uuid
 from datetime import datetime
@@ -36,6 +38,32 @@ class UserAskIn(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
     conversation_id: str | None = None
     response_detail: Literal["concise", "detailed"] = "concise"
+    # 图片只在用户点击发送时随本次请求传输，不提供单独的上传接口。
+    image_data_uris: list[str] = Field(default_factory=list, max_length=3)
+
+def _validate_user_images(images: list[str]) -> list[str]:
+    if len(images) > 3:
+        raise HTTPException(status_code=413, detail="最多同时发送 3 张图片")
+    valid: list[str] = []
+    pattern = re.compile(r"^data:image/(?:png|jpeg|webp);base64,([A-Za-z0-9+/=]+)$")
+    for image in images:
+        match = pattern.fullmatch(image or "")
+        if not match or len(image) > 14_000_000:
+            raise HTTPException(status_code=422, detail="图片格式不受支持或文件过大")
+        try:
+            raw = base64.b64decode(match.group(1), validate=True)
+        except Exception:
+            raise HTTPException(status_code=422, detail="图片数据无效") from None
+        if len(raw) > 10 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="单张图片不能超过 10MB")
+        if not (
+            raw.startswith(b"\x89PNG\r\n\x1a\n")
+            or raw.startswith(b"\xff\xd8\xff")
+            or (raw.startswith(b"RIFF") and len(raw) >= 12 and raw[8:12] == b"WEBP")
+        ):
+            raise HTTPException(status_code=422, detail="图片内容校验失败")
+        valid.append(image)
+    return valid
 
 
 async def _allowed_agent_ids(user: WebUser, db: AsyncSession) -> set[int]:
@@ -208,6 +236,7 @@ async def conversation_messages(conversation_id: str, user: WebUser = Depends(re
 async def stream_chat(payload: UserAskIn, user: WebUser = Depends(require_user), db: AsyncSession = Depends(get_db)):
     if settings.DEVELOPMENT_MODE:
         raise HTTPException(status_code=503, detail="系统正在开发维护中，暂时无法发起问答，请稍后再试")
+    image_data_uris = _validate_user_images(payload.image_data_uris)
     if payload.agent_id not in await _allowed_agent_ids(user, db):
         raise HTTPException(status_code=403, detail="没有该 Agent 的访问权限")
     agent = await db.get(Agent, payload.agent_id)
@@ -310,6 +339,7 @@ async def stream_chat(payload: UserAskIn, user: WebUser = Depends(require_user),
                 persona_preset=agent.persona_preset, persona_custom_instruction=agent.persona_custom_instruction or "",
                 response_detail=payload.response_detail,
                 context_pressure=usage_ratio,
+                image_data_uris=image_data_uris,
                 **_answer_options(payload.response_detail, agent),
             ):
                 parts.append(chunk)

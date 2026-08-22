@@ -38,6 +38,7 @@ interface LLMConfig {
   provider_name: string
   base_url: string
   model_name: string
+  supports_vision: boolean
   api_key: string
   is_primary: boolean
   is_fallback: boolean
@@ -298,7 +299,7 @@ export default function SettingsPage() {
     setEditingId(null)
     form.resetFields()
     // 单模型场景是默认使用方式，避免“测试成功但没有主模型可调用”。
-    form.setFieldsValue({ role: 'primary', is_active: true, context_rewrite_timeout_seconds: 10, context_compaction_timeout_seconds: 25 })
+    form.setFieldsValue({ role: 'primary', is_active: true, supports_vision: false, context_rewrite_timeout_seconds: 10, context_compaction_timeout_seconds: 25 })
     setModalVisible(true)
   }
 
@@ -309,6 +310,7 @@ export default function SettingsPage() {
       provider_name: config.provider_name,
       base_url: config.base_url,
       model_name: config.model_name,
+      supports_vision: config.supports_vision,
       api_key: '', // 不回显 API Key
       role: config.is_primary ? 'primary' : config.is_fallback ? 'fallback' : config.is_context_model ? 'context' : 'standalone',
       is_active: config.is_active,
@@ -685,6 +687,10 @@ export default function SettingsPage() {
             rules={[{ required: true, message: '请输入模型名称' }]}
           >
             <Input placeholder="例如: deepseek-v4-pro" />
+          </Form.Item>
+
+          <Form.Item name="supports_vision" label="支持图片理解" valuePropName="checked" extra="仅对确认支持多模态的模型开启，例如新的 DeepSeek 视觉模型">
+            <Switch />
           </Form.Item>
 
           <Form.Item

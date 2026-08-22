@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Drawer, Empty, Segmented, Typography, message } from 'antd'
-import { HistoryOutlined, LogoutOutlined, MenuOutlined, SendOutlined } from '@ant-design/icons'
+import { CloseOutlined, HistoryOutlined, LogoutOutlined, MenuOutlined, PaperClipOutlined, SendOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -10,7 +10,8 @@ const { Text, Title } = Typography
 type Agent = { id: number; name: string; description?: string; avatar?: string }
 type Conversation = { id: string; agent_id: number; title: string; updated_at: string }
 type Source = { metadata?: { filename?: string }; document_name?: string }
-type ChatMessage = { id: string; role: 'user' | 'assistant'; content: string; sources?: Source[]; pending?: boolean; streaming?: boolean; statusText?: string }
+type ChatMessage = { id: string; role: 'user' | 'assistant'; content: string; image?: string; sources?: Source[]; pending?: boolean; streaming?: boolean; statusText?: string }
+type PendingImage = { file: File; preview: string }
 
 const createId = () => globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`
 
@@ -22,6 +23,7 @@ export default function UserPage() {
   const [conversationId, setConversationId] = useState<string>()
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
+  const [pendingImage, setPendingImage] = useState<PendingImage | null>(null)
   const [sending, setSending] = useState(false)
   const [responseDetail, setResponseDetail] = useState<'concise' | 'detailed'>('concise')
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -30,6 +32,20 @@ export default function UserPage() {
   const [compactViewport, setCompactViewport] = useState(() => window.matchMedia('(max-width: 820px)').matches)
   const bottomRef = useRef<HTMLDivElement>(null)
   const selectedAgent = useMemo(() => agents.find(item => item.id === agentId), [agents, agentId])
+
+  const readImage = (file: File) => new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result || ''))
+    reader.onerror = () => reject(new Error('读取图片失败'))
+    reader.readAsDataURL(file)
+  })
+
+  const chooseImage = (file?: File) => {
+    if (!file) return
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) { message.warning('仅支持 PNG、JPEG、WEBP 图片'); return }
+    if (file.size > 10 * 1024 * 1024) { message.warning('图片不能超过 10MB'); return }
+    setPendingImage({ file, preview: URL.createObjectURL(file) })
+  }
 
   const load = async () => {
     try {
@@ -91,14 +107,19 @@ export default function UserPage() {
   const send = async () => {
     const question = input.trim()
     if (!question || !agentId || sending || developmentMode) return
+    let imageDataUris: string[] = []
+    if (pendingImage) {
+      try { imageDataUris = [await readImage(pendingImage.file)] } catch { message.error('读取图片失败'); return }
+    }
 
     const pendingId = createId()
     setMessages(previous => [
       ...previous,
-      { id: createId(), role: 'user', content: question },
+      { id: createId(), role: 'user', content: question, image: pendingImage?.preview },
       { id: pendingId, role: 'assistant', content: '', pending: true, streaming: true },
     ])
     setInput('')
+    if (pendingImage) { URL.revokeObjectURL(pendingImage.preview); setPendingImage(null) }
     setSending(true)
 
     try {
@@ -106,7 +127,7 @@ export default function UserPage() {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ agent_id: agentId, question, conversation_id: conversationId, response_detail: responseDetail }),
+        body: JSON.stringify({ agent_id: agentId, question, conversation_id: conversationId, response_detail: responseDetail, image_data_uris: imageDataUris }),
       })
       if (!response.ok || !response.body) {
         const data = await response.json().catch(() => ({}))
@@ -195,14 +216,14 @@ export default function UserPage() {
         {!messages.length && (agentId ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="有什么想了解的？" /> : agents.length ? <div className="user-agent-chooser"><header><b>选择助手</b><span>开始一段新的对话</span></header><div>{agents.map(item => <Button key={item.id} onClick={() => selectAgent(item.id)}><i>{item.avatar || item.name.slice(0, 1)}</i><section><strong>{item.name}</strong>{item.description && <small>{item.description}</small>}</section><em>开始对话</em></Button>)}</div></div> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无可用助手" />)}
         {messages.map(item => <article key={item.id} className={`user-message ${item.role}`}>
           <div>{item.role === 'user' ? '我' : 'AI'}</div>
-          <section className={item.streaming ? 'is-streaming' : ''}>{item.pending ? <div className="stream-thinking" role="status"><span className="stream-thinking-dots"><i /><i /><i /></span><span>{item.statusText || '正在生成回答'}</span></div> : item.role === 'assistant' ? <div className="markdown-content"><ReactMarkdown remarkPlugins={[remarkGfm]}>{item.content}</ReactMarkdown>{item.streaming && <span className="stream-caret" aria-hidden="true" />}</div> : <span>{item.content}</span>}</section>
+          <section className={item.streaming ? 'is-streaming' : ''}>{item.pending ? <div className="stream-thinking" role="status"><span className="stream-thinking-dots"><i /><i /><i /></span><span>{item.statusText || '正在生成回答'}</span></div> : item.role === 'assistant' ? <div className="markdown-content"><ReactMarkdown remarkPlugins={[remarkGfm]}>{item.content}</ReactMarkdown>{item.streaming && <span className="stream-caret" aria-hidden="true" />}</div> : <>{item.image && <img className="user-message-image" src={item.image} alt="已发送图片" />}<span>{item.content}</span></>}</section>
           {item.role === 'assistant' && !item.pending && <div className="ai-answer-disclaimer">回答由 AI 生成，知识库可能包含老旧信息，仅供参考。</div>}
         </article>)}
         <div ref={bottomRef} />
       </div>
       <div className="user-composer">
-        <div className="user-composer-input">{remainingToday !== null && <small>今日剩余 {remainingToday} 次</small>}<textarea value={input} onChange={event => setInput(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); void send() } }} placeholder={developmentMode ? '系统维护中…' : compactViewport ? '输入问题…' : '输入问题；Enter 换行，Ctrl/Cmd + Enter 发送'} disabled={!agentId || sending || developmentMode} rows={2} /></div>
-        <div className="user-composer-actions"><Segmented className="response-detail-picker" value={responseDetail} onChange={value => setResponseDetail(value as 'concise' | 'detailed')} options={[{ value: 'concise', label: '简洁' }, { value: 'detailed', label: '详细' }]} disabled={sending || developmentMode} /><div className="user-composer-actions-right"><Button type="primary" icon={<SendOutlined />} disabled={!input.trim() || sending || !agentId || developmentMode} loading={sending} onClick={() => void send()}>发送</Button></div></div>
+        <div className="user-composer-input">{remainingToday !== null && <small>今日剩余 {remainingToday} 次</small>}{pendingImage && <div className="user-pending-image"><img src={pendingImage.preview} alt="待发送图片" /><span>已选择，补充操作说明后点击发送</span><Button type="text" size="small" icon={<CloseOutlined />} onClick={() => { URL.revokeObjectURL(pendingImage.preview); setPendingImage(null) }} /></div>}<textarea value={input} onChange={event => setInput(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); void send() } }} placeholder={developmentMode ? '系统维护中…' : compactViewport ? '输入问题…' : '输入问题；Enter 换行，Ctrl/Cmd + Enter 发送'} disabled={!agentId || sending || developmentMode} rows={2} /></div>
+        <div className="user-composer-actions"><Segmented className="response-detail-picker" value={responseDetail} onChange={value => setResponseDetail(value as 'concise' | 'detailed')} options={[{ value: 'concise', label: '简洁' }, { value: 'detailed', label: '详细' }]} disabled={sending || developmentMode} /><div className="user-composer-actions-right"><input id="user-image-input" type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={event => { chooseImage(event.target.files?.[0]); event.currentTarget.value = '' }} /><Button type="default" icon={<PaperClipOutlined />} disabled={!agentId || sending || developmentMode} onClick={() => document.getElementById('user-image-input')?.click()}>图片</Button><Button type="primary" icon={<SendOutlined />} disabled={!input.trim() || sending || !agentId || developmentMode} loading={sending} onClick={() => void send()}>发送</Button></div></div>
       </div>
     </section></div>
   </main>

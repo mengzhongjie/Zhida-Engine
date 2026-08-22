@@ -24,6 +24,7 @@ from app.models.knowledge import KnowledgeBase
 from app.models.qa import QAHistory
 from app.services.cache.rate_limiter import rate_limiter, RateLimitResult
 from app.services.channel.utils import plain_text
+from app.services.channel.media import download_feishu_image, feishu_image_keys, feishu_text_content
 from app.services.qa.generator import answer_generator
 
 _FEISHU_API = "https://open.feishu.cn/open-apis"
@@ -54,6 +55,7 @@ class FeishuBotService:
         self._token_cache: dict[str, tuple[str, float]] = {}
         self._send_lock = asyncio.Semaphore(4)
         self._handle_sem = asyncio.Semaphore(8)
+        self._pending_images: dict[str, tuple[float, list[str]]] = {}
 
     # ---------------------------------------------------------------- 凭据
     async def _credentials(self):
@@ -198,6 +200,8 @@ class FeishuBotService:
         handler = (
             EventDispatcherHandler.builder("", "")
             .register_p2_im_message_receive_v1(self._on_message)
+            # 飞书会在用户阅读消息后推送已读事件；不处理业务，但必须注册以避免 SDK 报 processor not found。
+            .register_p2_im_message_message_read_v1(self._on_message_read)
             .build()
         )
         self._ws = WsClient(
@@ -219,6 +223,10 @@ class FeishuBotService:
                 time.sleep(5)
 
     # ---------------------------------------------------------------- 消息处理
+    def _on_message_read(self, data):
+        """已读回执无需业务处理，注册空处理器避免长连接错误日志。"""
+        return None
+
     def _on_message(self, data):
         """SDK 事件回调（SDK 线程内，同步）。把处理调度到该线程的事件循环。"""
         try:
@@ -226,7 +234,8 @@ class FeishuBotService:
             message = getattr(event, "message", None)
             if message is None:
                 return
-            if (getattr(message, "message_type", "") or "") != "text":
+            message_type = getattr(message, "message_type", "") or ""
+            if message_type not in ("text", "image"):
                 return
             chat_type = getattr(message, "chat_type", "") or ""
             if chat_type not in ("group", "p2p"):
@@ -264,8 +273,13 @@ class FeishuBotService:
             if not mentioned:
                 return
 
-        question = _clean_mention(getattr(message, "content", "") or "")
-        if not question or len(question) > 4000:
+        raw_content = getattr(message, "content", "") or ""
+        question = _clean_mention(feishu_text_content(raw_content))
+        image_keys = feishu_image_keys(message) if chat_type == "p2p" else []
+        if image_keys and (getattr(message, "message_type", "") or "") == "image":
+            # 图片消息的 content 是 JSON（含 image_key），不能把 JSON 当作用户问题。
+            question = ""
+        if len(question) > 4000:
             return
 
         sender = getattr(event, "sender", None)
@@ -281,7 +295,30 @@ class FeishuBotService:
 
         async with self._send_lock:
             try:
-                result = await self._resolve_and_answer(chat_type, chat_id, question, sender_open_id)
+                image_data_uris: list[str] = []
+                if image_keys:
+                    token = await self._tenant_token(self._app_id, self._app_secret)
+                    logger.debug("飞书私信图片下载鉴权准备完成: user={} token_present={}", sender_open_id, bool(token))
+                    for image_key in image_keys:
+                        try:
+                            logger.debug("飞书私信图片 key 校验: user={} key_len={} key_prefix={}", sender_open_id, len(image_key or ""), (image_key or "")[:12])
+                            image_data_uris.append(await download_feishu_image(message_id, image_key, token))
+                        except Exception as exc:
+                            logger.warning("飞书私信图片下载失败: user={} reason={} detail={}", sender_open_id, type(exc).__name__, str(exc)[:700])
+                if image_keys and not image_data_uris:
+                    await self._reply(message_id, "图片下载失败，请重新发送图片。")
+                    return
+                now=time.monotonic()
+                if chat_type == "p2p" and not image_keys:
+                    pending=self._pending_images.pop(sender_open_id,None)
+                    if pending and pending[0]>now and question: image_data_uris=pending[1]
+                if chat_type == "p2p" and image_keys and not question:
+                    self._pending_images[sender_open_id]=(now+300,image_data_uris)
+                    await self._reply(message_id,"我已收到图片。你希望我做什么？例如描述图片、提取文字，或回答关于图片的具体问题。")
+                    return
+                if not question: return
+                if len(self._pending_images)>2000: self._pending_images={k:v for k,v in self._pending_images.items() if v[0]>now}
+                result = await self._resolve_and_answer(chat_type, chat_id, question, sender_open_id, image_data_uris)
                 if result:
                     # 写入本地问答历史，进入管理台观测/评测链路（失败不影响回复）
                     try:
@@ -303,7 +340,7 @@ class FeishuBotService:
             except Exception:
                 logger.exception("飞书消息处理失败: chat={} msg={}", chat_id, message_id)
 
-    async def _resolve_and_answer(self, chat_type: str, chat_id: str, question: str, sender_open_id: str):
+    async def _resolve_and_answer(self, chat_type: str, chat_id: str, question: str, sender_open_id: str, image_data_uris: list[str] | None = None):
         async with async_session_factory() as db:
             config = await db.get(FeishuBotConfig, 1)
             response_detail = (config.response_detail if config else "") or "concise"
@@ -364,6 +401,7 @@ class FeishuBotService:
             persona_preset=agent.persona_preset,
             persona_custom_instruction=agent.persona_custom_instruction or "",
             response_detail=response_detail,
+            image_data_uris=image_data_uris or [],
         )
         result.agent_id = agent.id
         return result

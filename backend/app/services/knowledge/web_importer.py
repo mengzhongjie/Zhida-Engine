@@ -4,6 +4,7 @@
 """
 
 import asyncio
+import base64
 import ipaddress
 import re
 import socket
@@ -20,6 +21,7 @@ except ImportError:  # 兼容旧安装；正式安装 requirements 后自动启�
 
 
 MAX_RESPONSE_BYTES = 5 * 1024 * 1024
+MAX_IMAGE_BYTES = 10 * 1024 * 1024
 MAX_REDIRECTS = 3
 
 
@@ -49,6 +51,45 @@ async def _validate_public_url(url: str) -> str:
     if not ips or any(not _is_public_ip(ip) for ip in ips):
         raise ValueError("不允许访问本机、内网或保留地址")
     return urlunparse((parsed.scheme, parsed.netloc, parsed.path or "/", parsed.params, parsed.query, ""))
+
+
+async def fetch_public_image_data_uri(url: str) -> str:
+    """受 SSRF 保护地获取网页图片，转 data URI 后再交给视觉模型。
+
+    绝不把外部 URL 直接交给模型厂商代抓，避免绕过本服务的网络边界。
+    """
+    current = await _validate_public_url(url)
+    headers = {"User-Agent": "ZhidaEngine/0.1 (web image import)", "Accept": "image/png,image/jpeg,image/webp"}
+    async with httpx.AsyncClient(timeout=httpx.Timeout(12.0, connect=4.0), follow_redirects=False, headers=headers) as client:
+        for _ in range(MAX_REDIRECTS + 1):
+            async with client.stream("GET", current) as response:
+                if response.status_code in {301, 302, 303, 307, 308}:
+                    location = response.headers.get("location")
+                    if not location:
+                        raise ValueError("图片重定向缺少目标地址")
+                    current = await _validate_public_url(urljoin(current, location))
+                    continue
+                if response.status_code >= 400:
+                    raise ValueError(f"图片返回 HTTP {response.status_code}")
+                media_type = response.headers.get("content-type", "").split(";", 1)[0].lower()
+                if media_type not in {"image/png", "image/jpeg", "image/webp"}:
+                    raise ValueError("图片格式不受支持")
+                chunks, size = [], 0
+                async for chunk in response.aiter_bytes(64 * 1024):
+                    size += len(chunk)
+                    if size > MAX_IMAGE_BYTES:
+                        raise ValueError("图片超过 10MB 限制")
+                    chunks.append(chunk)
+                payload = b"".join(chunks)
+                valid_magic = (
+                    payload.startswith(b"\x89PNG\r\n\x1a\n")
+                    or payload.startswith(b"\xff\xd8\xff")
+                    or (payload.startswith(b"RIFF") and len(payload) >= 12 and payload[8:12] == b"WEBP")
+                )
+                if not valid_magic:
+                    raise ValueError("图片内容校验失败")
+                return f"data:{media_type};base64,{base64.b64encode(payload).decode('ascii')}"
+    raise ValueError("图片重定向次数超过限制")
 
 
 def _normalize_content(text: str) -> str:

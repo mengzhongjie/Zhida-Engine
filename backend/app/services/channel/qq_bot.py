@@ -12,10 +12,11 @@ from app.models.qq_bot import QQBotConfig, QQBotGroupBinding
 from app.models.qa import QAHistory
 from app.services.cache.rate_limiter import rate_limiter, RateLimitResult
 from app.services.channel.utils import plain_text as _qq_plain_text
+from app.services.channel.media import download_image, qq_image_urls
 from app.services.qa.generator import answer_generator
 
 class QQBotService:
-    def __init__(self): self._task=None; self._seen={}; self._send_lock=asyncio.Semaphore(4); self._handle_sem=asyncio.Semaphore(8); self._capture_until=0.0; self._captured_groups=[]
+    def __init__(self): self._task=None; self._seen={}; self._send_lock=asyncio.Semaphore(4); self._handle_sem=asyncio.Semaphore(8); self._capture_until=0.0; self._captured_groups=[]; self._pending_images={}
     def start_group_openid_capture(self):
         self._captured_groups=[]; self._capture_until=time.monotonic()+300
         return 300
@@ -92,7 +93,8 @@ class QQBotService:
         if len(self._seen) > 2000:
             self._seen={k:v for k,v in self._seen.items() if time.monotonic()-v<3600}
         question=str(event.get("content") or "").strip()
-        if not question or len(question)>4000: return
+        image_urls = qq_image_urls(event)
+        if len(question)>4000: return
         async with async_session_factory() as db:
             config=await db.get(QQBotConfig,1)
             # 私聊安全边界：开关默认关闭；权限模式 all/allowlist/blocklist
@@ -116,10 +118,30 @@ class QQBotService:
         if rate_limiter.check(f"qq:c2c:{user_openid}", "", is_private=True) != RateLimitResult.ALLOW:
             logger.info("QQ 私聊消息已限流忽略: user={}", user_openid)
             return
+        image_data_uris: list[str] = []
+        for url in image_urls:
+            try:
+                image_data_uris.append(await download_image(url))
+            except Exception as exc:
+                # 只记录校验原因，不记录图片 URL 或图片内容。
+                logger.warning("QQ 私信图片下载失败: user={} reason={} detail={}", user_openid, type(exc).__name__, str(exc)[:120])
+        if image_urls and not image_data_uris:
+            await self._reply_c2c(user_openid, event_id, "图片下载失败，请重新发送图片。", token, app_id)
+            return
+        now=time.monotonic()
+        if not image_urls:
+            pending=self._pending_images.pop(user_openid,None)
+            if pending and pending[0]>now and question: image_data_uris=pending[1]
+        if image_urls and not question:
+            self._pending_images[user_openid]=(now+300,image_data_uris)
+            await self._reply_c2c(user_openid,event_id,"我已收到图片。你希望我做什么？例如描述图片、提取文字，或回答关于图片的具体问题。",token,app_id)
+            return
+        if not question: return
+        if len(self._pending_images)>2000: self._pending_images={k:v for k,v in self._pending_images.items() if v[0]>now}
         async with self._send_lock:
             try:
                 qq_user_id=f"qq:c2c:{user_openid}"
-                result=await answer_generator.generate(knowledge_base_ids=ids,question=question,agent_id=agent.id,user_id=qq_user_id,enable_memory=False,allow_web_search=False,reply_mode=agent.reply_mode,persona_preset=agent.persona_preset,persona_custom_instruction=agent.persona_custom_instruction or "",response_detail=response_detail)
+                result=await answer_generator.generate(knowledge_base_ids=ids,question=question,agent_id=agent.id,user_id=qq_user_id,enable_memory=False,allow_web_search=False,reply_mode=agent.reply_mode,persona_preset=agent.persona_preset,persona_custom_instruction=agent.persona_custom_instruction or "",response_detail=response_detail,image_data_uris=image_data_uris)
                 try:
                     async with async_session_factory() as db:
                         db.add(QAHistory(

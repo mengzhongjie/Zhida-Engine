@@ -223,6 +223,52 @@ class LLMGateway:
         # 所有模型都不可用
         raise RuntimeError("所有 LLM 模型均不可用，请检查配置和网络连接")
 
+    async def chat_multimodal(
+        self, prompt: str, image_data_uris: list[str],
+        system_prompt: Optional[str] = None, temperature: float = 0.3,
+        max_tokens: int = 2048,
+    ) -> ChatResult:
+        """图片问答：支持视觉的主模型优先，独立视觉模型作为失败后的重试链路。"""
+        if not image_data_uris:
+            return await self.chat(prompt, system_prompt=system_prompt, temperature=temperature, max_tokens=max_tokens)
+        await self.initialize()
+        messages: list[dict] = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": ([{"type": "text", "text": prompt}] + [
+            {"type": "image_url", "image_url": {"url": uri}} for uri in image_data_uris
+        ])})
+        clients: list[ModelClient] = []
+        # 主模型已明确声明支持视觉时，优先复用主模型，避免额外占用独立视觉模型额度。
+        if self._primary_client and getattr(self._primary_client.config, "supports_vision", False):
+            clients.append(self._primary_client)
+        try:
+            from sqlalchemy import select
+            from app.core.database import async_session_factory
+            from app.models.vision_config import VisionConfig
+            async with async_session_factory() as db:
+                rows = list((await db.execute(select(VisionConfig).where(VisionConfig.enabled.is_(True)).order_by(
+                    VisionConfig.is_primary.desc(), VisionConfig.is_fallback.desc(), VisionConfig.id.asc(),
+                ))).scalars())
+            for row in rows:
+                clients.append(ModelClient(config=row, client=AsyncOpenAI(
+                    base_url=row.base_url, api_key=decrypt_api_key(row.api_key), timeout=60.0)))
+        except Exception as exc:
+            logger.warning("加载独立视觉模型失败，将尝试主模型: {}", type(exc).__name__)
+        if not clients:
+            raise RuntimeError("当前未配置可用的多模态模型")
+        last_error: Exception | None = None
+        for client in clients:
+            try:
+                return await self._call_model(client, messages, temperature, max_tokens)
+            except Exception as exc:
+                last_error = exc
+                logger.warning("视觉模型 {} 调用失败，尝试下一配置", client.config.model_name)
+            finally:
+                if client is not self._primary_client:
+                    await client.client.close()
+        raise RuntimeError("所有多模态模型均不可用") from last_error
+
     async def chat_stream(
         self,
         prompt: str,

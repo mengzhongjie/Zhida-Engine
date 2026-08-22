@@ -48,6 +48,7 @@ class LLMConfigCreate(BaseModel):
     provider_name: Optional[str] = Field(None, description="厂商显示名称（自定义时必填）")
     base_url: Optional[str] = Field(None, description="API 基础地址（自定义时必填）")
     model_name: str = Field(..., description="模型名称")
+    supports_vision: bool = Field(False, description="是否支持图片输入")
     api_key: Optional[str] = Field(None, description="API Key")
     is_primary: bool = Field(True, description="是否为主模型")
     is_fallback: bool = Field(False, description="是否为降级模型")
@@ -68,6 +69,7 @@ class LLMConfigUpdate(BaseModel):
     provider_name: Optional[str] = Field(None, description="厂商显示名称")
     base_url: Optional[str] = Field(None, description="API 基础地址")
     model_name: Optional[str] = Field(None, description="模型名称")
+    supports_vision: Optional[bool] = Field(None, description="是否支持图片输入")
     api_key: Optional[str] = Field(None, description="API Key")
     is_primary: Optional[bool] = Field(None, description="是否为主模型")
     is_fallback: Optional[bool] = Field(None, description="是否为降级模型")
@@ -90,6 +92,7 @@ class LLMConfigOut(BaseModel):
     provider_name: str
     base_url: str
     model_name: str
+    supports_vision: bool = False
     api_key: str = ""  # 脱敏后的 API Key（只显示前后几位）
     is_primary: bool
     is_fallback: bool

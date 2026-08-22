@@ -65,7 +65,7 @@ from app.services.knowledge.document_processor import (
 from app.services.knowledge.data_integrity import data_integrity_service
 from app.services.validation.precheck import upload_prechecker
 from app.services.knowledge.feishu import FeishuClient
-from app.services.knowledge.web_importer import fetch_public_page
+from app.services.knowledge.web_importer import fetch_public_image_data_uri, fetch_public_page
 from app.services.llm.gateway import LLMGateway
 from app.core.security import encrypt_api_key, decrypt_api_key, mask_api_key
 
@@ -431,10 +431,12 @@ async def _enrich_web_images(content: str) -> tuple[str, int, int, float]:
         nearby = content[max(0, match.start() - 500):min(len(content), match.end() + 500)]
         try:
             async with semaphore:
+                # 先由本服务在 SSRF 防护下取回图片，再以内联数据交给视觉模型。
+                safe_image_data_uri = await fetch_public_image_data_uri(image_url)
                 messages = [{
                     "role": "user", "content": [
                         {"type": "text", "text": f"结合以下文章上下文，用不超过 120 字描述图片内容、可读文字/数据及其作用。不要猜测。\n上下文：{nearby}\n页面替代文字：{alt}"},
-                        {"type": "image_url", "image_url": {"url": image_url}},
+                        {"type": "image_url", "image_url": {"url": safe_image_data_uri}},
                     ],
                 }]
                 for base_url, model_name, api_key in vision_configs:

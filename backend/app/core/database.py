@@ -191,6 +191,7 @@ async def _run_compatible_migrations(conn):
         "ALTER TABLE llm_configs ADD COLUMN is_context_model BOOLEAN NOT NULL DEFAULT 0",
         "ALTER TABLE llm_configs ADD COLUMN context_rewrite_timeout_seconds INTEGER NOT NULL DEFAULT 10",
         "ALTER TABLE llm_configs ADD COLUMN context_compaction_timeout_seconds INTEGER NOT NULL DEFAULT 25",
+        "ALTER TABLE llm_configs ADD COLUMN supports_vision BOOLEAN NOT NULL DEFAULT 0",
         "ALTER TABLE conversations ADD COLUMN context_summary TEXT",
         "ALTER TABLE conversations ADD COLUMN summarized_through_history_id INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE conversations ADD COLUMN summary_updated_at DATETIME",
