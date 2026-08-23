@@ -152,6 +152,11 @@ def _get_machine_fingerprint() -> bytes:
     anchor = _get_env_anchor_fingerprint()
     if anchor:
         return anchor
+    return _get_machine_salt_fingerprint()
+
+
+def _get_machine_salt_fingerprint() -> bytes:
+    """获取未使用环境锚点时的机器密钥，供迁移期兼容旧数据库。"""
     raw = _get_machine_id().encode() + b":" + _get_or_create_encryption_salt() + b":ZhidaEngine"
     return hashlib.sha256(raw).digest()
 
@@ -216,7 +221,9 @@ def decrypt_api_key(encrypted: str) -> str:
         anchor = _get_env_anchor_fingerprint()
         if anchor:
             keys.append(anchor)
-        keys.extend([_get_machine_fingerprint(), _get_legacy_machine_fingerprint()])
+        # 即使当前设置了 ZHIDA_ENC_KEY，也必须保留迁移前机器密钥候选，
+        # 否则在“先用机器密钥保存、后设置全局锚点”的升级路径中旧 API Key 会失效。
+        keys.extend([_get_machine_salt_fingerprint(), _get_legacy_machine_fingerprint()])
         for key in keys:
             try:
                 return AESGCM(key).decrypt(nonce, ciphertext, None).decode()
