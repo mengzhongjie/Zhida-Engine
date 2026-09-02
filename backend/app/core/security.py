@@ -54,6 +54,16 @@ def get_client_ip(request) -> str:
 
 _reported_key_decryption_failures: set[str] = set()
 
+
+def validate_encryption_configuration() -> None:
+    """加密启用时必须配置固定锚点，避免服务带着不可恢复的配置启动。"""
+    if settings.API_KEY_ENCRYPT_ENABLED and not settings.ENC_KEY.strip():
+        raise RuntimeError(
+            "缺少 ZHIDA_ENC_KEY：请先运行 ./deploy/bootstrap-env.sh，"
+            "或在 .env 中设置固定随机值后再启动服务"
+        )
+
+
 def _get_encryption_key() -> bytes:
     """从唯一且可迁移的 ZHIDA_ENC_KEY 派生 AES-256-GCM 密钥。"""
     anchor = settings.ENC_KEY.strip()
