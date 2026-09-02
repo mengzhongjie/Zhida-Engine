@@ -63,11 +63,18 @@ class FeishuBotService:
         async with async_session_factory() as db:
             bot = await db.get(FeishuBotConfig, 1)
             if bot and bot.app_id and bot.app_secret:
-                return bot.app_id, decrypt_api_key(bot.app_secret), "bot"
+                secret = decrypt_api_key(bot.app_secret)
+                if secret:
+                    return bot.app_id, secret, "bot"
+                logger.error("飞书机器人 AppSecret 无法解密，已忽略该凭据；请重新保存后再启用")
+                return None
             from app.models.feishu_config import FeishuConfig
             cloud = await db.get(FeishuConfig, 1)
             if cloud and cloud.app_id and cloud.app_secret:
-                return cloud.app_id, decrypt_api_key(cloud.app_secret), "cloud"
+                secret = decrypt_api_key(cloud.app_secret)
+                if secret:
+                    return cloud.app_id, secret, "cloud"
+                logger.error("飞书应用 AppSecret 无法解密，已忽略该凭据；请重新保存")
             return None
 
     async def config_status(self) -> dict:
@@ -204,15 +211,15 @@ class FeishuBotService:
             .register_p2_im_message_message_read_v1(self._on_message_read)
             .build()
         )
-        self._ws = WsClient(
-            self._app_id,
-            self._app_secret,
-            event_handler=handler,
-            log_level=LogLevel.ERROR,
-            auto_reconnect=False,  # 由外层循环控制重连，保证 stop 后不再拉起
-        )
         while not self._stopping:
             try:
+                self._ws = WsClient(
+                    self._app_id,
+                    self._app_secret,
+                    event_handler=handler,
+                    log_level=LogLevel.ERROR,
+                    auto_reconnect=False,  # 由外层循环控制重连，保证 stop 后不再拉起
+                )
                 logger.info("飞书机器人长连接启动: app_id={}", self._app_id)
                 self._ws.start()  # 阻塞运行；断开时抛异常返回
             except Exception as exc:

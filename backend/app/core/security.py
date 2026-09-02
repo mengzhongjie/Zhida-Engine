@@ -2,7 +2,7 @@
 智答引擎（ZhiDa Engine）—— 安全工具集
 
 本地桌面应用的安全防护：
-- API Key 加密存储（AES，密钥派生自机器指纹）
+- API Key 加密存储（AES，密钥仅由 ZHIDA_ENC_KEY 派生）
 - 输入清洗（防注入/XSS）
 - 请求来源校验
 - 日志脱敏
@@ -52,119 +52,14 @@ def get_client_ip(request) -> str:
 # API Key 加密/解密
 # ============================================================
 
-def _get_machine_id() -> str:
-    """
-    获取稳定机器标识。
-
-    组合机器唯一标识符生成 32 字节密钥：
-    - macOS: 硬件 UUID + 主机名
-    - Windows: 机器 GUID + 主机名
-    - Linux: machine-id + 主机名
-    """
-    import platform
-    import socket
-
-    machine_id = ""
-    if sys.platform == "darwin":
-        # macOS: 使用硬件 UUID
-        import subprocess
-        try:
-            result = subprocess.run(
-                ["ioreg", "-d2", "-c", "IOPlatformExpertDevice"],
-                capture_output=True, text=True,
-            )
-            for line in result.stdout.split("\n"):
-                if "IOPlatformUUID" in line:
-                    machine_id = line.split('"')[-2]
-                    break
-        except Exception:
-            pass
-    elif sys.platform == "win32":
-        # Windows: 使用注册表 MachineGuid
-        try:
-            import winreg
-            key = winreg.OpenKey(
-                winreg.HKEY_LOCAL_MACHINE,
-                r"SOFTWARE\Microsoft\Cryptography",
-            )
-            machine_id = winreg.QueryValueEx(key, "MachineGuid")[0]
-        except Exception:
-            pass
-    else:
-        # Linux: 使用 machine-id
-        try:
-            with open("/etc/machine-id", "r") as f:
-                machine_id = f.read().strip()
-        except Exception:
-            pass
-
-    # 兜底：UUID + 主机名
-    if not machine_id:
-        machine_id = str(uuid.getnode()) + socket.gethostname()
-
-    return machine_id
-
-
-def _get_or_create_encryption_salt() -> bytes:
-    """在应用数据目录保存随机盐，避免网络/DHCP 改变主机名导致密钥失效。"""
-    salt_file = settings.DATA_DIR / ".encryption_salt"
-    try:
-        salt = salt_file.read_bytes()
-        if len(salt) >= 32:
-            return salt
-    except FileNotFoundError:
-        pass
-    except OSError as exc:
-        logger.warning(f"读取本地加密盐失败: {exc}")
-
-    salt = os.urandom(32)
-    try:
-        # O_EXCL 防止多个启动进程同时覆盖同一个盐。
-        descriptor = os.open(salt_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(descriptor, "wb") as file:
-            file.write(salt)
-            file.flush()
-            os.fsync(file.fileno())
-        return salt
-    except FileExistsError:
-        return salt_file.read_bytes()
-    except OSError as exc:
-        # 仅作为最后兜底；正常桌面数据目录可写时不会走到这里。
-        logger.warning(f"创建本地加密盐失败，将使用机器标识兜底: {exc}")
-        return b""
-
-
-def _get_env_anchor_fingerprint() -> bytes:
-    """环境变量锚定密钥：为 Docker 等机器指纹易变的部署提供固定加密密钥。
-
-    设置 ZHIDA_ENC_KEY 后，加密/解密全部使用该固定值派生的密钥，
-    容器重建/换机不再改变密钥，已存 API Key 可继续解密。
-    未设置时返回空（回退到机器指纹），不影响桌面单机默认行为。
-    """
-    anchor = os.environ.get("ZHIDA_ENC_KEY", "").strip()
+def _get_encryption_key() -> bytes:
+    """从唯一且可迁移的 ZHIDA_ENC_KEY 派生 AES-256-GCM 密钥。"""
+    anchor = settings.ENC_KEY.strip()
     if not anchor:
-        return b""
+        raise RuntimeError(
+            "未配置 ZHIDA_ENC_KEY，拒绝读写 API Key；请在 .env 中设置固定随机值后重启服务"
+        )
     return hashlib.sha256(f"{anchor}:ZhidaEngine".encode()).digest()
-
-
-def _get_machine_fingerprint() -> bytes:
-    """新格式密钥：优先环境锚定；否则稳定硬件标识 + 持久随机盐，不依赖可变主机名。"""
-    anchor = _get_env_anchor_fingerprint()
-    if anchor:
-        return anchor
-    return _get_machine_salt_fingerprint()
-
-
-def _get_machine_salt_fingerprint() -> bytes:
-    """获取未使用环境锚点时的机器密钥，供迁移期兼容旧数据库。"""
-    raw = _get_machine_id().encode() + b":" + _get_or_create_encryption_salt() + b":ZhidaEngine"
-    return hashlib.sha256(raw).digest()
-
-
-def _get_legacy_machine_fingerprint() -> bytes:
-    """兼容旧版“硬件 UUID + 主机名”格式，供尚未重新保存的旧密钥过渡。"""
-    raw = f"{_get_machine_id()}:{socket.gethostname()}:ZhidaEngine"
-    return hashlib.sha256(raw.encode()).digest()
 
 
 def encrypt_api_key(api_key: str) -> str:
@@ -172,7 +67,7 @@ def encrypt_api_key(api_key: str) -> str:
     加密 API Key —— 使用 AES-256-GCM
 
     加密后的格式: base64(iv + ciphertext + tag)
-    密钥派生自机器指纹，仅当前机器可解密。
+    密钥派生自 ZHIDA_ENC_KEY；将 .env 与数据目录一同迁移即可继续解密。
     """
     if not api_key or not settings.API_KEY_ENCRYPT_ENABLED:
         return api_key
@@ -181,7 +76,7 @@ def encrypt_api_key(api_key: str) -> str:
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
         import os as crypto_os
 
-        aesgcm = AESGCM(_get_machine_fingerprint())
+        aesgcm = AESGCM(_get_encryption_key())
 
         # 生成随机 nonce（12 字节）
         nonce = crypto_os.urandom(12)
@@ -216,26 +111,14 @@ def decrypt_api_key(encrypted: str) -> str:
         nonce = combined[:12]
         ciphertext = combined[12:]
 
-        # 解密候选：优先环境锚定密钥（若有），再尝试稳定新格式与旧格式，兼容迁移期数据。
-        keys = []
-        anchor = _get_env_anchor_fingerprint()
-        if anchor:
-            keys.append(anchor)
-        # 即使当前设置了 ZHIDA_ENC_KEY，也必须保留迁移前机器密钥候选，
-        # 否则在“先用机器密钥保存、后设置全局锚点”的升级路径中旧 API Key 会失效。
-        keys.extend([_get_machine_salt_fingerprint(), _get_legacy_machine_fingerprint()])
-        for key in keys:
-            try:
-                return AESGCM(key).decrypt(nonce, ciphertext, None).decode()
-            except Exception:
-                continue
-        raise ValueError("无法使用当前或旧格式密钥解密")
+        return AESGCM(_get_encryption_key()).decrypt(nonce, ciphertext, None).decode()
 
     except ImportError:
         raise RuntimeError("cryptography 未安装，无法解密 API Key，请先安装依赖") from None
-    except Exception:
-        # 解密失败（可能换了机器或密钥损坏），返回空值以阻断使用无效 Key。
-        logger.warning("API Key 解密失败，可能更换了机器")
+    except Exception as exc:
+        # 返回空值阻断无效 Key；调用方必须把这视为凭据不可用，不能进入连接重试。
+        detail = str(exc).strip() or type(exc).__name__
+        logger.warning("API Key 解密失败（ZHIDA_ENC_KEY 不匹配或密文已损坏）：{}", detail[:160])
         return ""
 
 

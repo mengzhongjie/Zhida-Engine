@@ -40,7 +40,13 @@ class QQBotService:
     async def _credentials(self):
         async with async_session_factory() as db:
             c=await db.get(QQBotConfig,1)
-            return (c.app_id, decrypt_api_key(c.app_secret)) if c and c.enabled and c.app_id and c.app_secret else None
+            if not (c and c.enabled and c.app_id and c.app_secret):
+                return None
+            secret = decrypt_api_key(c.app_secret)
+            if not secret:
+                logger.error("QQ 机器人已启用但 AppSecret 无法解密；已停止连接，请重新保存凭据后再启用")
+                return None
+            return c.app_id, secret
     async def _token(self, app_id, secret):
         async with httpx.AsyncClient(timeout=15) as c:
             r=await c.post("https://bots.qq.com/app/getAppAccessToken",json={"appId":app_id,"clientSecret":secret}); r.raise_for_status()
@@ -52,7 +58,9 @@ class QQBotService:
         while True:
             try:
                 credentials=await self._credentials()
-                if not credentials: await asyncio.sleep(10); continue
+                # 配置未启用、缺失或不可解密时不再重试；保存凭据会通过 reload() 显式重新启动。
+                if not credentials:
+                    return
                 app_id,secret=credentials; token=await self._token(app_id,secret)
                 async with httpx.AsyncClient(timeout=15) as c:
                     response = await c.get("https://api.sgroup.qq.com/gateway", headers={"Authorization":f"QQBot {token}","X-Union-Appid":app_id})

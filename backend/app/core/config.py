@@ -156,6 +156,9 @@ class Settings(BaseSettings):
     MAX_UPLOAD_SIZE_MB: int = 100  # 最大上传文件大小
     MAX_REQUEST_SIZE_MB: int = 10  # 最大请求体大小
     API_KEY_ENCRYPT_ENABLED: bool = True  # API Key 加密存储
+    # API Key 加密唯一密钥。所有部署（本地、Docker、迁移后的服务器）均必须固定保存它。
+    # 禁止从机器指纹派生，避免容器重建、换机后已保存配置失效。
+    ENC_KEY: str = ""
 
     ADMIN_BOOTSTRAP_USERNAME: str = ""
     ADMIN_BOOTSTRAP_PASSWORD: str = ""
