@@ -57,10 +57,13 @@ _reported_key_decryption_failures: set[str] = set()
 
 def validate_encryption_configuration() -> None:
     """加密启用时必须配置固定锚点，避免服务带着不可恢复的配置启动。"""
-    if settings.API_KEY_ENCRYPT_ENABLED and not settings.ENC_KEY.strip():
+    key = settings.ENC_KEY.strip()
+    if settings.API_KEY_ENCRYPT_ENABLED and (
+        not key or key.startswith("replace-with-") or len(key) < 32
+    ):
         raise RuntimeError(
-            "缺少 ZHIDA_ENC_KEY：请先运行 ./deploy/bootstrap-env.sh，"
-            "或在 .env 中设置固定随机值后再启动服务"
+            "ZHIDA_ENC_KEY 缺失、仍为模板值或长度不足：请先运行 ./deploy/bootstrap-env.sh，"
+            "或在 .env 中设置至少 32 字符的随机值后再启动服务"
         )
 
 
