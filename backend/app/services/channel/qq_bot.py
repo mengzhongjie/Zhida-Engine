@@ -34,9 +34,11 @@ class QQBotService:
                 r=await c.post("https://bots.qq.com/app/getAppAccessToken", json={"appId":app_id,"clientSecret":secret}); r.raise_for_status()
                 body=r.json()
                 if not body.get("access_token"):
-                    return False, f"QQ 未返回 access_token：code={body.get('code')} message={body.get('message') or body.get('msg') or body}"
+                    return False, "QQ 凭据校验失败，请检查 AppID、AppSecret 与机器人状态后重新保存"
             return True, "ok"
-        except Exception as exc: return False, f"QQ 凭据测试失败：{str(exc)[:180]}"
+        except Exception as exc:
+            logger.warning("QQ 凭据测试失败: {}", type(exc).__name__)
+            return False, "QQ 连接失败，请检查网络和机器人配置后重试"
     async def _credentials(self):
         async with async_session_factory() as db:
             c=await db.get(QQBotConfig,1)

@@ -52,6 +52,8 @@ def get_client_ip(request) -> str:
 # API Key 加密/解密
 # ============================================================
 
+_reported_key_decryption_failures: set[str] = set()
+
 def _get_encryption_key() -> bytes:
     """从唯一且可迁移的 ZHIDA_ENC_KEY 派生 AES-256-GCM 密钥。"""
     anchor = settings.ENC_KEY.strip()
@@ -115,10 +117,12 @@ def decrypt_api_key(encrypted: str) -> str:
 
     except ImportError:
         raise RuntimeError("cryptography 未安装，无法解密 API Key，请先安装依赖") from None
-    except Exception as exc:
-        # 返回空值阻断无效 Key；调用方必须把这视为凭据不可用，不能进入连接重试。
-        detail = str(exc).strip() or type(exc).__name__
-        logger.warning("API Key 解密失败（ZHIDA_ENC_KEY 不匹配或密文已损坏）：{}", detail[:160])
+    except Exception:
+        # 不暴露 InvalidTag 等密码学实现细节；同一密文只提示一次，避免启动和页面刷新刷屏。
+        failure_id = hashlib.sha256(encrypted.encode()).hexdigest()
+        if failure_id not in _reported_key_decryption_failures:
+            _reported_key_decryption_failures.add(failure_id)
+            logger.warning("检测到无法读取的已保存密钥；相关配置已停用，请管理员重新保存该密钥")
         return ""
 
 

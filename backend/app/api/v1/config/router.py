@@ -361,7 +361,16 @@ async def test_configured_model(
         raise HTTPException(status_code=404, detail="LLM 配置不存在")
 
     decrypted_key = decrypt_api_key(config.api_key)
-    logger.info(f"测试配置 {config_id}: api_key原始长度={len(config.api_key)}, 解密后长度={len(decrypted_key)}")
+    if not decrypted_key:
+        from datetime import datetime
+        config.last_test_at, config.last_test_success = datetime.utcnow(), False
+        return TestConnectionResponse(
+            success=False,
+            message="已保存的 API Key 无法读取，请重新填写并保存后再测试",
+            latency_ms=0,
+            model=config.model_name,
+        )
+    logger.info("测试模型配置: id={} model={}", config_id, config.model_name)
 
     test_result = await llm_gateway.test_connection(
         base_url=config.base_url,

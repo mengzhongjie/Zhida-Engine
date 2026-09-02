@@ -88,6 +88,8 @@ class LLMGateway:
         # 构建模型客户端
         for config in configs:
             client = self._build_client(config)
+            if client is None:
+                continue
             if config.is_context_model:
                 self._context_client = client
             if config.is_primary:
@@ -98,11 +100,15 @@ class LLMGateway:
         # 兼容早期配置：用户完成连接测试但未勾选“主模型”时，实际问答仍应使用唯一的启用配置。
         answer_configs = [config for config in configs if not config.is_context_model]
         if self._primary_client is None and answer_configs:
-            self._primary_client = self._build_client(answer_configs[0])
-            logger.warning(
-                f"全局 LLM 配置没有标记主模型，临时使用 {answer_configs[0].model_name}；"
-                "请在设置中将其设为主模型"
-            )
+            for config in answer_configs:
+                client = self._build_client(config)
+                if client is not None:
+                    self._primary_client = client
+                    logger.warning(
+                        f"全局 LLM 配置没有标记主模型，临时使用 {config.model_name}；"
+                        "请在设置中将其设为主模型"
+                    )
+                    break
 
         # 如果没有配置主模型，记录警告
         if self._primary_client is None:
@@ -150,11 +156,17 @@ class LLMGateway:
             )
             return list(result.scalars().all())
 
-    def _build_client(self, config: LLMConfig) -> ModelClient:
+    def _build_client(self, config: LLMConfig) -> Optional[ModelClient]:
         """根据配置构建 OpenAI 兼容客户端"""
         base_url = config.base_url
         # 解密 API Key 后使用（加密存储，运行时解密）
         api_key = decrypt_api_key(config.api_key)
+        if config.api_key and not api_key:
+            logger.warning("已跳过不可用的模型配置 {}；请在管理台重新保存 API Key", config.model_name)
+            return None
+        if not api_key:
+            logger.warning("已跳过未填写 API Key 的模型配置 {}", config.model_name)
+            return None
 
         client = AsyncOpenAI(
             base_url=base_url,
@@ -251,8 +263,12 @@ class LLMGateway:
                     VisionConfig.is_primary.desc(), VisionConfig.is_fallback.desc(), VisionConfig.id.asc(),
                 ))).scalars())
             for row in rows:
+                api_key = decrypt_api_key(row.api_key)
+                if not api_key:
+                    logger.warning("已跳过不可用的视觉模型配置 {}；请重新保存 API Key", row.model_name)
+                    continue
                 clients.append(ModelClient(config=row, client=AsyncOpenAI(
-                    base_url=row.base_url, api_key=decrypt_api_key(row.api_key), timeout=60.0)))
+                    base_url=row.base_url, api_key=api_key, timeout=60.0)))
         except Exception as exc:
             logger.warning("加载独立视觉模型失败，将尝试主模型: {}", type(exc).__name__)
         if not clients:
@@ -477,6 +493,14 @@ class LLMGateway:
         """
         start_time = time.time()
 
+        if not api_key or not api_key.strip():
+            return {
+                "success": False,
+                "message": "请填写有效的 API Key 后再测试连接",
+                "latency_ms": 0,
+                "model": model_name,
+            }
+
         try:
             client = AsyncOpenAI(
                 base_url=base_url,
@@ -503,11 +527,16 @@ class LLMGateway:
 
         except Exception as e:
             elapsed = (time.time() - start_time) * 1000
-            logger.warning(f"连接测试失败: {model_name} @ {base_url}: {e}")
+            status_code = getattr(e, "status_code", None)
+            is_auth_error = status_code in (401, 403) or "authentication" in str(e).lower()
+            logger.warning("模型连接测试失败: model={} status={}", model_name, status_code or "unknown")
 
             return {
                 "success": False,
-                "message": f"连接失败: {str(e)[:200]}",
+                "message": (
+                    "API Key 无效、已过期或与当前服务地址不匹配，请检查后重新保存"
+                    if is_auth_error else "连接失败，请检查服务地址、模型名称和网络连接"
+                ),
                 "latency_ms": round(elapsed, 0),
                 "model": model_name,
             }
@@ -516,7 +545,7 @@ class LLMGateway:
         """测试已配置的模型连接"""
         return await self.test_connection(
             base_url=config.base_url,
-            api_key=config.api_key,
+            api_key=decrypt_api_key(config.api_key),
             model_name=config.model_name,
         )
 

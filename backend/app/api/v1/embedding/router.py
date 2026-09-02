@@ -193,15 +193,21 @@ async def test_embedding_profile(profile_id: int, db: AsyncSession = Depends(get
     if item is None:
         raise HTTPException(status_code=404, detail="向量配置不存在")
     started = time.time()
+    api_key = decrypt_api_key(item.cloud_api_key)
+    if not api_key:
+        item.last_test_at, item.last_test_success = datetime.utcnow(), False
+        item.last_error = "已保存的 API Key 无法读取，请重新填写并保存"
+        return EmbeddingTestResponse(success=False, message=item.last_error, latency_ms=0)
     try:
-        service = CloudEmbedding(base_url=item.cloud_base_url, api_key=decrypt_api_key(item.cloud_api_key),
+        service = CloudEmbedding(base_url=item.cloud_base_url, api_key=api_key,
                                  model_name=item.cloud_model, dimension=item.cloud_dimension)
         result = await service.embed_text("测试连接")
         item.last_test_at, item.last_test_success, item.last_error = datetime.utcnow(), True, None
         return EmbeddingTestResponse(success=True, message="连接成功", latency_ms=(time.time()-started)*1000, dimension=len(result))
     except Exception as exc:
-        item.last_test_at, item.last_test_success, item.last_error = datetime.utcnow(), False, str(exc)[:500]
-        return EmbeddingTestResponse(success=False, message=f"连接失败: {exc}", latency_ms=(time.time()-started)*1000)
+        logger.warning("向量模型连接测试失败: {}", type(exc).__name__)
+        item.last_test_at, item.last_test_success, item.last_error = datetime.utcnow(), False, "向量模型连接失败，请检查 API Key、服务地址和模型名称"
+        return EmbeddingTestResponse(success=False, message=item.last_error, latency_ms=(time.time()-started)*1000)
 
 
 @router.post("/profiles/{profile_id}/activate")
@@ -572,15 +578,9 @@ async def test_embedding_connection(
 
     except Exception as e:
         latency_ms = (time.time() - start_time) * 1000
-        logger.error(f"向量化测试失败: {e}")
-        error_msg = str(e)
-        # 避免重复的前缀（如果异常消息已经包含"失败"等词，不再加前缀）
-        if "失败" in error_msg or "错误" in error_msg:
-            display_msg = error_msg
-        else:
-            display_msg = f"连接失败: {error_msg}"
+        logger.warning("向量化测试失败: {}", type(e).__name__)
         return EmbeddingTestResponse(
             success=False,
-            message=display_msg,
+            message="向量模型连接失败，请检查 API Key、服务地址和模型名称",
             latency_ms=round(latency_ms, 2),
         )

@@ -105,8 +105,13 @@ async def test_config(config_id: int, db: AsyncSession = Depends(get_db)):
     config = await db.get(VisionConfig, config_id)
     if config is None or not config.base_url or not config.model_name or not config.api_key:
         raise HTTPException(status_code=422, detail="请先保存完整的视觉模型配置")
+    api_key = decrypt_api_key(config.api_key)
+    if not api_key:
+        config.last_test_at, config.last_test_success = datetime.utcnow(), False
+        config.last_error = "已保存的 API Key 无法读取，请重新填写并保存"
+        return {"success": False, "message": config.last_error}
     try:
-        client = AsyncOpenAI(base_url=config.base_url, api_key=decrypt_api_key(config.api_key), timeout=20.0)
+        client = AsyncOpenAI(base_url=config.base_url, api_key=api_key, timeout=20.0)
         response = await client.chat.completions.create(model=config.model_name, messages=[{"role": "user", "content": [
             {"type": "text", "text": "这是一张测试图片。请仅回复：视觉模型连接成功"},
             {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAN0lEQVR4nO3RwQ0AMAjDwJT9d05HMB9+vgGCZF7bXJrT9XhgwR8gEyETIRMhEyETIRMhEyEThXzH8QM9OMM6fAAAAABJRU5ErkJggg=="}},
@@ -117,8 +122,8 @@ async def test_config(config_id: int, db: AsyncSession = Depends(get_db)):
         config.last_test_at, config.last_test_success, config.last_error = datetime.utcnow(), True, None
         return {"success": True, "message": "视觉模型图片输入测试成功"}
     except Exception as exc:
-        logger.warning(f"视觉模型测试失败: {type(exc).__name__}: {exc}")
-        config.last_test_at, config.last_test_success, config.last_error = datetime.utcnow(), False, str(exc)[:500]
+        logger.warning("视觉模型测试失败: {}", type(exc).__name__)
+        config.last_test_at, config.last_test_success, config.last_error = datetime.utcnow(), False, "视觉模型连接失败，请检查 API Key、服务地址和模型名称"
         return {"success": False, "message": "视觉模型连接失败，请检查配置"}
 
 

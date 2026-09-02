@@ -120,7 +120,8 @@ class FeishuBotService:
                     return False, f"飞书返回错误：{body.get('msg') or body.get('code')}"
             return True, "ok"
         except Exception as exc:
-            return False, f"飞书凭据测试失败：{str(exc)[:180]}"
+            logger.warning("飞书凭据测试失败: {}", type(exc).__name__)
+            return False, "飞书凭据或应用状态异常，请检查 App ID、App Secret 和应用发布状态后重试"
 
     async def bot_info(self, app_id: str, secret: str) -> dict:
         """机器人基本信息（open_id / 名称），用于 @ 校验与展示。"""

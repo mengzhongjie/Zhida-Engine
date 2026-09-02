@@ -1264,15 +1264,22 @@ async def test_feishu_config(db: AsyncSession = Depends(get_db)):
     config = await db.get(FeishuConfig, 1)
     if config is None:
         raise HTTPException(status_code=422, detail="请先保存飞书 App ID 和 App Secret")
+    app_secret = decrypt_api_key(config.app_secret)
+    if not app_secret:
+        config.last_test_at, config.last_test_success = datetime.utcnow(), False
+        config.last_error = "已保存的 App Secret 无法读取，请重新填写并保存"
+        await db.commit()
+        return {"success": False, "message": config.last_error}
     try:
-        await FeishuClient(config.app_id, decrypt_api_key(config.app_secret)).test_connection()
+        await FeishuClient(config.app_id, app_secret).test_connection()
         config.last_test_at, config.last_test_success, config.last_error = datetime.utcnow(), True, None
         await db.commit()
         return {"success": True, "message": "飞书应用连接成功"}
     except Exception as exc:
-        config.last_test_at, config.last_test_success, config.last_error = datetime.utcnow(), False, str(exc)[:500]
+        logger.warning("飞书应用连接测试失败: {}", type(exc).__name__)
+        config.last_test_at, config.last_test_success, config.last_error = datetime.utcnow(), False, "飞书连接失败，请检查凭据与应用发布状态"
         await db.commit()
-        return {"success": False, "message": "飞书连接失败，请检查凭据与应用发布状态"}
+        return {"success": False, "message": config.last_error}
 
 
 @router.post("/bases/{kb_id}/feishu/import", response_model=FeishuImportStartOut)

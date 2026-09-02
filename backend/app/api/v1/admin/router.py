@@ -478,7 +478,14 @@ async def get_model_health(db: AsyncSession = Depends(get_db)):
     from app.services.llm.gateway import llm_gateway
     chat_models = []
     for config in configs:
-        test = await llm_gateway.test_connection(config.base_url, decrypt_api_key(config.api_key), config.model_name)
+        api_key = decrypt_api_key(config.api_key)
+        test = (
+            await llm_gateway.test_connection(config.base_url, api_key, config.model_name)
+            if api_key else {
+                "success": False,
+                "message": "已保存的 API Key 无法读取，请重新填写并保存",
+            }
+        )
         chat_models.append({
             "name": config.model_name,
             "role": "默认问答模型" if config.is_primary else "兜底问答模型" if config.is_fallback else "问答模型",

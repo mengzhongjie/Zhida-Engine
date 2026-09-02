@@ -96,8 +96,13 @@ async def update_p2p(payload: P2pIn, db: AsyncSession = Depends(get_db)):
 async def test_config(db: AsyncSession = Depends(get_db)):
     item = await _config(db)
     if not item.app_id or not item.app_secret: raise HTTPException(422, "请先填写 AppID 与 AppSecret")
+    secret = decrypt_api_key(item.app_secret)
+    if not secret:
+        item.last_test_success, item.last_error = False, "已保存的 AppSecret 无法读取，请重新填写并保存"
+        await db.commit()
+        return {"success": False, "message": item.last_error}
     from app.services.channel.qq_bot import qq_bot_service
-    ok, detail = await qq_bot_service.test_credentials(item.app_id, decrypt_api_key(item.app_secret))
+    ok, detail = await qq_bot_service.test_credentials(item.app_id, secret)
     item.last_test_success, item.last_error = ok, None if ok else detail
     await db.commit(); return {"success": ok, "message": "QQ 官方机器人凭据可用" if ok else detail}
 

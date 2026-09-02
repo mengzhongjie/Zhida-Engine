@@ -14,11 +14,10 @@
 ```bash
 git clone <你的仓库地址> /opt/zhida-engine
 cd /opt/zhida-engine
-cp .env.production.example .env
-openssl rand -base64 48
+./deploy/bootstrap-env.sh
 ```
 
-将最后一条命令的输出写入 `.env` 的 `ZHIDA_AUTH_SESSION_SECRET`，并填入两个真实域名。`.env` 和 `data/` 都不能提交或上传到公开仓库。
+脚本会在首次部署时从模板创建 `.env`，并自动生成、持久化 `ZHIDA_ENC_KEY`；后续执行不会覆盖它。再填入 `ZHIDA_AUTH_SESSION_SECRET` 和两个真实域名。`.env` 和 `data/` 都不能提交或上传到公开仓库，迁移时必须一同备份。
 
 先签发证书（域名必须已经解析，且 80 端口未被其他服务占用）：
 
