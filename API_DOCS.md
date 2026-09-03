@@ -10,16 +10,20 @@ Base URL: `/api/v1`
 
 除标注「公开」的端点外，所有端点都需要登录会话。系统有两种角色，各自使用独立的 HttpOnly Cookie：
 
-| 角色 | Cookie 名称 | 有效期 | 登录方式 |
-|------|------------|--------|----------|
+
+| 角色  | Cookie 名称             | 有效期        | 登录方式            |
+| --- | --------------------- | ---------- | --------------- |
 | 管理员 | `zhida_admin_session` | 8 小时（滑动续期） | 账号 + 密码 + 图形验证码 |
-| 用户 | `zhida_user_session` | 7 天（滑动续期） | 一次性激活码 |
+| 用户  | `zhida_user_session`  | 7 天（滑动续期）  | 一次性激活码          |
+
 
 Cookie 属性：`HttpOnly + SameSite=Strict`，无 `domain`（host-only）。管理员端与用户端的 Cookie 互不携带，避免跨站会话泄漏。
 
 大多数管理类路由（`llm` / `embedding` / `vision` / `knowledge` / `agent` / `qa` / `admin`）在注册时统一挂载 `require_admin` 依赖；`auth` 与 `user` 模块在各自端点内校验身份。
 
 ---
+
+
 
 ## 目录
 
@@ -38,7 +42,11 @@ Cookie 属性：`HttpOnly + SameSite=Strict`，无 `domain`（host-only）。管
 
 ---
 
+
+
 ## 1. 认证模块 auth
+
+
 
 ### 1.1 获取图形验证码挑战（公开）
 
@@ -49,9 +57,11 @@ GET /auth/captcha?purpose=user|admin
 获取图形验证码挑战，返回 SVG 图片地址。验证码 5 个字符、5 分钟过期、最多尝试 5 次后销毁。
 
 **请求参数：**
+
 - `purpose`: `user` / `admin`
 
 **响应示例：**
+
 ```json
 {
   "captcha_id": "uuid-string",
@@ -59,6 +69,8 @@ GET /auth/captcha?purpose=user|admin
   "expires_in": 300
 }
 ```
+
+
 
 ### 1.2 获取验证码图片（公开）
 
@@ -77,6 +89,7 @@ POST /auth/user/login
 用户使用一次性激活码登录。激活码在首次登录后立即变为「已激活」，完整码密文被销毁，无法被第二个人使用。
 
 **请求体：**
+
 ```json
 {
   "captcha_id": "uuid-string",
@@ -94,6 +107,7 @@ POST /auth/admin/login
 ```
 
 **请求体：**
+
 ```json
 {
   "captcha_id": "uuid-string",
@@ -116,6 +130,7 @@ POST /auth/admin/register
 首次部署时注册唯一管理员，注册成功即签发会话。已有管理员则返回 409。并发注册通过固定主键的原子插入互斥，避免重复创建。
 
 **请求体：**
+
 ```json
 {
   "captcha_id": "uuid-string",
@@ -146,9 +161,12 @@ GET /auth/me?role=admin|user
 返回当前登录身份。可选 `role` 参数用于明确校验角色（本地双端口调试时按 Origin 判定）。
 
 **响应示例：**
+
 ```json
 { "role": "admin", "id": 1, "username": "admin" }
 ```
+
+
 
 ### 1.8 兑换码管理（require_admin）
 
@@ -161,6 +179,7 @@ POST /auth/admin/access-codes
 ```
 
 **请求体：**
+
 ```json
 {
   "agent_ids": [1, 2],
@@ -174,11 +193,14 @@ POST /auth/admin/access-codes
 `agent_ids`（≥1）必填；`daily_question_limit` 1-10000，默认 50；`count` 1-100，默认 1。激活码为 24 位随机字符（去除 0/1/O/I），4 位一组短横线分隔；明文完整码仅返回一次。
 
 **响应示例：**
+
 ```json
 {
   "items": [{ "id": 1, "access_code": "XXXX-XXXX-XXXX-XXXX-XXXX-XXXX", "code_hint": "••••-abcd1234" }]
 }
 ```
+
+
 
 #### 列出激活码
 
@@ -273,9 +295,13 @@ POST /auth/admin/access-codes/batch/delete
 
 ---
 
+
+
 ## 2. 用户站模块 user
 
 > 用户站是独立的前端站点（`ZHIDA_USER_APP_HOSTS` 指定的主机名），仅含对话功能。以下端点均依赖 `require_user`。
+
+
 
 ### 2.1 获取可用 Agent 列表
 
@@ -292,6 +318,7 @@ GET /user/me
 ```
 
 **响应：**
+
 ```json
 {
   "remaining_today": 47,
@@ -324,6 +351,8 @@ GET /user/conversations/{conversation_id}
 }
 ```
 
+
+
 ### 2.5 流式问答（SSE）
 
 ```
@@ -331,6 +360,7 @@ POST /user/chat/stream
 ```
 
 **请求体：**
+
 ```json
 {
   "agent_id": 1,
@@ -346,18 +376,24 @@ POST /user/chat/stream
 
 **SSE 事件：**
 
-| 事件 | 内容 |
-|------|------|
-| `status` | `{ "detail": "正在整理此前对话…", "stage": "compacting" }`（触发会话压缩时） |
-| `delta` | `{ "content": "增量文本" }` |
-| `done` | `{ "conversation_id": "...", "sources": [...], "remaining_today": 47 }` |
-| `error` | `{ "detail": "通用错误描述" }` |
+
+| 事件       | 内容                                                                      |
+| -------- | ----------------------------------------------------------------------- |
+| `status` | `{ "detail": "正在整理此前对话…", "stage": "compacting" }`（触发会话压缩时）             |
+| `delta`  | `{ "content": "增量文本" }`                                                 |
+| `done`   | `{ "conversation_id": "...", "sources": [...], "remaining_today": 47 }` |
+| `error`  | `{ "detail": "通用错误描述" }`                                                |
+
 
 ---
+
+
 
 ## 3. LLM 配置 llm
 
 > 整组 require_admin。三个模型角色互斥：主模型（`is_primary`）、降级模型（`is_fallback`）、重写/压缩模型（`is_context_model`），一个配置只能选择其一。
+
+
 
 ### 3.1 获取厂商模板
 
@@ -392,6 +428,7 @@ POST /llm/configs
 ```
 
 **请求体：**
+
 ```json
 {
   "agent_id": null,
@@ -414,6 +451,8 @@ POST /llm/configs
 - `provider_id = "ollama"` 已被禁用（不再支持本地模型）
 - 角色互斥：主模型、降级模型、重写/压缩模型不能同时选择
 - 设为主模型/上下文模型时，会先取消该 Agent 同角色的其他配置
+
+
 
 ### 3.5 更新配置
 
@@ -451,9 +490,13 @@ POST /llm/configs/{config_id}/test
 
 ---
 
+
+
 ## 4. 向量化配置 embedding
 
 > 整组 require_admin。当前仅支持云端 Embedding（OpenAI 兼容接口），本地模式已移除。
+
+
 
 ### 4.1 配置档案列表
 
@@ -470,11 +513,12 @@ POST /embedding/profiles
 ```
 
 **请求体：**
+
 ```json
 {
   "name": "硅基流动",
   "provider_id": "siliconflow",
-  "mode": "cloud",
+  "mode": "云端",
   "cloud_base_url": "https://api.siliconflow.cn/v1",
   "cloud_api_key": "sk-xxx",
   "cloud_model": "BAAI/bge-large-zh-v1.5",
@@ -524,6 +568,8 @@ GET /embedding/providers
 POST /embedding/providers/autofill
 ```
 
+
+
 ### 4.8 当前配置（兼容旧接口）
 
 ```
@@ -536,9 +582,13 @@ POST /embedding/test
 
 ---
 
+
+
 ## 5. 视觉模型配置 vision
 
 > 整组 require_admin。用于网页导入、图片理解等场景的视觉模型。
+
+
 
 ### 5.1 配置列表
 
@@ -584,9 +634,13 @@ PUT /vision/config
 
 ---
 
+
+
 ## 6. 知识库管理 knowledge
 
 > 整组 require_admin。
+
+
 
 ### 6.1 获取知识库列表
 
@@ -617,6 +671,8 @@ GET /knowledge/bases/independent
 ```
 GET /knowledge/bases/{kb_id}
 ```
+
+
 
 ### 6.5 更新知识库
 
@@ -663,6 +719,7 @@ Content-Type: multipart/form-data
 **请求参数：** `file`（文档文件）。
 
 **支持的格式：**
+
 - 基础格式：`.pdf` `.docx` `.doc` `.xlsx` `.xls` `.txt` `.md` `.csv` `.json` `.xml`
 - 启用 MinerU 额外支持：`.pptx` `.ppt` `.epub` `.html` `.htm` `.png` `.jpg` `.jpeg` `.bmp` `.tiff` `.webp`
 
@@ -705,6 +762,8 @@ POST /knowledge/documents/approve
 ```
 POST /knowledge/documents/{document_id}/retain-source-removed
 ```
+
+
 
 ### 6.14 取消文档处理
 
@@ -785,9 +844,13 @@ POST /knowledge/optimize
 
 ---
 
+
+
 ## 7. Agent 管理 agent
 
 > 整组 require_admin。
+
+
 
 ### 7.1 获取 Agent 列表
 
@@ -804,6 +867,7 @@ POST /agents
 ```
 
 **请求体：**
+
 ```json
 {
   "name": "产品助手",
@@ -816,8 +880,10 @@ POST /agents
 ```
 
 - `persona_preset`: `professional` / `tutor` / `friendly` / `direct` / `custom`；`custom` 时需提供 `persona_custom_instruction`
-- `context_window_k`: 32-256，默认 64（K tokens 的上下文窗口）
+- `context_window_k`: 32-256，默认 64（K token 的上下文窗口）
 - 新建后默认 `stopped` 状态
+
+
 
 ### 7.3 获取 Agent 详情
 
@@ -871,9 +937,13 @@ GET /agents/{agent_id}/sandbox
 
 ---
 
+
+
 ## 8. 问答服务 qa
 
 > 整组 require_admin。对外接入请使用 `/api/v1/qa/ask`（详见 README「作为服务接入其他应用」）。
+
+
 
 ### 8.1 提问（完整 RAG 问答）
 
@@ -882,6 +952,7 @@ POST /qa/ask
 ```
 
 **请求体：**
+
 ```json
 {
   "agent_id": 3,
@@ -897,6 +968,7 @@ POST /qa/ask
 执行：请求合并 → 缓存命中检查 → 记忆检索 → 问题改写 → 多路混合检索 → 联网补充（可选）→ 生成。
 
 **响应示例：**
+
 ```json
 {
   "question": "退款流程是什么？",
@@ -910,6 +982,8 @@ POST /qa/ask
   "from_cache": false
 }
 ```
+
+
 
 ### 8.2 流式问答（管理端）
 
@@ -945,9 +1019,13 @@ POST /qa/feedback
 
 ---
 
+
+
 ## 9. 系统管理 admin
 
 > 整组 require_admin。
+
+
 
 ### 9.1 系统信息
 
@@ -973,6 +1051,7 @@ PUT /admin/settings
 ```
 
 **响应 / 请求体：**
+
 ```json
 { "enable_source_citation": true, "enable_rate_limit": true, "development_mode": false }
 ```
@@ -1101,19 +1180,23 @@ PUT /admin/persona-presets/{preset_key}
 
 ---
 
+
+
 ## 10. 机器人渠道 qq-bot
 
 所有 QQ 机器人接口均需要管理员会话。机器人通过 QQ 官方 Gateway 主动建立 WebSocket 连接，不需要公网 Webhook；只处理群内 `@机器人` 事件。
 
-| 端点 | 方法 | 说明 |
-|---|---|---|
-| `/qq-bot/config` | GET | 获取 QQ 机器人配置，AppSecret 脱敏返回 |
-| `/qq-bot/config` | PUT | 保存 AppID、AppSecret 并启用或停用机器人 |
-| `/qq-bot/config/test` | POST | 使用已保存凭据获取 access token，测试官方连接 |
-| `/qq-bot/bindings` | GET/POST | 查询 / 创建 `group_openid → agent_id` 绑定 |
-| `/qq-bot/bindings/{id}` | DELETE | 删除群绑定 |
-| `/qq-bot/group-openid-capture/start` | POST | 开启 5 分钟群 OpenID 获取窗口 |
-| `/qq-bot/group-openid-capture` | GET | 读取窗口内收到的群 OpenID |
+
+| 端点                                   | 方法       | 说明                                   |
+| ------------------------------------ | -------- | ------------------------------------ |
+| `/qq-bot/config`                     | GET      | 获取 QQ 机器人配置，AppSecret 脱敏返回           |
+| `/qq-bot/config`                     | PUT      | 保存 AppID、AppSecret 并启用或停用机器人         |
+| `/qq-bot/config/test`                | POST     | 使用已保存凭据获取 access token，测试官方连接        |
+| `/qq-bot/bindings`                   | GET/POST | 查询 / 创建 `group_openid → agent_id` 绑定 |
+| `/qq-bot/bindings/{id}`              | DELETE   | 删除群绑定                                |
+| `/qq-bot/group-openid-capture/start` | POST     | 开启 5 分钟群 OpenID 获取窗口                 |
+| `/qq-bot/group-openid-capture`       | GET      | 读取窗口内收到的群 OpenID                     |
+
 
 `group_openid` 不是普通 QQ 群号。管理员开启获取窗口后，在目标群 @机器人发送任意消息即可取得；该模式仅记录标识，不回复、不调用 Agent。正常运行时，未绑定群不会触发 RAG；已绑定群的 @消息使用对应 Agent 的知识库和模型回答，并在发送前转为 QQ 可读纯文本。
 
@@ -1123,140 +1206,188 @@ PUT /admin/persona-presets/{preset_key}
 
 ### 应用基础 / 数据库
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `ZHIDA_DEBUG` | `false` | 调试模式（生产必须关闭） |
-| `ZHIDA_DATA_DIR` | 平台应用数据目录 | SQLite / 向量库 / 缓存根目录 |
-| `ZHIDA_DATABASE_URL` | 空 | 空则用 `{DATA_DIR}/zhida_engine.db` |
-| `ZHIDA_API_HOST` | `127.0.0.1` | 监听地址 |
-| `ZHIDA_API_PORT` | `18900` | 服务端口 |
+
+| 变量                   | 默认值         | 说明                               |
+| -------------------- | ----------- | -------------------------------- |
+| `ZHIDA_DEBUG`        | `false`     | 调试模式（生产必须关闭）                     |
+| `ZHIDA_DATA_DIR`     | 平台应用数据目录    | SQLite / 向量库 / 缓存根目录             |
+| `ZHIDA_DATABASE_URL` | 空           | 空则用 `{DATA_DIR}/zhida_engine.db` |
+| `ZHIDA_API_HOST`     | `127.0.0.1` | 监听地址                             |
+| `ZHIDA_API_PORT`     | `18900`     | 服务端口                             |
+
+
+
 
 ### 部署 / 信任
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `ZHIDA_CORS_ORIGINS` | `http://localhost:5173,...` | 允许的前端源 |
-| `ZHIDA_TRUSTED_HOSTS` | `localhost,127.0.0.1,::1` | 受信任主机名 |
-| `ZHIDA_USER_APP_HOSTS` | 空 | 用户站主机名（返回独立前端） |
-| `ZHIDA_TRUSTED_PROXY_IPS` | `127.0.0.1,::1` | 可信反代 IP（Docker Nginx 常追加 `172.17.0.1`） |
+
+| 变量                        | 默认值                         | 说明                                     |
+| ------------------------- | --------------------------- | -------------------------------------- |
+| `ZHIDA_CORS_ORIGINS`      | `http://localhost:5173,...` | 允许的前端源                                 |
+| `ZHIDA_TRUSTED_HOSTS`     | `localhost,127.0.0.1,::1`   | 受信任主机名                                 |
+| `ZHIDA_USER_APP_HOSTS`    | 空                           | 用户站主机名（返回独立前端）                         |
+| `ZHIDA_TRUSTED_PROXY_IPS` | `127.0.0.1,::1`             | 可信反代 IP（Docker Nginx 常追加 `172.17.0.1`） |
+
+
+
 
 ### 认证 / 安全
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `ZHIDA_AUTH_SESSION_SECRET` | 空 | 会话签名密钥，**必须 ≥32 位**，否则拒绝服务 |
-| `ZHIDA_AUTH_USER_SESSION_DAYS` | `7` | 用户会话有效期 |
-| `ZHIDA_AUTH_ADMIN_SESSION_HOURS` | `8` | 管理员会话有效期 |
-| `ZHIDA_AUTH_REQUIRE_HTTPS` | `true` | 公网强制 HTTPS |
-| `ZHIDA_API_KEY_ENCRYPT_ENABLED` | `true` | API Key 加密存储 |
-| `ZHIDA_ADMIN_BOOTSTRAP_USERNAME/PASSWORD` | 空 | 仅 DEBUG 模式创建引导管理员 |
+
+| 变量                                        | 默认值    | 说明                         |
+| ----------------------------------------- | ------ | -------------------------- |
+| `ZHIDA_AUTH_SESSION_SECRET`               | 空      | 会话签名密钥，**必须 ≥32 位**，否则拒绝服务 |
+| `ZHIDA_AUTH_USER_SESSION_DAYS`            | `7`    | 用户会话有效期                    |
+| `ZHIDA_AUTH_ADMIN_SESSION_HOURS`          | `8`    | 管理员会话有效期                   |
+| `ZHIDA_AUTH_REQUIRE_HTTPS`                | `true` | 公网强制 HTTPS                 |
+| `ZHIDA_API_KEY_ENCRYPT_ENABLED`           | `true` | API Key 加密存储               |
+| `ZHIDA_ADMIN_BOOTSTRAP_USERNAME/PASSWORD` | 空      | 仅 DEBUG 模式创建引导管理员          |
+
+
+
 
 ### 向量化 / 缓存
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `ZHIDA_EMBEDDING_MODE` | `cloud` | 向量化模式（仅云端） |
-| `ZHIDA_EMBEDDING_CLOUD_BASE_URL` | 空 | OpenAI 兼容接口 |
-| `ZHIDA_EMBEDDING_CLOUD_API_KEY` | 空 | 云端密钥 |
-| `ZHIDA_EMBEDDING_CLOUD_MODEL` | `text-embedding-3-small` | 云端模型 |
-| `ZHIDA_CHROMA_PERSIST_DIR` | 空 | 空则用 `{DATA_DIR}/chroma_db` |
-| `ZHIDA_CACHE_DIR` | 空 | 空则用 `{DATA_DIR}/cache` |
+
+| 变量                               | 默认值                      | 说明                         |
+| -------------------------------- | ------------------------ | -------------------------- |
+| `ZHIDA_EMBEDDING_MODE`           | `云端`                     | 向量化模式（仅云端）                 |
+| `ZHIDA_EMBEDDING_CLOUD_BASE_URL` | 空                        | OpenAI 兼容接口                |
+| `ZHIDA_EMBEDDING_CLOUD_API_KEY`  | 空                        | 云端密钥                       |
+| `ZHIDA_EMBEDDING_CLOUD_MODEL`    | `text-embedding-3-small` | 云端模型                       |
+| `ZHIDA_CHROMA_PERSIST_DIR`       | 空                        | 空则用 `{DATA_DIR}/chroma_db` |
+| `ZHIDA_CACHE_DIR`                | 空                        | 空则用 `{DATA_DIR}/cache`     |
+
+
+
 
 ### 模块开关
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `ZHIDA_ENABLE_STREAMING` | `true` | 流式输出 |
-| `ZHIDA_ENABLE_SOURCE_CITATION` | `true` | 回答附带来源 |
-| `ZHIDA_DEVELOPMENT_MODE` | `false` | 开发维护模式（暂停用户端问答） |
+
+| 变量                             | 默认值     | 说明              |
+| ------------------------------ | ------- | --------------- |
+| `ZHIDA_ENABLE_STREAMING`       | `true`  | 流式输出            |
+| `ZHIDA_ENABLE_SOURCE_CITATION` | `true`  | 回答附带来源          |
+| `ZHIDA_DEVELOPMENT_MODE`       | `false` | 开发维护模式（暂停用户端问答） |
+
+
+
 
 ### 可观测性（Langfuse）
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `ZHIDA_LANGFUSE_ENABLED` | `false` | 总开关（数据库配置优先） |
-| `ZHIDA_LANGFUSE_HOST` | `https://cloud.langfuse.com` | 固定云端地址 |
-| `ZHIDA_LANGFUSE_PUBLIC_KEY` | 空 | 公钥 |
-| `ZHIDA_LANGFUSE_SECRET_KEY` | 空 | 密钥 |
-| `ZHIDA_LANGFUSE_ONLINE_EVALUATION_ENABLED` | `false` | 云端在线评测 |
+
+| 变量                                         | 默认值                          | 说明           |
+| ------------------------------------------ | ---------------------------- | ------------ |
+| `ZHIDA_LANGFUSE_ENABLED`                   | `false`                      | 总开关（数据库配置优先） |
+| `ZHIDA_LANGFUSE_HOST`                      | `https://cloud.langfuse.com` | 固定云端地址       |
+| `ZHIDA_LANGFUSE_PUBLIC_KEY`                | 空                            | 公钥           |
+| `ZHIDA_LANGFUSE_SECRET_KEY`                | 空                            | 密钥           |
+| `ZHIDA_LANGFUSE_ONLINE_EVALUATION_ENABLED` | `false`                      | 云端在线评测       |
+
+
+
 
 ### 网络检索
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `ZHIDA_WEB_SEARCH_ENABLED` | `false` | 网络检索总开关 |
-| `ZHIDA_WEB_SEARCH_PROVIDER` | `tavily` | tavily / exa |
-| `ZHIDA_WEB_SEARCH_API_KEY` | 空 | 密钥 |
-| `ZHIDA_WEB_SEARCH_MAX_RESULTS` | `3` | 最大结果数 |
+
+| 变量                             | 默认值      | 说明           |
+| ------------------------------ | -------- | ------------ |
+| `ZHIDA_WEB_SEARCH_ENABLED`     | `false`  | 网络检索总开关      |
+| `ZHIDA_WEB_SEARCH_PROVIDER`    | `tavily` | tavily / exa |
+| `ZHIDA_WEB_SEARCH_API_KEY`     | 空        | 密钥           |
+| `ZHIDA_WEB_SEARCH_MAX_RESULTS` | `3`      | 最大结果数        |
+
+
+
 
 ### 限流
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `ZHIDA_RATE_LIMIT_TOKEN_RATE` | `10.0` | 令牌桶速率 |
-| `ZHIDA_RATE_LIMIT_TOKEN_CAPACITY` | `3` | 桶容量 |
-| `ZHIDA_RATE_LIMIT_WINDOW_SIZE` | `60` | 滑动窗口（秒） |
-| `ZHIDA_RATE_LIMIT_WINDOW_MAX` | `5` | 窗口内最大请求 |
-| `ZHIDA_RATE_LIMIT_COOLDOWN` | `300` | 相同问题冷却（秒） |
-| `ZHIDA_RATE_LIMIT_SILENT_ENABLED` | `true` | 静默时段 |
-| `ZHIDA_RATE_LIMIT_PRIVATE_RELAXED` | `true` | 私聊放宽 |
+
+| 变量                                 | 默认值    | 说明        |
+| ---------------------------------- | ------ | --------- |
+| `ZHIDA_RATE_LIMIT_TOKEN_RATE`      | `10.0` | 令牌桶速率     |
+| `ZHIDA_RATE_LIMIT_TOKEN_CAPACITY`  | `3`    | 桶容量       |
+| `ZHIDA_RATE_LIMIT_WINDOW_SIZE`     | `60`   | 滑动窗口（秒）   |
+| `ZHIDA_RATE_LIMIT_WINDOW_MAX`      | `5`    | 窗口内最大请求   |
+| `ZHIDA_RATE_LIMIT_COOLDOWN`        | `300`  | 相同问题冷却（秒） |
+| `ZHIDA_RATE_LIMIT_SILENT_ENABLED`  | `true` | 静默时段      |
+| `ZHIDA_RATE_LIMIT_PRIVATE_RELAXED` | `true` | 私聊放宽      |
+
+
+
 
 ### 并发保护
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `ZHIDA_QA_MAX_CONCURRENT_STREAMS` | `10` | 最大并发流 |
-| `ZHIDA_QA_MAX_STREAM_QUEUE` | `20` | 排队上限 |
-| `ZHIDA_QA_STREAM_QUEUE_TIMEOUT_SECONDS` | `45` | 排队超时 |
+
+| 变量                                      | 默认值  | 说明    |
+| --------------------------------------- | ---- | ----- |
+| `ZHIDA_QA_MAX_CONCURRENT_STREAMS`       | `10` | 最大并发流 |
+| `ZHIDA_QA_MAX_STREAM_QUEUE`             | `20` | 排队上限  |
+| `ZHIDA_QA_STREAM_QUEUE_TIMEOUT_SECONDS` | `45` | 排队超时  |
+
+
+
 
 ### MinerU（可选）
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `ZHIDA_ENABLE_MINERU` | `false` | 总开关（需安装 magic-pdf） |
-| `ZHIDA_MINERU_MODE` | `embedded` | embedded / service |
-| `ZHIDA_MINERU_BACKEND` | `pipeline` | pipeline / vlm-engine |
-| `ZHIDA_MINERU_DEVICE` | `cpu` | 计算设备 |
-| `ZHIDA_MINERU_SERVICE_URL` | `http://127.0.0.1:18901` | service 模式地址 |
-| `ZHIDA_MINERU_FORMATS` | `pdf` | 处理格式 |
-| `ZHIDA_MINERU_FALLBACK_ON_FAILURE` | `true` | 失败降级本地解析 |
-| `ZHIDA_MINERU_MAX_FILE_SIZE_MB` | `50` | 超过走本地解析器 |
+
+| 变量                                 | 默认值                      | 说明                    |
+| ---------------------------------- | ------------------------ | --------------------- |
+| `ZHIDA_ENABLE_MINERU`              | `false`                  | 总开关（需安装 magic-pdf）    |
+| `ZHIDA_MINERU_MODE`                | `embedded`               | embedded / service    |
+| `ZHIDA_MINERU_BACKEND`             | `pipeline`               | pipeline / vlm-engine |
+| `ZHIDA_MINERU_DEVICE`              | `cpu`                    | 计算设备                  |
+| `ZHIDA_MINERU_SERVICE_URL`         | `http://127.0.0.1:18901` | service 模式地址          |
+| `ZHIDA_MINERU_FORMATS`             | `pdf`                    | 处理格式                  |
+| `ZHIDA_MINERU_FALLBACK_ON_FAILURE` | `true`                   | 失败降级本地解析              |
+| `ZHIDA_MINERU_MAX_FILE_SIZE_MB`    | `50`                     | 超过走本地解析器              |
+
+
+
 
 ### 格式校验
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `ZHIDA_ENABLE_FORMAT_CHECK` | `true` | 总开关 |
-| `ZHIDA_FORMAT_CHECK_STRICT` | `true` | 类型不匹配直接拒绝 |
-| `ZHIDA_FORMAT_MIN_TEXT_LENGTH` | `10` | 最小文本长度 |
-| `ZHIDA_FORMAT_GARBAGE_THRESHOLD` | `0.5` | 乱码比例阈值 |
-| `ZHIDA_FORMAT_AUTO_REJECT_EMPTY` | `true` | 空结果自动拒绝 |
-| `ZHIDA_FORMAT_MIN_QUALITY_SCORE` | `10` | 最低质量分（0-100） |
+
+| 变量                               | 默认值    | 说明           |
+| -------------------------------- | ------ | ------------ |
+| `ZHIDA_ENABLE_FORMAT_CHECK`      | `true` | 总开关          |
+| `ZHIDA_FORMAT_CHECK_STRICT`      | `true` | 类型不匹配直接拒绝    |
+| `ZHIDA_FORMAT_MIN_TEXT_LENGTH`   | `10`   | 最小文本长度       |
+| `ZHIDA_FORMAT_GARBAGE_THRESHOLD` | `0.5`  | 乱码比例阈值       |
+| `ZHIDA_FORMAT_AUTO_REJECT_EMPTY` | `true` | 空结果自动拒绝      |
+| `ZHIDA_FORMAT_MIN_QUALITY_SCORE` | `10`   | 最低质量分（0-100） |
+
 
 ---
 
+
+
 ## 附录 B：错误码
 
-| HTTP 状态码 | 说明 |
-|------------|------|
-| 200 | 成功 |
-| 204 | 成功（无返回体） |
-| 400 | 请求参数错误（含格式校验拒绝） |
-| 401 | 未授权 / 会话无效 |
-| 403 | 无权限（如访问他人会话） |
-| 404 | 资源不存在 |
-| 409 | 冲突（知识库已挂载、管理员已存在、处理中文档删除等） |
-| 422 | 参数校验失败（Pydantic） |
-| 429 | 请求过于频繁（限流 / 额度不足） |
-| 500 | 服务器内部错误 |
-| 503 | 服务暂不可用（降级 / 维护模式） |
+
+| HTTP 状态码 | 说明                         |
+| -------- | -------------------------- |
+| 200      | 成功                         |
+| 204      | 成功（无返回体）                   |
+| 400      | 请求参数错误（含格式校验拒绝）            |
+| 401      | 未授权 / 会话无效                 |
+| 403      | 无权限（如访问他人会话）               |
+| 404      | 资源不存在                      |
+| 409      | 冲突（知识库已挂载、管理员已存在、处理中文档删除等） |
+| 422      | 参数校验失败（Pydantic）           |
+| 429      | 请求过于频繁（限流 / 额度不足）          |
+| 500      | 服务器内部错误                    |
+| 503      | 服务暂不可用（降级 / 维护模式）          |
+
 
 **错误响应格式：**
+
 ```json
 { "detail": "错误描述信息" }
 ```
 
 **常见校验错误示例：**
+
 ```json
 {"detail": "文件类型不匹配: 扩展名声称 .pdf，实际检测为 binary"}
 {"detail": "文件内容为空"}
@@ -1264,3 +1395,4 @@ PUT /admin/persona-presets/{preset_key}
 {"detail": "主模型、降级模型和重写/压缩模型角色不能同时选择"}
 {"detail": "首次注册失败，管理员已存在"}
 ```
+

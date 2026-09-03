@@ -52,6 +52,7 @@ class EmbeddingTestRequest(BaseModel):
     cloud_base_url: Optional[str] = Field(None, description="云端 API 基础地址")
     cloud_api_key: Optional[str] = Field(None, description="云端 API Key")
     cloud_model: Optional[str] = Field(None, description="云端模型名称")
+    cloud_dimension: Optional[int] = Field(None, description="按本系统配置调整后的向量维度")
 
 
 class EmbeddingTestResponse(BaseModel):

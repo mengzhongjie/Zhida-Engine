@@ -25,6 +25,7 @@ from app.models.agent import Agent
 from app.models.knowledge import KnowledgeBase, Document
 from app.models.qa import QAHistory
 from app.models.llm_config import LLMConfig
+from app.models.embedding_profile import EmbeddingProfile
 from app.models.web_search_config import WebSearchConfig
 from app.models.observability_config import ObservabilityConfig
 from app.models.persona_preset import PersonaPreset, DEFAULT_PERSONA_PRESETS
@@ -475,25 +476,30 @@ async def get_dashboard_stats(
 @router.get("/model-health")
 async def get_model_health(db: AsyncSession = Depends(get_db)):
     configs = (await db.execute(select(LLMConfig).where(LLMConfig.is_active == True).order_by(LLMConfig.is_primary.desc(), LLMConfig.is_fallback.desc()))).scalars().all()  # noqa: E712
-    from app.services.llm.gateway import llm_gateway
     chat_models = []
     for config in configs:
         api_key = decrypt_api_key(config.api_key)
-        test = (
-            await llm_gateway.test_connection(config.base_url, api_key, config.model_name)
-            if api_key else {
-                "success": False,
-                "message": "已保存的 API Key 无法读取，请重新填写并保存",
-            }
-        )
+        available = bool(api_key) and config.last_test_success is True
         chat_models.append({
             "name": config.model_name,
             "role": "默认问答模型" if config.is_primary else "兜底问答模型" if config.is_fallback else "问答模型",
-            "available": test["success"],
-            "message": test["message"],
+            "available": available,
+            "message": (
+                "最近测试连接正常" if available else
+                "已保存的 API Key 无法读取，请重新填写并保存" if not api_key else
+                "尚未测试或最近一次测试失败"
+            ),
         })
-    from app.services.knowledge.embedder import embedding_service
-    return {"chat_models": chat_models, "embedding": {"name": embedding_service.model_name, "available": await embedding_service.is_ready()}}
+    profile = (await db.execute(select(EmbeddingProfile).where(
+        EmbeddingProfile.is_primary.is_(True), EmbeddingProfile.is_active.is_(True)
+    ).order_by(EmbeddingProfile.id.desc()))).scalars().first()
+    if profile is not None:
+        embedding_name = profile.cloud_model or profile.local_model or ""
+        embedding_available = profile.last_test_success is True and bool(decrypt_api_key(profile.cloud_api_key))
+        embedding_message = "最近测试连接正常" if embedding_available else "尚未测试或最近一次测试失败"
+    else:
+        embedding_name, embedding_available, embedding_message = "", False, "未配置向量化模型"
+    return {"chat_models": chat_models, "embedding": {"name": embedding_name, "available": embedding_available, "message": embedding_message}}
 
 
 # ============================================================

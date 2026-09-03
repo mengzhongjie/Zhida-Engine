@@ -132,9 +132,11 @@ class CloudEmbedding(EmbeddingService):
         try:
             response = await client.embeddings.create(
                 model=self._model_name,
-                input=text,
+                # 火山引擎 Ark 的 Embedding 接口要求 input 为数组；
+                # OpenAI 兼容接口同样支持该格式。
+                input=[text],
             )
-            return response.data[0].embedding
+            return self._fit_dimension(response.data[0].embedding)
         except Exception as e:
             error_msg = str(e)
             logger.error(
@@ -162,7 +164,7 @@ class CloudEmbedding(EmbeddingService):
             )
 
             embeddings = sorted(response.data, key=lambda x: x.index)
-            return [e.embedding for e in embeddings]
+            return [self._fit_dimension(e.embedding) for e in embeddings]
         except Exception as e:
             error_msg = str(e)
             logger.error(
@@ -173,6 +175,19 @@ class CloudEmbedding(EmbeddingService):
 
     async def embed_query(self, query: str) -> list[float]:
         return await self.embed_text(_prepare_query(self.model_name, query))
+
+    def _fit_dimension(self, embedding: list[float]) -> list[float]:
+        """将厂商返回向量调整为配置维度，保证索引维度始终以用户配置为准。
+
+        当前采用确定性的截断/零填充，避免引入需要额外训练数据的 PCA 状态；
+        变更目标维度后必须重建已有知识库索引。
+        """
+        target = int(self._dimension or 0)
+        if target <= 0 or len(embedding) == target:
+            return embedding
+        if len(embedding) > target:
+            return embedding[:target]
+        return embedding + [0.0] * (target - len(embedding))
 
     def _format_error(self, e: Exception) -> str:
         """
@@ -186,6 +201,11 @@ class CloudEmbedding(EmbeddingService):
         """
         error_str = str(e)
 
+        # 火山引擎视觉/多模态 Embedding 不能通过当前文本 /embeddings 链路调用。
+        # 将厂商原始英文错误转换为可执行的配置提示。
+        if "does not support this api" in error_str.lower() or "requested model" in error_str.lower() and "not valid" in error_str.lower():
+            return "当前模型不支持文本向量化接口，请改用火山引擎文本 Embedding 模型或 Endpoint ID"
+
         try:
             from openai import APIStatusError, APIConnectionError, AuthenticationError
 
@@ -194,7 +214,9 @@ class CloudEmbedding(EmbeddingService):
             elif isinstance(e, APIStatusError):
                 status_code = e.status_code
                 if status_code == 404:
-                    return f"API 地址不存在 (404)，请检查 Base URL 是否正确（应以 /v1 结尾）"
+                    if "invalidendpointormodel.notfound" in error_str.lower() or "endpoint" in error_str.lower() and "does not exist" in error_str.lower():
+                        return "火山引擎模型或 Endpoint 不存在/无权限，请在 Ark 控制台创建文本 Embedding 接入点，并填写 ep- 开头的 Endpoint ID"
+                    return "API 地址或模型不存在，请检查 Base URL、模型名称和访问权限"
                 elif status_code == 429:
                     return "请求过于频繁，请稍后重试 (429)"
                 elif status_code >= 500:
