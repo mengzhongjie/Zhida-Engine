@@ -37,6 +37,8 @@ docker compose ps
 curl http://127.0.0.1:18900/health
 ```
 
+Dockerfile 已启用 BuildKit 的 npm/pip 下载缓存。更新代码时若只改了后端源码，依赖层会直接复用；首次构建或修改 `requirements.txt` 仍需完整下载依赖。
+
 模板已包含默认拒绝站点：未知域名、服务器 IP 访问会被丢弃，不会回落到管理端。Nginx 会覆盖写入真实 IP 头；Docker 中后端看到的代理地址通常是 `172.17.0.1`，因此在 `.env` 中设置：
 
 ```env
