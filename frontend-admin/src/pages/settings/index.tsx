@@ -99,7 +99,6 @@ export default function SettingsPage() {
   const [observabilityConfig, setObservabilityConfig] = useState<ObservabilityConfig | null>(null)
   const [observabilityForm] = Form.useForm()
   const [observabilitySaving, setObservabilitySaving] = useState(false)
-  const [observabilityTesting, setObservabilityTesting] = useState(false)
   const [observabilityModalOpen, setObservabilityModalOpen] = useState(false)
 
   const loadWebSearchConfig = useCallback(async () => {
@@ -164,16 +163,6 @@ export default function SettingsPage() {
       navigate('/settings/observability')
     } catch (error: any) { message.error(error?.response?.data?.detail || '保存失败') }
     finally { setObservabilitySaving(false) }
-  }
-
-  const testObservabilityConfig = async () => {
-    setObservabilityTesting(true)
-    try {
-      const result = await api.post<{ success: boolean; message: string }>('/admin/observability/test')
-      message[result.success ? 'success' : 'error'](result.message)
-      await loadObservabilityConfig()
-    } catch (error: any) { message.error(error?.response?.data?.detail || '连接测试失败') }
-    finally { setObservabilityTesting(false) }
   }
 
   const toggleObservabilityConfig = async () => {
@@ -299,7 +288,8 @@ export default function SettingsPage() {
     setEditingId(null)
     form.resetFields()
     // 单模型场景是默认使用方式，避免“测试成功但没有主模型可调用”。
-    form.setFieldsValue({ role: 'primary', is_active: true, supports_vision: false, context_rewrite_timeout_seconds: 10, context_compaction_timeout_seconds: 25 })
+    // 显式清空厂商相关字段，避免从上一次编辑/新建表单残留 Qwen、Doubao 等值。
+    form.setFieldsValue({ provider_id: undefined, provider_name: '', base_url: '', model_name: '', api_key: '', role: 'primary', is_active: true, supports_vision: false, context_rewrite_timeout_seconds: 10, context_compaction_timeout_seconds: 25 })
     setModalVisible(true)
   }
 
@@ -336,6 +326,12 @@ export default function SettingsPage() {
   }
 
   const handleProviderChange = async (providerId: string) => {
+    // 编辑已有配置时，切换下拉选项不能自动覆盖用户已经填写的地址/模型。
+    // 之前这里会把正在编辑的 Qwen 配置直接替换成厂商模板默认模型（如 doubao）。
+    if (editingId) {
+      form.setFieldsValue({ provider_id: providerId })
+      return
+    }
     try {
       const res = await api.post<{
         provider_id: string
@@ -518,9 +514,9 @@ export default function SettingsPage() {
       children: <div className="web-search-settings">
         <Alert type="info" showIcon message="Agent 链路观测" description="启用后会向配置的 HTTPS Langfuse 地址完整上报用户问题、模型回答、检索知识片段、用户标识及性能数据。上报失败不会影响用户回答；密钥仅加密保存在本地。保存配置后，数据库配置优先于部署环境变量；未保存时才使用环境变量初始值。" />
         <Card size="small" className={`web-search-provider-card observability-provider-card ${observabilityConfig?.langfuse_enabled ? 'is-active' : ''}`} style={{ marginTop: 16 }}>
-          <div className="web-search-provider-main"><div><Text strong>Langfuse</Text><Text type="secondary">记录完整 Agent Trace、检索证据和模型调用{observabilityConfig?.online_evaluation_enabled ? '；已提供在线 Judge 评分上下文' : ''}</Text></div><div className="web-search-provider-status"><Tag className={observabilityConfig?.langfuse_enabled ? 'search-chain-active' : undefined} color={observabilityConfig?.langfuse_enabled ? 'success' : 'default'}>{observabilityConfig?.langfuse_enabled ? '正在上报' : '未启用'}</Tag><Text type={observabilityConfig?.last_test_success === false ? 'danger' : 'secondary'}>{observabilityConfig?.last_test_success === true ? '连接正常' : observabilityConfig?.last_test_success === false ? '连接异常' : '待检测'}</Text></div></div>
-          <Text className="web-search-health-copy" type="secondary">{observabilityConfig?.last_test_message || '配置完成后可测试 Langfuse 项目连接'}</Text>
-          <Space wrap className="web-search-provider-actions"><Button onClick={() => setObservabilityModalOpen(true)}>配置</Button><Button onClick={testObservabilityConfig} loading={observabilityTesting} disabled={!observabilityConfig?.public_key_configured || !observabilityConfig?.secret_key_configured}>测试连接</Button><Button type={observabilityConfig?.langfuse_enabled ? 'default' : 'primary'} onClick={toggleObservabilityConfig} loading={observabilitySaving}>{observabilityConfig?.langfuse_enabled ? '停用' : '启用'}</Button><Button danger icon={<DeleteOutlined />} onClick={deleteObservabilityConfig} disabled={!observabilityConfig?.public_key_configured && !observabilityConfig?.secret_key_configured}>删除</Button></Space>
+          <div className="web-search-provider-main"><div><Text strong>Langfuse</Text><Text type="secondary">记录完整 Agent Trace、检索证据和模型调用{observabilityConfig?.online_evaluation_enabled ? '；已提供在线 Judge 评分上下文' : ''}</Text></div><div className="web-search-provider-status"><Tag className={observabilityConfig?.langfuse_enabled ? 'search-chain-active' : undefined} color={observabilityConfig?.langfuse_enabled ? 'success' : 'default'}>{observabilityConfig?.langfuse_enabled ? '正在上报' : '未启用'}</Tag><Text type="secondary">{observabilityConfig?.public_key_configured && observabilityConfig?.secret_key_configured ? '已配置' : '未配置完整'}</Text></div></div>
+          <Text className="web-search-health-copy" type="secondary">{observabilityConfig?.public_key_configured && observabilityConfig?.secret_key_configured ? '密钥已保存，启用后将自动上报链路数据' : '请配置 Public Key 和 Secret Key'}</Text>
+          <Space wrap className="web-search-provider-actions"><Button onClick={() => setObservabilityModalOpen(true)}>配置</Button><Button type={observabilityConfig?.langfuse_enabled ? 'default' : 'primary'} onClick={toggleObservabilityConfig} loading={observabilitySaving}>{observabilityConfig?.langfuse_enabled ? '停用' : '启用'}</Button><Button danger icon={<DeleteOutlined />} onClick={deleteObservabilityConfig} disabled={!observabilityConfig?.public_key_configured && !observabilityConfig?.secret_key_configured}>删除</Button></Space>
         </Card>
       </div>,
     },
@@ -609,7 +605,7 @@ export default function SettingsPage() {
           <Form.Item name="langfuse_public_key" label="Public Key" extra={observabilityConfig?.public_key_configured ? `当前：${observabilityConfig.langfuse_public_key}；留空表示不修改` : '在 Langfuse Project Settings 中获取'}><Input.Password autoComplete="new-password" placeholder="pk-lf-..." /></Form.Item>
           <Form.Item name="langfuse_secret_key" label="Secret Key" extra={observabilityConfig?.secret_key_configured ? `当前：${observabilityConfig.langfuse_secret_key}；留空表示不修改` : '在 Langfuse Project Settings 中获取'}><Input.Password autoComplete="new-password" placeholder="sk-lf-..." /></Form.Item>
           <Form.Item name="online_evaluation_enabled" label="为 Langfuse 在线 Judge 提供评分上下文" valuePropName="checked" extra="开启后，answer 节点会额外上传用户问题和实际检索证据；仅在你已在 Langfuse 配置 LLM-as-a-Judge 时开启。"><Switch /></Form.Item>
-          <Space><Button onClick={testObservabilityConfig} loading={observabilityTesting} disabled={!observabilityConfig?.public_key_configured || !observabilityConfig?.secret_key_configured}>测试连接</Button><Button type="primary" onClick={saveObservabilityConfig} loading={observabilitySaving}>保存配置</Button></Space>
+          <Space><Button type="primary" onClick={saveObservabilityConfig} loading={observabilitySaving}>保存配置</Button></Space>
         </Form>
       </Modal>
 

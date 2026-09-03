@@ -92,8 +92,9 @@ async def _ensure_embedding_profile(db: AsyncSession) -> None:
 @router.get("/profiles")
 async def list_embedding_profiles(db: AsyncSession = Depends(get_db)):
     await _ensure_embedding_profile(db)
+    # 列表顺序按创建顺序固定；不能按 updated_at 排序，否则测试、编辑或启停后卡片会互换位置。
     items = (await db.execute(select(EmbeddingProfile).where(EmbeddingProfile.mode == "cloud").order_by(
-        EmbeddingProfile.is_primary.desc(), EmbeddingProfile.updated_at.desc(),
+        EmbeddingProfile.id.asc(),
     ))).scalars().all()
     return [_profile_out(item) for item in items]
 
@@ -570,7 +571,9 @@ async def test_embedding_connection(
                 success=False,
                 message="请填写完整的云端配置，或先保存一组可复用的配置",
             )
-        test_service = CloudEmbedding(base_url=base_url, api_key=api_key, model_name=model_name)
+        requested_dimension = int(getattr(request, "cloud_dimension", None) or 0)
+        test_service = CloudEmbedding(base_url=base_url, api_key=api_key, model_name=model_name,
+                                      dimension=requested_dimension or 1536)
         result = await test_service.embed_text("测试连接")
         latency_ms = (time.time() - start_time) * 1000
         return EmbeddingTestResponse(success=True, message=f"连接成功！向量维度: {len(result)}",
